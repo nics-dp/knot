@@ -117,11 +117,14 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 
 /* ---------- 頂部列 ---------- */
 
+/* 左：報告與目前位置；中：頁籤；右：動作 */
 .topbar {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 16px;
   padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--line);
 }
-.topbar-title { display: flex; flex-direction: column; gap: 2px; flex: 1 1 320px; min-width: 0; }
+.topbar-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.topbar-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.tabs button { min-width: 88px; }
 .crumb { font-size: 17px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .segmented { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
@@ -239,12 +242,9 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 }
 .toast-close { border: 0; background: transparent; color: var(--amber); font-size: 16px; min-width: 32px; min-height: 32px; cursor: pointer; }
 
-/* 一次顯示四欄：欄寬依卡片樹區域寬度均分，最窄 170px */
-.tree-scroll { flex: 1; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 8px; container-type: inline-size; }
-.tree-columns {
-  display: grid; grid-auto-flow: column; grid-auto-rows: 100%; height: 100%;
-  grid-auto-columns: max(170px, calc((100cqw - 36px) / 4));
-}
+/* 欄寬依可用寬度均分（最窄見 views/min-column-width），放不下時水平捲動 */
+.tree-scroll { flex: 1; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 8px; }
+.tree-columns { display: grid; grid-auto-rows: 100%; height: 100%; }
 /* 每一欄是一條泳道 */
 .tree-col {
   display: flex; flex-direction: column; min-width: 0; min-height: 0;
@@ -371,6 +371,28 @@ h4.ft-heading, h5.ft-heading { font-size: 16px; }
 }
 .detail-head { display: flex; flex-direction: column; gap: 4px; }
 .detail-head h2 { font-size: 18px; }
+.editor-top { display: flex; align-items: center; gap: 8px; }
+.collapse-btn, .rail-toggle {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 36px; height: 36px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); cursor: pointer;
+}
+.collapse-btn { margin-left: auto; }
+.collapse-btn:hover, .rail-toggle:hover { background: var(--ground); color: var(--ink); }
+
+/* 收合後的編輯區 */
+.editor-rail {
+  flex: 0 0 56px; display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 16px 0; background: var(--surface); border-left: 1px solid var(--line);
+}
+.rail-title {
+  display: flex; align-items: center; gap: 8px; padding: 10px 4px; border: 0; border-radius: 8px;
+  background: transparent; cursor: pointer; writing-mode: vertical-rl;
+  font-size: 13px; color: var(--ink); max-height: 60vh; overflow: hidden;
+}
+.rail-title:hover { background: var(--ground); }
+.rail-kind { color: var(--muted); font-size: 12px; }
+.rail-name { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .title-row { display: flex; align-items: center; gap: 8px; }
 .title-number { flex: none; font-size: 18px; font-weight: 700; }
 .title-input {

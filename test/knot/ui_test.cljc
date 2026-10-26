@@ -139,3 +139,7 @@
   (is (= -30 (get-in (ui/scroll-column state 2 -30 -100 0) [:ui :bias 2])))
   (is (= -100 (get-in (ui/scroll-column state 2 -500 -100 0) [:ui :bias 2])) "不超出範圍")
   (is (= state (ui/edge-scroll state 2 -30 -100 0)) "沒有拖曳時邊緣不捲動"))
+
+(deftest toggle-editor-test
+  (is (true? (get-in (ui/toggle-editor state) [:ui :editor-collapsed])))
+  (is (false? (get-in (ui/toggle-editor (ui/toggle-editor state)) [:ui :editor-collapsed]))))

@@ -54,6 +54,11 @@
 (defn set-viewport-height [state h]
   (assoc-in state [:ui :viewport-h] h))
 
+(defn toggle-editor
+  "收合或展開編輯區，讓卡片看板可以完整呈現。"
+  [state]
+  (update-in state [:ui :editor-collapsed] not))
+
 (defn dismiss-toast [state]
   (assoc-in state [:ui :toast] nil))
 

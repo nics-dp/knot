@@ -8,6 +8,7 @@
             [knot.ui :as ui]))
 
 (def column-gap 12)
+(def min-column-width 195)
 (def list-limit
   "素材清單一次顯示的上限，避免上千個區塊拖慢畫面。"
   60)
@@ -122,17 +123,15 @@
      [:div.topbar-title
       [:span.muted.small (:report/title report) " · " (:report/subtitle report)]
       [:span.crumb crumb]]
-     [:nav.segmented {:aria-label "頁籤"}
+     [:nav.segmented.tabs {:aria-label "頁籤"}
       (for [[p label] tabs]
         [:button {:replicant/key p
                   :type "button"
                   :aria-pressed (str (= p page))
                   :on {:click [[:ui/set-page p]]}}
          label])]
-     [:button.btn.btn-amber {:type "button" :disabled true :title "M5 實作修改建議審查"}
-      [:span.badge (:report/pending-proposals report)] "修改建議待審"]
-     [:button.btn {:type "button" :disabled true :title "M7 實作交接檢查"} "交接檢查"]
-     [:button.btn.btn-primary {:type "button" :disabled true :title "M6 實作 LaTeX 匯出"} "匯出 LaTeX"]]))
+     [:div.topbar-actions
+      [:button.btn.btn-primary {:type "button" :disabled true :title "M6 實作 LaTeX 匯出"} "匯出 LaTeX"]]]))
 
 (defn- toast-view [toast]
   (when toast
@@ -267,7 +266,9 @@
       [:div.tree-scroll {:class (when drag "is-dragging")
                         :replicant/on-mount [[:dom/observe-viewport]]
                         :replicant/on-render [[:dom/reveal-columns sel-depth selected (count cols)]]}
-      [:div.tree-columns {:style {:column-gap (str column-gap "px")}}
+      ;; 欄寬依可用寬度均分、最窄 min-column-width；放不下時水平捲動
+      [:div.tree-columns {:style {:column-gap (str column-gap "px")
+                                  :grid-template-columns (str "repeat(" (count cols) ", minmax(" min-column-width "px, 1fr))")}}
        (for [[i col] (map-indexed vector cols)
              :let [[lo hi] (scroll-range (nth offs i) (layout/column-height col) viewport-h)
                    translate (+ (nth offs i) (get bias i 0))]]
@@ -280,10 +281,9 @@
           [:div.col-head
            [:span.col-level (inc i)]
            [:span.col-name (case i 0 "章" 1 "節" (str "第 " (inc i) " 層"))]
-           ;; 拖曳時以可否放置的標籤取代卡片數
-           (condp = (when drag (inc i))
-             drag-depth [:span.col-drop-tag "調整順序"]
-             (some-> drag-depth dec) [:span.col-drop-tag "移入"]
+           ;; 拖曳時，左邊一欄以「移入」取代卡片數
+           (if (and drag (= (inc i) (dec drag-depth)))
+             [:span.col-drop-tag "移入"]
              [:span.col-count (str (count col) " 張")])]
           [:div.col-viewport {:on {:wheel [[:ui/wheel-column i [:event/wheel-delta] lo hi]]
                                    :dragover [[:drag/over i [:event/viewport-y] translate]
@@ -562,15 +562,37 @@
      (when-let [f (:node/figure-file node)]
        (section "圖檔" [:span.mono.boxed-muted f])))))
 
+(defn- chevron [direction]
+  [:svg {:width 16 :height 16 :viewBox "0 0 16 16" :fill "none" :stroke "currentColor"
+         :stroke-width 2 :stroke-linecap "round" :stroke-linejoin "round" :aria-hidden "true"}
+   [:path {:d (if (= direction :left) "M10 3 5 8l5 5" "M6 3l5 5-5 5")}]])
+
+(defn- editor-rail
+  "收合後的編輯區：一條窄邊欄，顯示選取的卡片並可展開。"
+  [nodes title id]
+  [:aside.editor-rail {:aria-label "編輯區（已收合）"}
+   [:button.rail-toggle {:type "button" :title "展開編輯區" :aria-label "展開編輯區" :aria-expanded "false"
+                         :on {:click [[:ui/toggle-editor]]}}
+    (chevron :left)]
+   [:button.rail-title {:type "button" :title "展開編輯區" :on {:click [[:ui/toggle-editor]]}}
+    [:span.rail-kind (kind-label nodes id)]
+    [:span.rail-name (title id)]]])
+
 (defn- editor-pane [{:keys [nodes ui] :as state} title]
   (let [id (:selected ui)
         node (get nodes id)
         k (:node/kind node)
         crumbs (crumb-titles nodes title id)
         focus? (= id (:focus-title ui))]
+    (if (:editor-collapsed ui)
+      (editor-rail nodes title id)
     [:aside.editor {:aria-label "編輯區"}
      [:div.detail-head
-      [:span.muted.small (str (kind-label nodes id) " · " (if (seq crumbs) (str/join " / " crumbs) "報告"))]
+      [:div.editor-top
+       [:span.muted.small (str (kind-label nodes id) " · " (if (seq crumbs) (str/join " / " crumbs) "報告"))]
+       [:button.collapse-btn {:type "button" :title "收合編輯區" :aria-label "收合編輯區" :aria-expanded "true"
+                              :on {:click [[:ui/toggle-editor]]}}
+        (chevron :right)]]
       (case k
         :heading [:div.title-row
                   [:span.title-number (some-> (title id) (str/split #" " 2) first)]
@@ -582,7 +604,7 @@
        :paragraph (paragraph-editor state title id)
        :heading (heading-editor state title id)
        :intro (intro-editor state title id)
-       (float-editor state id))]))
+       (float-editor state id))])))
 
 ;; ---------------------------------------------------------------------------
 ;; 素材庫頁面
