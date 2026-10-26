@@ -40,6 +40,12 @@
    :ui/toggle-source-file ui/toggle-source-file
    :ui/set-block-status ui/set-block-status
    :ui/open-paragraph ui/open-paragraph
+   :ui/add-remote-relation ui/add-remote-relation
+   :ui/remove-remote-relation ui/remove-remote-relation
+   :ui/open-rel-picker ui/open-rel-picker
+   :ui/close-rel-picker ui/close-rel-picker
+   :ui/set-rel-picker-type ui/set-rel-picker-type
+   :ui/set-rel-picker-query ui/set-rel-picker-query
    :drag/end ui/drag-end})
 
 (defn- transition-action [f]

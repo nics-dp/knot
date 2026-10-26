@@ -242,11 +242,30 @@
 ;; ---------------------------------------------------------------------------
 ;; 段落關係
 
-(def adjacent-relation-types #{:progression :causal :contrast :example})
+(def adjacent-relation-types
+  "相鄰段落（同一 parent、前後相接）之間的關係。"
+  [:progression :causal :contrast :example])
+
+(def remote-relation-types
+  "不相鄰（任意距離）的關係；from 是本段，to 是目標段落。
+  摘要：本段彙整目標的結果；依據：本段論點建立在目標的結果上（論證依賴）；
+  呼應、對比：不構成依賴。"
+  [:summarizes :basis :echo :contrast])
+
+(defn remote-relation?
+  "不相鄰的關係以 :relation/remote 標記；摘要一律視為不相鄰。"
+  [r]
+  (boolean (or (:relation/remote r) (= :summarizes (:relation/type r)))))
 
 (defn- adjacent-relation? [r]
-  (or (nil? (:relation/type r))
-      (adjacent-relation-types (:relation/type r))))
+  (not (remote-relation? r)))
+
+(defn remote-relations
+  "與 id 有關的不相鄰關係：{:outgoing [...] :incoming [...]}。"
+  [relations id]
+  (let [remote (filter remote-relation? relations)]
+    {:outgoing (filterv #(= id (:relation/from %)) remote)
+     :incoming (filterv #(= id (:relation/to %)) remote)}))
 
 (defn relation-between [relations from to]
   (some #(when (and (= from (:relation/from %)) (= to (:relation/to %))

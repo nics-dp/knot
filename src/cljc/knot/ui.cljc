@@ -36,7 +36,7 @@
 
 (defn select [state id]
   (if (contains? (:nodes state) id)
-    (update state :ui assoc :selected id :bias {} :toast nil)
+    (update state :ui assoc :selected id :bias {} :toast nil :picker nil :rel-picker nil)
     state))
 
 (defn navigate
@@ -341,7 +341,7 @@
   "設定兩個相鄰段落的關係類型並確認；type 為 nil 時移除關係。"
   [state from to type]
   (let [others (vec (remove #(and (= from (:relation/from %)) (= to (:relation/to %))
-                                  (not= :summarizes (:relation/type %)))
+                                  (not (tree/remote-relation? %)))
                             (:relations state)))]
     (-> state
         (remember "設定段落關係")
@@ -349,11 +349,52 @@
                             type (conj {:relation/from from :relation/to to
                                         :relation/type type :relation/pending false}))))))
 
+(defn add-remote-relation
+  "新增不相鄰的關係：from 為本段，to 為目標段落。"
+  [state from to type]
+  (let [{:keys [nodes relations]} state
+        dup? (some #(and (= from (:relation/from %)) (= to (:relation/to %))
+                         (= type (:relation/type %)) (tree/remote-relation? %))
+                   relations)]
+    (if (or dup? (= from to)
+            (not (tree/paragraph? nodes from)) (not (tree/paragraph? nodes to)))
+      state
+      (-> state
+          (remember "新增關係")
+          (update :relations conj {:relation/from from :relation/to to
+                                   :relation/type type :relation/remote true})
+          (update :ui dissoc :rel-picker)
+          (assoc-in [:ui :toast] "已新增關係")))))
+
+(defn remove-remote-relation [state from to type]
+  (-> state
+      (remember "移除關係")
+      (update :relations (fn [rels]
+                           (vec (remove #(and (= from (:relation/from %)) (= to (:relation/to %))
+                                              (= type (:relation/type %)) (tree/remote-relation? %))
+                                        rels))))))
+
+(defn open-rel-picker [state]
+  (update state :ui assoc :rel-picker {:type :basis :query ""} :picker nil))
+
+(defn close-rel-picker [state]
+  (update state :ui dissoc :rel-picker))
+
+(defn set-rel-picker-type [state type]
+  (if (get-in state [:ui :rel-picker])
+    (assoc-in state [:ui :rel-picker :type] type)
+    state))
+
+(defn set-rel-picker-query [state q]
+  (if (get-in state [:ui :rel-picker])
+    (assoc-in state [:ui :rel-picker :query] (or q ""))
+    state))
+
 ;; ---------------------------------------------------------------------------
 ;; 素材選取器（段落編輯區）
 
 (defn open-picker [state]
-  (update state :ui assoc :picker {:query "" :filter :all}))
+  (update state :ui assoc :picker {:query "" :filter :all} :rel-picker nil))
 
 (defn close-picker [state]
   (update state :ui dissoc :picker))

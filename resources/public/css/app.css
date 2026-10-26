@@ -230,6 +230,7 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 .swatch { display: inline-block; width: 18px; height: 12px; border: 1px solid var(--line-faint); border-radius: 3px; background: var(--surface); }
 .swatch-active { border: 2px solid var(--navy); }
 .swatch-path { border-color: var(--navy); background: var(--navy-tint); }
+.swatch-related { border: 2px dashed var(--teal); }
 .swatch-sibling { opacity: 0.7; }
 .swatch-other { opacity: 0.35; }
 
@@ -288,6 +289,8 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 .card-active { border: 2px solid var(--navy); padding: 5px 7px 5px 1px; }
 .card-path { background: var(--navy-tint); border-color: var(--navy); }
 .card-sibling { border-color: var(--line-faint); }
+/* 與選取段落有不相鄰關係的卡片 */
+.card-related { border: 2px dashed var(--teal); padding: 5px 7px 5px 1px; }
 /* 卡片類型：標題有左側深色條與灰藍底，段落白底，引言虛線，表與圖淡暖底 */
 .card-kind-heading .card-title { font-weight: 700; }
 .card-kind-heading:not(.card-path):not(.card-active):not(.card-into) { background: #EEF1F6; }
@@ -331,6 +334,7 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
   font-size: 11px; line-height: 18px; padding: 0 7px; border-radius: 10px; flex: none;
   border: 1px solid var(--line-faint); background: var(--surface); color: var(--ink-2);
 }
+.relation-remote { border-color: var(--teal); color: var(--teal); background: var(--teal-bg); }
 .relation-pending { border: 1px dashed var(--amber-dash); background: var(--amber-bg); color: var(--amber); }
 
 /* 拖曳中：可放置的欄位標示出來，其他欄淡出 */

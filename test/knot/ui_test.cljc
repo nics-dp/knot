@@ -143,3 +143,23 @@
 (deftest toggle-editor-test
   (is (true? (get-in (ui/toggle-editor state) [:ui :editor-collapsed])))
   (is (false? (get-in (ui/toggle-editor (ui/toggle-editor state)) [:ui :editor-collapsed]))))
+
+(deftest remote-relation-test
+  (let [s (ui/add-remote-relation state "b1" "a1" :basis)
+        {:keys [outgoing incoming]} (tree/remote-relations (:relations s) "b1")]
+    (testing "任意距離的段落都能建立關係"
+      (is (= [{:relation/from "b1" :relation/to "a1" :relation/type :basis :relation/remote true}] outgoing))
+      (is (empty? incoming))
+      (is (= 1 (count (:incoming (tree/remote-relations (:relations s) "a1"))))))
+    (testing "不重複、不能連到自己或非段落"
+      (is (= (:relations s) (:relations (ui/add-remote-relation s "b1" "a1" :basis))))
+      (is (= state (ui/add-remote-relation state "a1" "a1" :echo)))
+      (is (= state (ui/add-remote-relation state "a1" "A" :echo))))
+    (testing "不相鄰的對比不會被當成相鄰關係"
+      (let [s (ui/add-remote-relation state "a1" "a2" :contrast)]
+        (is (= :causal (:relation/type (tree/relation-between (:relations s) "a1" "a2"))))))
+    (testing "移除"
+      (is (empty? (:outgoing (tree/remote-relations (:relations (ui/remove-remote-relation s "b1" "a1" :basis)) "b1")))))
+    (testing "移動段落時不影響不相鄰的關係"
+      (let [moved (ui/move-selected (ui/select s "a2") -1)]
+        (is (= outgoing (:outgoing (tree/remote-relations (:relations moved) "b1"))))))))

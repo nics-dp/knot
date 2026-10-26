@@ -6,7 +6,15 @@
             [knot.tree :as tree]))
 
 (def relation-label
-  {:progression "遞進" :causal "因果" :contrast "對比" :example "舉例" :summarizes "摘要"})
+  {:progression "遞進" :causal "因果" :contrast "對比" :example "舉例"
+   :summarizes "摘要" :basis "依據" :echo "呼應"})
+
+(def remote-section-title
+  "本段對其他段落的不相鄰關係，在生成時各成一節。"
+  {:summarizes "本段摘要的段落"
+   :basis "本段依據的段落"
+   :echo "本段呼應的段落"
+   :contrast "本段對比的段落"})
 
 (defn- entry [label text & {:as more}]
   (merge {:label label :text (or text "")} more))
@@ -43,31 +51,38 @@
   (let [node (get nodes id)
         prev (tree/prev-paragraph nodes id)
         nxt (let [n (tree/next-sibling nodes id)] (when (tree/paragraph? nodes n) n))
-        summarizers (for [r relations
-                          :when (and (= id (:relation/to r)) (= :summarizes (:relation/type r)))]
+        {:keys [outgoing incoming]} (tree/remote-relations relations id)
+        summarizers (for [r incoming :when (= :summarizes (:relation/type r))]
                       (:relation/from r))]
     (keep identity
-          [(section "文風" [(entry "文風設定" (:report/style-name report))])
-           (section "章節路徑" (heading-path nodes title id))
-           (section "本段" [(entry (:node/title node) (:node/draft node))])
-           (section "依據" (citations state id))
-           (section "可用事實" (for [{:fact/keys [key label value unit]} (vals facts)]
-                             (entry label (str value unit) :key key)))
-           (section "前一段"
-                    (when prev
-                      [(entry (title prev) (get-in nodes [prev :node/draft])
-                              :relation (relation-text (tree/relation-between relations prev id)))]))
-           (section "下一段"
-                    (when nxt
-                      [(entry (title nxt) (get-in nodes [nxt :node/draft])
-                              :relation (relation-text (tree/relation-between relations id nxt)))]))
-           (section "摘要本段的段落"
-                    (for [s summarizers]
-                      (entry (title s) (get-in nodes [s :node/draft]))))
-           (section "下層表格與圖"
-                    (for [k (tree/child-ids nodes id)]
-                      (entry (str (get-in nodes [k :node/label]) " " (title k))
-                             (get-in nodes [k :node/draft]))))])))
+          (concat
+           [(section "文風" [(entry "文風設定" (:report/style-name report))])
+            (section "章節路徑" (heading-path nodes title id))
+            (section "本段" [(entry (:node/title node) (:node/draft node))])
+            (section "依據" (citations state id))
+            (section "可用事實" (for [{:fact/keys [key label value unit]} (vals facts)]
+                              (entry label (str value unit) :key key)))
+            (section "前一段"
+                     (when prev
+                       [(entry (title prev) (get-in nodes [prev :node/draft])
+                               :relation (relation-text (tree/relation-between relations prev id)))]))
+            (section "下一段"
+                     (when nxt
+                       [(entry (title nxt) (get-in nodes [nxt :node/draft])
+                               :relation (relation-text (tree/relation-between relations id nxt)))]))
+            (section "摘要本段的段落"
+                     (for [s summarizers]
+                       (entry (title s) (get-in nodes [s :node/draft]))))]
+           ;; 本段摘要、依據、呼應、對比的段落：一樣只帶意圖
+           (for [t tree/remote-relation-types]
+             (section (remote-section-title t)
+                      (for [r outgoing :when (= t (:relation/type r))
+                            :let [to (:relation/to r)]]
+                        (entry (title to) (get-in nodes [to :node/draft])))))
+           [(section "下層表格與圖"
+                     (for [k (tree/child-ids nodes id)]
+                       (entry (str (get-in nodes [k :node/label]) " " (title k))
+                              (get-in nodes [k :node/draft]))))]))))
 
 (defn- intro-context [{:keys [nodes report]} title id]
   (let [heading (tree/parent nodes id)]

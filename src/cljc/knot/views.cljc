@@ -38,9 +38,13 @@
     (for [[x y] [[2 2] [6 2] [2 7] [6 7] [2 12] [6 12]]]
       [:circle {:replicant/key [x y] :cx x :cy y :r 1.2}])]])
 
+(def heading-level-names
+  "標題各層的稱呼，沿用政府文件的章、節、項、款。"
+  ["章" "節" "項" "款"])
+
 (defn- kind-label [nodes id]
   (case (tree/kind nodes id)
-    :heading (case (tree/depth nodes id) 1 "章" 2 "節" (str "第 " (tree/depth nodes id) " 層標題"))
+    :heading (get heading-level-names (dec (tree/depth nodes id)))
     :intro "引言"
     :paragraph "段落"
     :table "表格"
@@ -142,14 +146,15 @@
 ;; ---------------------------------------------------------------------------
 ;; 卡片樹
 
-(defn- card-role [selected anc desc nodes id]
+(defn- card-role [selected anc desc related nodes id]
   (cond
     (= id selected) :active
     (or (anc id) (desc id)) :path
+    (related id) :related
     (= (tree/parent nodes id) (tree/parent nodes selected)) :sibling
     :else :other))
 
-(def role-opacity {:active 1 :path 1 :sibling 0.7 :other 0.35})
+(def role-opacity {:active 1 :path 1 :related 1 :sibling 0.7 :other 0.35})
 
 (defn- tree-card [{:keys [nodes title role drag over]} {:keys [id top height]}]
   (let [node (get nodes id)
@@ -236,6 +241,16 @@
                                         :on {:click [[:ui/delete-node id]]}}
       "刪除"]]))
 
+(defn- column-name
+  "欄位名稱依內容決定：標題用層級稱呼（章、節、項、款），另有段落、表與圖時一併列出。"
+  [nodes depth col]
+  (let [kinds (set (map #(tree/kind nodes (:id %)) col))]
+    (str/join "／" (cond-> []
+                     (kinds :heading) (conj (get heading-level-names (dec depth)))
+                     (kinds :paragraph) (conj "段落")
+                     (some kinds [:table :figure]) (conj "表與圖")
+                     (= kinds #{:intro}) (conj "引言")))))
+
 (defn- scroll-range
   "這一欄 bias 的允許範圍：內容頂端不低於上緣、底端不高於下緣（已在範圍外時不再更遠）。"
   [offset col-h viewport-h]
@@ -249,7 +264,9 @@
         offs (layout/offsets nodes cols selected viewport-h)
         anc (set (tree/ancestor-ids nodes selected))
         desc (set (tree/descendant-ids nodes selected))
-        roles (memoize #(card-role selected anc desc nodes %))
+        related (let [{:keys [outgoing incoming]} (tree/remote-relations (:relations state) selected)]
+                  (set (concat (map :relation/to outgoing) (map :relation/from incoming))))
+        roles (memoize #(card-role selected anc desc related nodes %))
         sel-depth (tree/depth nodes selected)
         drag-depth (when drag (tree/depth nodes drag))]
     [:section.tree-panel {:aria-label "卡片"}
@@ -259,6 +276,7 @@
       [:div.legend {:aria-label "圖例"}
        [:span [:i.swatch.swatch-active] "目前選取"]
        [:span [:i.swatch.swatch-path] "上層與下層"]
+       [:span [:i.swatch.swatch-related] "不相鄰的關係"]
        [:span [:i.swatch.swatch-sibling] "同一層"]
        [:span [:i.swatch.swatch-other] "其他"]]]
      [:div.board
@@ -280,7 +298,7 @@
                                     "col-drop-none"))}
           [:div.col-head
            [:span.col-level (inc i)]
-           [:span.col-name (case i 0 "章" 1 "節" (str "第 " (inc i) " 層"))]
+           [:span.col-name (column-name nodes (inc i) col)]
            ;; 拖曳時，左邊一欄以「移入」取代卡片數
            (if (and drag (= (inc i) (dec drag-depth)))
              [:span.col-drop-tag "移入"]
@@ -394,18 +412,70 @@
      (when nxt
        [[:div.rel-row {:replicant/key "next"} [:span.rel-kind "導向"] [:span.rel-name (title nxt)]
          (relation-select id nxt (tree/relation-between relations id nxt))]])
-     (for [r relations
-           :when (and (= id (:relation/to r)) (= :summarizes (:relation/type r)))]
-       [:div.rel-row {:replicant/key (str "sum-" (:relation/from r))}
-        [:span.rel-kind "被引用"]
-        [:button.link {:type "button" :on {:click [[:ui/select (:relation/from r)]]}}
-         (title (:relation/from r))]
-        [:span.relation-chip "摘要依賴"]])
+     (let [{:keys [outgoing incoming]} (tree/remote-relations relations id)]
+       (concat
+        (for [{:relation/keys [to type]} outgoing]
+          [:div.rel-row {:replicant/key (str "out-" (name type) "-" to)}
+           [:span.rel-kind (relation-label type)]
+           [:button.link {:type "button" :on {:click [[:ui/select to]]}} (title to)]
+           [:span.relation-chip.relation-remote (relation-label type)]
+           [:button.cite-remove {:type "button" :aria-label "移除關係"
+                                 :on {:click [[:ui/remove-remote-relation id to type]]}} "×"]])
+        (for [{:relation/keys [from type]} incoming]
+          [:div.rel-row {:replicant/key (str "in-" (name type) "-" from)}
+           [:span.rel-kind (str "被" (relation-label type))]
+           [:button.link {:type "button" :on {:click [[:ui/select from]]}} (title from)]
+           [:span.relation-chip.relation-remote (str "被" (relation-label type))]])))
      (for [k (tree/child-ids nodes id)]
        [:div.rel-row {:replicant/key (str "kid-" k)}
         [:span.rel-kind "下層"]
         [:button.link {:type "button" :on {:click [[:ui/select k]]}} (title k)]
         [:span.mono.small (get-in nodes [k :node/label])]]))))
+
+(def remote-relation-hint
+  {:summarizes "本段彙整目標段落的結果"
+   :basis "本段的論點建立在目標段落的結果上；目標改變論點時，本段會收到修改建議"
+   :echo "前後呼應，不影響論點"
+   :contrast "與目標段落比較"})
+
+(defn- rel-picker
+  "新增不相鄰的關係：選類型，再以名稱或意圖搜尋目標段落。"
+  [{:keys [nodes relations ui]} title id]
+  (let [{:keys [type query]} (:rel-picker ui)
+        q (str/trim (or query ""))
+        existing (set (for [r (:outgoing (tree/remote-relations relations id))
+                            :when (= type (:relation/type r))]
+                        (:relation/to r)))
+        candidates (->> (tree/document-order nodes)
+                        (filter #(and (tree/paragraph? nodes %) (not= id %)))
+                        (filter #(or (str/blank? q)
+                                     (str/includes? (title %) q)
+                                     (str/includes? (or (get-in nodes [% :node/draft]) "") q))))]
+    [:div.picker {:role "dialog" :aria-label "新增關係"}
+     [:div.picker-head
+      [:select.rel-select {:aria-label "關係類型"
+                           :on {:change [[:ui/set-rel-picker-type [:event/target-keyword]]]}}
+       (for [t tree/remote-relation-types]
+         [:option {:replicant/key t :value (name t) :selected (= t type)} (relation-label t)])]
+      [:input.picker-search {:type "search"
+                             :placeholder "搜尋段落名稱或意圖"
+                             :value query
+                             :replicant/on-mount [[:dom/focus]]
+                             :on {:input [[:ui/set-rel-picker-query [:event/target-value]]]
+                                  :compositionend [[:ui/set-rel-picker-query [:event/target-value]]]}}]
+      [:button.btn.btn-small {:type "button" :on {:click [[:ui/close-rel-picker]]}} "完成"]]
+     [:span.muted.small (remote-relation-hint type)]
+     [:div.picker-list
+      (if (seq candidates)
+        (for [c (take list-limit candidates)
+              :let [path (str/join " / " (map title (rest (reverse (tree/ancestor-ids nodes c)))))]]
+          [:div.picker-row {:replicant/key c}
+           [:span.picker-title (title c)]
+           [:span.muted.small.picker-source path]
+           (if (existing c)
+             [:span.small.text-teal "已連結"]
+             [:button.btn.btn-small {:type "button" :on {:click [[:ui/add-remote-relation id c type]]}} "連結"])])
+        [:span.muted.small "沒有符合的段落"])]]))
 
 (defn- picker [{:keys [blocks ui]} node]
   (let [{:keys [query filter]} (:picker ui)
@@ -483,9 +553,10 @@
      (intent-input id (:node/draft node) "這段要說什麼、要強調什麼、用什麼語氣。可以分行列點。")
      (section "依據" (citations state node))
      (section "關係"
-              (if (seq rels)
-                [:div.rel-rows rels]
-                [:span.muted.small "沒有相鄰的段落"]))
+              (when (seq rels) [:div.rel-rows rels])
+              (if (get-in state [:ui :rel-picker])
+                (rel-picker state title id)
+                [:button.btn.btn-dashed {:type "button" :on {:click [[:ui/open-rel-picker]]}} "新增關係"]))
      [:div.detail-section {:replicant/key "prose"}
       [:div.section-head
        [:h3 "本文"]

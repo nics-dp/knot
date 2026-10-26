@@ -47,3 +47,9 @@
 (deftest other-kinds-test
   (is (nil? (context/generation-context state "A")))
   (is (nil? (context/generation-context state "t1"))))
+
+(deftest remote-relation-context-test
+  (let [s (ui/add-remote-relation state "a3" "a1" :basis)
+        ctx (context/generation-context s "a3")]
+    (is (= [["一" "前段意圖"]] (mapv (juxt :label :text) (:entries (section ctx "本段依據的段落")))))
+    (is (nil? (section ctx "本段呼應的段落")) "沒有的類型不列出")))
