@@ -125,6 +125,16 @@
       :intro "引言"
       (:node/title n))))
 
+(defn position-label
+  "卡片在報告中的位置：所屬最近一層標題的編號，章為「第三章」，其餘為「3.1.2」；
+  不在任何標題底下時為 nil。"
+  [nodes numbers id]
+  (when-let [h (some #(when (heading? nodes %) %) (ancestor-ids nodes id))]
+    (let [num (get numbers h)]
+      (if (= 1 (depth nodes h))
+        (str "第" (chinese-numeral (parse-long num)) "章")
+        num))))
+
 ;; ---------------------------------------------------------------------------
 ;; 合法性
 

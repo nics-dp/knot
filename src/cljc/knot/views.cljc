@@ -3,6 +3,7 @@
   畫面是狀態的純函式，事件以 Nexus action 描述。"
   (:require [clojure.string :as str]
             [knot.context :as context]
+            [knot.diff :as diff]
             [knot.layout :as layout]
             [knot.tree :as tree]
             [knot.ui :as ui]))
@@ -22,7 +23,7 @@
 (def status-note
   {:ai "本文由 AI 生成，可直接修改"
    :human "本文已手動修改；重新生成前會先顯示差異"
-   :locked "已鎖定，重新生成與修改建議都不會改寫本段"
+   :locked "已鎖定：本文不能修改，重新生成與修改建議也不會改寫本段"
    :none "尚未生成本文"})
 
 (def relation-label context/relation-label)
@@ -95,7 +96,7 @@
 ;; ---------------------------------------------------------------------------
 ;; 本文（唯讀）
 
-(defn- xref-text [label]
+(defn xref-text [label]
   (str (if (str/starts-with? label "fig:") "圖 " "表 ") label))
 
 (defn- render-inline [facts {:keys [type text attrs]}]
@@ -177,8 +178,8 @@
                       :tabindex 0
                       :data-id id
                       :aria-current (when (= role :active) "true")
-                      ;; 點卡片時打開編輯區
-                      :on {:click [[:ui/select id] [:ui/open-editor]]}}
+                      ;; 點卡片只選取；編輯區由使用者自行展開
+                      :on {:click [[:ui/select id]]}}
       (case k
         (:table :figure)
         (list
@@ -360,18 +361,47 @@
 
 ;; ---------------------------------------------------------------------------
 ;; 編輯區
+;;
+;; 由上而下照生成的流程排成固定的區塊（SPEC 5.4）：
+;; 生成依據（使用者在這張卡片上設定的）→ AI 會參考的內容（自動組成，只能看）→ 本文（產出）。
+;; 標題與表、圖不生成本文，只有「設定」與「結構」。
 
-(defn- section [heading & body]
-  [:div.detail-section
-   (if (vector? heading) heading [:h3 heading])
+(defn- zone
+  "編輯區的一個區塊。opts：:hint 標題下的一行說明、:aside 標題右側（標記或操作）、:class 區塊樣式。"
+  [k title {:keys [hint aside class]} & body]
+  [:section.zone {:replicant/key k :class class}
+   [:div.zone-head
+    [:div.zone-title [:h3 title] (when hint [:p.zone-hint hint])]
+    (when aside [:div.zone-aside aside])]
    body])
 
-(defn- move-buttons [nodes id]
-  (let [up? (tree/sibling-placement nodes id -1)
-        down? (tree/sibling-placement nodes id 1)]
-    [:div.move-row
-     [:button.btn.btn-small {:type "button" :disabled (not up?) :on {:click [[:ui/move-selected -1]]}} "上移"]
-     [:button.btn.btn-small {:type "button" :disabled (not down?) :on {:click [[:ui/move-selected 1]]}} "下移"]]))
+(defn- field
+  "區塊內的一個欄位。opts：:count 標題旁的數量、:action 標題右側的按鈕。"
+  [k title {n :count action :action editing? :editing?} & body]
+  [:div.field {:replicant/key k :class (when editing? "field-editing")}
+   [:div.field-head
+    [:h4 title (when n [:span.field-count n])
+     (when editing? [:span.editing-badge "編輯中"])]
+    action]
+   body])
+
+(defn- item-row
+  "依據、關係、下層表與圖共用的項目列：開頭是類型標籤，接著名稱，右側是補充資訊與操作。"
+  [k {:keys [tag tag-class lead position title on-title meta control warn?]}]
+  [:div.item {:replicant/key k :class (when warn? "item-warn")}
+   (or lead [:span.tag.item-tag {:class tag-class} tag])
+   (when position [:span.item-position position])
+   (if on-title
+     [:button.item-title.item-link {:type "button" :on {:click on-title}} title]
+     [:span.item-title title])
+   (when meta [:span.item-meta meta])
+   control])
+
+(defn- remove-button [label actions]
+  [:button.cite-remove {:type "button" :aria-label label :on {:click actions}} "×"])
+
+(defn- field-button [label actions]
+  [:button.text-btn {:type "button" :on {:click actions}} label])
 
 (defn- name-input [id field value placeholder focus?]
   [:input.title-input {:replicant/key (str id field)
@@ -381,62 +411,86 @@
                        :placeholder placeholder
                        :value (or value "")
                        :on {:input [[:ui/set-node-field id field [:event/target-value]]]
-     :compositionend [[:ui/set-node-field id field [:event/target-value]]]}}])
+                            :compositionend [[:ui/set-node-field id field [:event/target-value]]]}}])
 
-(defn- intent-input [id value placeholder]
-  (section [:div.section-head [:h3 "意圖"]
-            [:span.muted.small "AI 生成時的提示詞，不會出現在報告中"]]
-           [:textarea.intent {:replicant/key (str id "-intent")
-                              :rows 4
-                              :placeholder placeholder
-                              :value (or value "")
-                              :on {:input [[:ui/set-node-field id :node/draft [:event/target-value]]]
-     :compositionend [[:ui/set-node-field id :node/draft [:event/target-value]]]}}]))
+(defn- edit-box
+  "意圖與本文的編輯框：平常是閱讀樣式，滑過提示「點擊編輯」，點進去後顯示「編輯中」。"
+  [k locked? child]
+  [:div.edit-box {:replicant/key k
+                  :class (when locked? "edit-box-locked")
+                  :data-hint (if locked? "已鎖定" "點擊編輯")
+                  :data-editing "編輯中 · Esc 結束"}
+   child])
 
-(defn- relation-select [from to rel]
-  [:div.rel-control
-   [:select.rel-select {:aria-label "關係類型"
-                        :on {:change [[:ui/set-relation from to [:event/target-keyword]]]}}
-    [:option {:value "" :selected (nil? (:relation/type rel))} "未標註"]
-    (for [t relation-options]
-      [:option {:replicant/key t :value (name t) :selected (= t (:relation/type rel))}
-       (relation-label t)])]
-   (when (:relation/pending rel)
-     (if (:relation/type rel)
-       [:button.btn.btn-small.btn-amber {:type "button"
-                                         :on {:click [[:ui/set-relation from to (:relation/type rel)]]}}
-        "確認"]
-       [:span.relation-chip.relation-pending "待確認"]))])
+(defn- intent-field [id value placeholder]
+  (field "intent" "意圖" nil
+         (edit-box "intent-box" false
+          [:textarea.intent {:replicant/key (str id "-intent")
+                            :rows 3
+                            :aria-label "意圖"
+                            :placeholder placeholder
+                            :value (or value "")
+                            :on {:input [[:ui/set-node-field id :node/draft [:event/target-value]]]
+                                 :compositionend [[:ui/set-node-field id :node/draft [:event/target-value]]]}}])))
 
-(defn- relation-rows [{:keys [nodes relations]} title id]
+(defn- relation-select
+  "相鄰關係的類型，放在項目列開頭、取代類型標籤。"
+  [from to rel]
+  [:select.rel-select.item-tag {:aria-label "關係類型"
+                                :class (when (:relation/pending rel) "rel-pending")
+                                :on {:change [[:ui/set-relation from to [:event/target-keyword]]]}}
+   [:option {:value "" :selected (nil? (:relation/type rel))} "未標註"]
+   (for [t relation-options]
+     [:option {:replicant/key t :value (name t) :selected (= t (:relation/type rel))}
+      (relation-label t)])])
+
+(defn- relation-confirm
+  "移動後標為待確認的相鄰關係：有類型時可直接確認。"
+  [from to rel]
+  (when (:relation/pending rel)
+    (if (:relation/type rel)
+      [:button.btn.btn-small.btn-amber {:type "button"
+                                        :on {:click [[:ui/set-relation from to (:relation/type rel)]]}}
+       "確認"]
+      [:span.relation-chip.relation-pending "待確認"])))
+
+(defn- relation-rows
+  "只列在這張卡片上設定的關係：與前後段的相鄰關係、本段新增的不相鄰關係。
+  其他段落指向本段的關係由對方設定，列在「AI 會參考的內容」。"
+  [{:keys [nodes relations]} title id editing?]
+  ;; 每一列是「關係類型、位置、卡片名稱」；唯讀時類型是標籤，編輯時是下拉選單
   (let [prev (tree/prev-paragraph nodes id)
-        nxt (let [n (tree/next-sibling nodes id)] (when (tree/paragraph? nodes n) n))]
+        nxt (let [n (tree/next-sibling nodes id)] (when (tree/paragraph? nodes n) n))
+        numbers (tree/numbering nodes)
+        adjacent (fn [k position from to other]
+                   (let [rel (tree/relation-between relations from to)]
+                     (item-row k {:lead (if editing?
+                                          (relation-select from to rel)
+                                          [:span.tag.item-tag {:class (when (:relation/pending rel) "rel-pending")}
+                                           (or (some-> (:relation/type rel) relation-label) "未標註")])
+                                  :position position
+                                  :title (title other) :on-title [[:ui/select other]]
+                                  :control (if editing?
+                                             (relation-confirm from to rel)
+                                             (when (:relation/pending rel)
+                                               [:span.relation-chip.relation-pending "待確認"]))})))]
     (concat
-     (when prev
-       [[:div.rel-row {:replicant/key "prev"} [:span.rel-kind "承接"] [:span.rel-name (title prev)]
-         (relation-select prev id (tree/relation-between relations prev id))]])
-     (when nxt
-       [[:div.rel-row {:replicant/key "next"} [:span.rel-kind "導向"] [:span.rel-name (title nxt)]
-         (relation-select id nxt (tree/relation-between relations id nxt))]])
-     (let [{:keys [outgoing incoming]} (tree/remote-relations relations id)]
-       (concat
-        (for [{:relation/keys [to type]} outgoing]
-          [:div.rel-row {:replicant/key (str "out-" (name type) "-" to)}
-           [:span.rel-kind (relation-label type)]
-           [:button.link {:type "button" :on {:click [[:ui/select to]]}} (title to)]
-           [:span.relation-chip.relation-remote (relation-label type)]
-           [:button.cite-remove {:type "button" :aria-label "移除關係"
-                                 :on {:click [[:ui/remove-remote-relation id to type]]}} "×"]])
-        (for [{:relation/keys [from type]} incoming]
-          [:div.rel-row {:replicant/key (str "in-" (name type) "-" from)}
-           [:span.rel-kind (str "被" (relation-label type))]
-           [:button.link {:type "button" :on {:click [[:ui/select from]]}} (title from)]
-           [:span.relation-chip.relation-remote (str "被" (relation-label type))]])))
-     (for [k (tree/child-ids nodes id)]
-       [:div.rel-row {:replicant/key (str "kid-" k)}
-        [:span.rel-kind "下層"]
-        [:button.link {:type "button" :on {:click [[:ui/select k]]}} (title k)]
-        [:span.mono.small (get-in nodes [k :node/label])]]))))
+     (when prev [(adjacent "prev" "前一段" prev id prev)])
+     (when nxt [(adjacent "next" "後一段" id nxt nxt)])
+     (for [{:relation/keys [to type]} (:outgoing (tree/remote-relations relations id))]
+       (item-row (str "out-" (name type) "-" to)
+                 {:tag (relation-label type) :tag-class "tag-teal"
+                  :lead (when editing?
+                          [:select.rel-select.item-tag.tag-teal
+                           {:aria-label "關係類型"
+                            :on {:change [[:ui/set-remote-relation-type id to type [:event/target-keyword]]]}}
+                           (for [t tree/remote-relation-types]
+                             [:option {:replicant/key t :value (name t) :selected (= t type)}
+                              (relation-label t)])])
+                  :position (tree/position-label nodes numbers to)
+                  :title (title to) :on-title [[:ui/select to]]
+                  :control (when editing?
+                             (remove-button "移除關係" [[:ui/remove-remote-relation id to type]]))})))))
 
 (def remote-relation-hint
   {:summarizes "本段彙整目標段落的結果"
@@ -495,7 +549,7 @@
                              :value query
                              :replicant/on-mount [[:dom/focus]]
                              :on {:input [[:ui/set-picker-query [:event/target-value]]]
-     :compositionend [[:ui/set-picker-query [:event/target-value]]]}}]
+                                  :compositionend [[:ui/set-picker-query [:event/target-value]]]}}]
       [:button.btn.btn-small {:type "button" :on {:click [[:ui/close-picker]]}} "完成"]]
      (filter-chips blocks filter :ui/set-picker-filter)
      [:div.picker-list
@@ -517,69 +571,169 @@
   (let [by-id (block-index blocks)
         cites (:node/citations node)
         id (:node/id node)]
-    (list
+    (field "cites" "依據"
+           {:count (when (seq cites) (count cites))
+            :action (when-not (:picker ui) (field-button "加入" [[:ui/open-picker]]))}
      (if (seq cites)
-       [:div.cites {:replicant/key "cites"}
+       [:div.items {:replicant/key "cites"}
         (for [{:keys [block where]} cites
               :let [b (by-id block)
                     warn? (= :candidate (:block/status b))]]
-          [:div.cite {:replicant/key block :class (when warn? "cite-warn")}
-           [:span.mono.text-navy.small (if (= :table (:block/kind b)) "表" "段")]
-           [:span.cite-title (:block/title b)]
-           [:span.cite-where {:class (when warn? "text-amber")}
-            (if warn? "未確認素材" (or where (:block/source b)))]
-           [:button.cite-remove {:type "button" :aria-label "移除依據"
-                                 :on {:click [[:ui/remove-citation id block]]}} "×"]])]
-       [:span.notice-amber {:replicant/key "empty"} "尚未加入依據。"])
-     (if (:picker ui)
-       (picker state node)
-       [:button.btn.btn-dashed {:replicant/key "add" :type "button" :on {:click [[:ui/open-picker]]}}
-        "加入依據"]))))
+          (item-row block {:tag (if (= :table (:block/kind b)) "表格" "段落")
+                           :tag-class (when (= :table (:block/kind b)) "tag-navy")
+                           :title (:block/title b)
+                           :meta (if warn? [:span.text-amber "未確認素材"] (or where (:block/source b)))
+                           :warn? warn?
+                           :control (remove-button "移除依據" [[:ui/remove-citation id block]])}))]
+       [:span.notice-amber {:replicant/key "empty"} "尚未加入依據：AI 只能依意圖撰寫，無法引用素材。"])
+     (when (:picker ui) (picker state node)))))
 
-(defn- context-preview [state id]
+;; AI 會參考的內容 --------------------------------------------------------------
+
+(defn- source-tag [source]
+  (case source
+    :prose [:span.source-tag.source-prose "本文"]
+    :intent [:span.source-tag "意圖"]
+    nil))
+
+(defn- section-gist
+  "摘要列的一項：只有一筆時列出名稱，多筆時列出筆數。"
+  [{:keys [group title entries]}]
+  (let [[e & more] entries]
+    (cond
+      (= group :style) [:span (:text e)]
+      ;; 本段的名稱已在標題列，只標出帶的是意圖
+      (= title "本段") [:span "本段意圖" (source-tag (:source e))]
+      more [:span (str title " " (count entries) " 項")]
+      :else [:span title "：" (:label e) (source-tag (:source e))])))
+
+(defn- context-zone [state id]
   (when-let [{:keys [sections chars]} (context/generation-context state id)]
-    [:details.context
-     [:summary
-      [:span "生成時 AI 會參考的內容"]
-      [:span.muted.small (str "約 " chars " 字")]]
-     (for [{:keys [title entries]} sections]
-       [:div.context-section {:replicant/key title}
-        [:h4 title]
-        (for [[i {:keys [label text relation warn]}] (map-indexed vector entries)]
-          [:div.context-entry {:replicant/key i :class (when warn "cite-warn")}
-           [:span.context-label label (when relation [:span.relation-chip relation])]
-           [:span.context-text (if (str/blank? text) "（未填意圖）" (gist text))]])])]))
+    (let [by-group (group-by :group sections)]
+      (zone "context" "AI 會參考的內容"
+            {:class "zone-auto"
+             :hint "由上方的設定與周邊卡片自動組成；周邊卡片有本文帶本文，沒有則帶意圖"
+             :aside [:span.auto-size (str "約 " chars " 字")]}
+            [:div.context-summary
+             (for [[g label] context/group-label
+                   :let [ss (get by-group g)]
+                   :when (seq ss)]
+               [:div.context-row {:replicant/key g}
+                [:span.context-group label]
+                [:span.context-items (interpose [:span.sep "·"] (map section-gist ss))]])]
+            [:details.context
+             [:summary "查看完整內容"]
+             (for [{:keys [title entries]} sections]
+               [:div.context-section {:replicant/key title}
+                [:h4 title]
+                (for [[i {:keys [label text relation source warn]}] (map-indexed vector entries)]
+                  [:div.context-entry {:replicant/key i :class (when warn "cite-warn")}
+                   [:span.context-label label (source-tag source)
+                    (when relation [:span.relation-chip relation])]
+                   [:span.context-text (if (str/blank? text) "（未填意圖）" (gist text))]])])]))))
 
-(defn- paragraph-editor [{:keys [nodes facts report] :as state} title id]
+;; 本文 ----------------------------------------------------------------------
+
+(defn- diff-view [ops]
+  [:p.prose.diff
+   (for [[i [op s]] (map-indexed vector ops)]
+     (case op
+       :same [:span {:replicant/key i} s]
+       :del [:del {:replicant/key i} s]
+       :ins [:ins {:replicant/key i} s]))])
+
+(defn- diff-entry [before after]
+  (let [ops (diff/diff before after)]
+    (if (diff/changed? ops)
+      [:div.prose-box (diff-view ops)]
+      [:span.muted.small "與前一版相同"])))
+
+(defn- time-text [at]
+  (when at
+    #?(:cljs (.toLocaleString at "zh-TW" #js {:month "numeric" :day "numeric" :hour "2-digit" :minute "2-digit"})
+       :clj (str at))))
+
+(defn- previous-view
+  "與前一版比較：只保留最近一次修改之前的內容（連續的逐字輸入算同一次）。"
+  [{:keys [facts ui]} node]
+  (let [{:keys [id data]} (:previous ui)
+        text #(some->> % (context/prose-text facts))]
+    (cond
+      (not= id (:node/id node)) [:span.muted.small "讀取前一版…"]
+      (empty? data) [:span.muted.small "本文還沒有修改過。"]
+      :else
+      [:div.diff-list
+       (let [{:keys [at label]} (:node/prose data)]
+         [:div.diff-meta
+          [:span (str "前一版：" (str/join " · " (remove str/blank? [label (time-text at)])) " 之前")]
+          [:span.diff-legend.diff [:del "刪除"] [:ins "新增"]]])
+       (diff-entry (text (get-in data [:node/prose :value])) (text (:node/prose node)))])))
+
+(defn- prose-zone
+  "本文與產出相關的操作。empty-note：尚未生成時的說明；actions：生成等按鈕。"
+  [{:keys [facts ui] :as state} node empty-note & actions]
+  (let [diff? (boolean (:show-previous ui))]
+    (zone "prose" "本文"
+          {:class "zone-output"
+           :aside [:div.segmented.segmented-small {:role "group" :aria-label "本文顯示方式"}
+                   [:button {:type "button" :aria-pressed (str (not diff?))
+                             :on {:click (when diff? [[:ui/toggle-previous]])}} "目前內容"]
+                   [:button {:type "button" :aria-pressed (str diff?)
+                             :on {:click (when-not diff? [[:ui/toggle-previous]])}} "與前一版比較"]]}
+          (if diff?
+            (previous-view state node)
+            (let [id (:node/id node)
+                  locked? (= :locked (:node/status node))]
+              (list
+               (when (str/blank? (context/prose-text facts (:node/prose node)))
+                 [:p.muted.small {:replicant/key "empty"} empty-note])
+               ;; 編輯器的內容由 Tiptap 管理，Replicant 只負責建立與同步
+               (edit-box "prose-box" locked?
+                         [:div.prose-box.prose-editor {:replicant/key (str id "-prose")
+                                                       :class (when locked? "prose-locked")
+                                                       :replicant/on-render [[:prose/render id (not locked?)]]
+                                                       :replicant/on-unmount [[:prose/destroy]]}]))))
+          [:div.prose-actions actions])))
+
+;; 各類卡片 -------------------------------------------------------------------
+
+(defn- paragraph-editor [{:keys [nodes] :as state} title id]
   (let [node (get nodes id)
         status (or (:node/status node) :none)
-        rels (relation-rows state title id)
-        parent-id (tree/parent nodes id)]
+        editing? (get-in state [:ui :editing-relations])
+        rels (relation-rows state title id editing?)
+        kids (tree/child-ids nodes id)]
     (list
-     (intent-input id (:node/draft node) "這段要說什麼、要強調什麼、用什麼語氣。可以分行列點。")
-     (section "依據" (citations state node))
-     (section "關係"
-              (when (seq rels) [:div.rel-rows rels])
-              (if (get-in state [:ui :rel-picker])
-                (rel-picker state title id)
-                [:button.btn.btn-dashed {:type "button" :on {:click [[:ui/open-rel-picker]]}} "新增關係"]))
-     [:div.detail-section {:replicant/key "prose"}
-      [:div.section-head
-       [:h3 "本文"]
-       [:span.muted.small (str "文風：" (:report/style-name report))]]
-      (if-let [doc (:node/prose node)]
-        [:div.prose-box (prose-view facts doc)]
-        [:div.prose-box [:p.prose.muted "尚未生成本文。寫好意圖並加入依據後，按「生成本段」產生。"]])]
-     (context-preview state id)
-     [:div.detail-footer {:replicant/key "footer"}
-      [:span.small {:class (if (= :human status) "text-teal" "muted")} (status-note status)]
-      (when (and (not (tree/intro-id nodes parent-id))
-                 (empty? (tree/child-ids nodes id)))
-        [:button.btn {:type "button" :on {:click [[:ui/paragraph->intro id]]}} "改為引言"])
-      [:button.btn {:type "button" :on {:click [[:ui/toggle-lock id]]}}
-       (if (= :locked status) "解除鎖定" "鎖定")]
-      [:button.btn.btn-dark {:type "button" :disabled true :title "M4 實作段落生成"}
-       (if (= :none status) "生成本段" "重新生成")]])))
+     (zone "inputs" "生成依據"
+           {:hint "意圖、依據與關係會組成 AI 的提示詞，不會出現在報告中"}
+           (intent-field id (:node/draft node) "這段要說什麼、要強調什麼、用什麼語氣。可以分行列點。")
+           (citations state node)
+           (field "rels" "關係"
+                  {:editing? editing?
+                   :action [:div.field-actions
+                            (when (and editing? (not (get-in state [:ui :rel-picker])))
+                              (field-button "新增" [[:ui/open-rel-picker]]))
+                            (field-button (if editing? "完成" "編輯") [[:ui/toggle-relations-edit]])]}
+                  (if (seq rels)
+                    [:div.items rels]
+                    [:span.muted.small "與前後段的關係會在這裡出現；不相鄰的段落可在「編輯」後新增。"])
+                  (when (get-in state [:ui :rel-picker])
+                    (rel-picker state title id)))
+           (when (seq kids)
+             (field "kids" "下層表與圖" {:count (count kids)}
+                    [:div.items
+                     (for [k kids]
+                       (item-row k {:tag (if (= :figure (tree/kind nodes k)) "圖" "表格")
+                                    :tag-class "tag-warm"
+                                    :title (title k) :on-title [[:ui/select k]]
+                                    :meta [:span.mono (get-in nodes [k :node/label])]}))])))
+     (context-zone state id)
+     (prose-zone state node "尚未有本文：可直接在下方撰寫，或寫好意圖並加入依據後按「生成本段」。"
+                 [:span.small.muted {:replicant/key "status"} (status-note status)]
+                 [:button.btn {:replicant/key "lock" :type "button" :on {:click [[:ui/toggle-lock id]]}}
+                  (if (= :locked status) "解除鎖定" "鎖定")]
+                 [:button.btn.btn-dark {:replicant/key "gen" :type "button" :disabled true :title "M4 實作段落生成"}
+                  (if (= :none status) "生成本段" "重新生成")]))))
 
 (defn- heading-editor [{:keys [nodes]} title id]
   (let [node (get nodes id)
@@ -589,55 +743,56 @@
         has-heads (some #(tree/heading? nodes %) kids)
         can-sub (< (tree/depth nodes id) tree/max-heading-level)]
     (list
-     (intent-input id (:node/draft node) "這一章／節要涵蓋什麼、回應哪些契約項目、與前後章節的關係。")
-     (when-let [items (seq (:node/contract-items node))]
-       (section "契約項目"
-                [:div.chips (for [c items] [:span.tag {:replicant/key c} c])]))
-     (section "引言"
-              (if intro
-                [:button.kid {:type "button" :on {:click [[:ui/select intro]]}}
-                 (let [d (get-in nodes [intro :node/draft])]
-                   (if (str/blank? d) "（由 AI 依下層內容生成）" (gist d)))]
-                [:button.btn.btn-dashed {:type "button" :on {:click [[:ui/add-child id :intro]]}}
-                 "新增引言"]))
-     (section "下層內容"
-              [:div.kids
-               (for [k kids :when (not= k intro)]
-                 [:button.kid {:replicant/key k :type "button" :on {:click [[:ui/select k]]}}
-                  (title k)])]
-              [:div.add-row
-               (when-not has-heads
-                 [:button.btn.btn-small {:type "button" :on {:click [[:ui/add-child id :paragraph]]}} "新增段落"])
-               (when can-sub
-                 (if has-paras
-                   [:button.btn.btn-small {:type "button" :on {:click [[:ui/wrap-paragraphs id]]}}
-                    "新增下層標題並移入段落"]
-                   [:button.btn.btn-small {:type "button" :on {:click [[:ui/add-child id :heading]]}} "新增下層標題"]))]))))
+     (zone "inputs" "設定" {:hint "下層段落與引言生成時會參考這裡的意圖"}
+           (intent-field id (:node/draft node) "這一章／節要涵蓋什麼、回應哪些契約項目、與前後章節的關係。")
+           (when-let [items (seq (:node/contract-items node))]
+             (field "contract" "契約項目" {:count (count items)}
+                    [:div.chips (for [c items] [:span.tag {:replicant/key c} c])])))
+     (zone "structure" "結構" {:hint "引言固定在最前面；其後是段落或下層標題，兩者不混用"}
+           (field "intro" "引言"
+                  {:action (when-not intro (field-button "新增" [[:ui/add-child id :intro]]))}
+                  (if intro
+                    [:button.kid {:type "button" :on {:click [[:ui/select intro]]}}
+                     (let [d (get-in nodes [intro :node/draft])]
+                       (if (str/blank? d) "（由 AI 依下層內容生成）" (gist d)))]
+                    [:span.muted.small "這一層還沒有引言。"]))
+           (let [shown (remove #{intro} kids)]
+             (field "kids" "下層內容"
+                    {:count (when (seq shown) (count shown))
+                     :action [:div.field-actions
+                              (when-not has-heads
+                                (field-button "新增段落" [[:ui/add-child id :paragraph]]))
+                              (when can-sub
+                                (if has-paras
+                                  (field-button "新增下層標題並移入段落" [[:ui/wrap-paragraphs id]])
+                                  (field-button "新增下層標題" [[:ui/add-child id :heading]])))]}
+                    (if (seq shown)
+                      [:div.kids
+                       (for [k shown]
+                         [:button.kid {:replicant/key k :type "button" :on {:click [[:ui/select k]]}}
+                          (title k)])]
+                      [:span.muted.small "這一層還沒有內容。"])))))))
 
-(defn- intro-editor [{:keys [nodes facts] :as state} title id]
-  (let [node (get nodes id)
-        heading (tree/parent nodes id)]
+(defn- intro-editor [{:keys [nodes] :as state} _title id]
+  (let [node (get nodes id)]
     (list
-     (section "所屬標題"
-              [:button.kid {:type "button" :on {:click [[:ui/select heading]]}} (title heading)])
-     (intent-input id (:node/draft node) "可留空。想強調的重點或語氣寫在這裡，AI 會依下層內容生成引言。")
-     (section "本文"
-              (if-let [doc (:node/prose node)]
-                [:div.prose-box (prose-view facts doc)]
-                [:div.prose-box [:p.prose.muted "尚未生成。引言適合在下層內容大致完成後才生成。"]]))
-     (context-preview state id)
-     [:div.detail-footer {:replicant/key "footer"}
-      [:span.small.muted "引言由 AI 依這一層的下層內容生成"]
-      [:button.btn.btn-dark {:type "button" :disabled true :title "M4 實作引言生成"} "AI 生成引言"]])))
+     (zone "inputs" "生成依據" {:hint "可留空；AI 會依這一層的下層內容生成引言"}
+           (intent-field id (:node/draft node) "想強調的重點或語氣寫在這裡，AI 會依下層內容生成引言。"))
+     (context-zone state id)
+     (prose-zone state node "尚未有本文：可直接撰寫，或在下層內容大致完成後由 AI 生成。"
+                 [:span.small.muted {:replicant/key "note"} "引言適合在下層內容大致完成後才生成"]
+                 [:button.btn.btn-dark {:replicant/key "gen" :type "button" :disabled true :title "M4 實作引言生成"}
+                  "AI 生成引言"]))))
 
 (defn- float-editor [{:keys [nodes]} id]
   (let [node (get nodes id)]
-    (list
-     (intent-input id (:node/draft node) "這張表／圖要呈現什麼、圖說的重點。")
-     (section "LaTeX label"
-              [:span.mono.boxed-muted (:node/label node)])
-     (when-let [f (:node/figure-file node)]
-       (section "圖檔" [:span.mono.boxed-muted f])))))
+    (zone "inputs" "設定" {:hint "段落生成時會以 label 引用這張表／圖"}
+          (intent-field id (:node/draft node) "這張表／圖要呈現什麼、圖說的重點。")
+          (field "label" "LaTeX label" nil [:span.mono.boxed-muted (:node/label node)])
+          (when-let [f (:node/figure-file node)]
+            (field "file" "圖檔" nil [:span.mono.boxed-muted f])))))
+
+;; 抽屜 ----------------------------------------------------------------------
 
 (defn- chevron [direction]
   [:svg {:width 16 :height 16 :viewBox "0 0 16 16" :fill "none" :stroke "currentColor"
@@ -655,36 +810,59 @@
     [:span.rail-kind (kind-label nodes id)]
     [:span.rail-name (title id)]]])
 
+(defn- structure-actions
+  "結構操作（不影響本文），放在標題列的「⋯」選單。"
+  [nodes id]
+  (let [parent-id (tree/parent nodes id)]
+    (cond-> []
+      (and (tree/paragraph? nodes id)
+           (not (tree/intro-id nodes parent-id))
+           (empty? (tree/child-ids nodes id)))
+      (conj [:button.menu-item {:replicant/key "to-intro" :type "button"
+                                :on {:click [[:ui/paragraph->intro id]]}}
+             "改為引言"]))))
+
 (defn- editor-pane [{:keys [nodes ui] :as state} title]
   (let [id (:selected ui)
         node (get nodes id)
         k (:node/kind node)
         crumbs (crumb-titles nodes title id)
-        focus? (= id (:focus-title ui))]
+        focus? (= id (:focus-title ui))
+        actions (structure-actions nodes id)]
     (if (:editor-collapsed ui)
       (editor-rail nodes title id)
-    [:aside.editor {:aria-label "編輯區"}
-     [:div.detail-head
-      [:div.editor-top
-       [:span.muted.small (str (kind-label nodes id) " · " (if (seq crumbs) (str/join " / " crumbs) "報告"))]
-       [:button.collapse-btn {:type "button" :title "收合編輯區" :aria-label "收合編輯區" :aria-expanded "true"
-                              :on {:click [[:ui/toggle-editor]]}}
-        (chevron :right)]]
-      (case k
-        :heading [:div.title-row
-                  [:span.title-number (some-> (title id) (str/split #" " 2) first)]
-                  (name-input id :node/name (:node/name node) "標題名稱" focus?)]
-        :intro [:h2 "引言"]
-        (name-input id :node/title (:node/title node) "名稱" focus?))
-      (move-buttons nodes id)]
-     (case k
-       :paragraph (paragraph-editor state title id)
-       :heading (heading-editor state title id)
-       :intro (intro-editor state title id)
-       (float-editor state id))])))
+      [:aside.editor {:aria-label "編輯區"}
+       [:div.detail-head
+        [:div.editor-top
+         [:span.muted.small (str (kind-label nodes id) " · " (if (seq crumbs) (str/join " / " crumbs) "報告"))]
+         (when (seq actions)
+           ;; 換卡片時重建，避免選單停在打開的狀態
+           [:details.more-menu {:replicant/key (str "menu-" id)}
+            [:summary {:title "其他操作" :aria-label "其他操作"} "⋯"]
+            [:div.menu (seq actions)]])
+         [:button.collapse-btn {:type "button" :title "收合編輯區" :aria-label "收合編輯區" :aria-expanded "true"
+                                :on {:click [[:ui/toggle-editor]]}}
+          (chevron :right)]]
+        (case k
+          :heading [:div.title-row
+                    [:span.title-number (some-> (title id) (str/split #" " 2) first)]
+                    (name-input id :node/name (:node/name node) "標題名稱" focus?)]
+          :intro [:h2 "引言"]
+          [:div.title-row
+           (name-input id :node/title (:node/title node) "名稱" focus?)
+           (when-let [{:keys [label class]} (and (= :paragraph k) (status-pill (or (:node/status node) :none)))]
+             [:span.pill.title-pill {:class class} label])])]
+       (case k
+         :paragraph (paragraph-editor state title id)
+         :heading (heading-editor state title id)
+         :intro (intro-editor state title id)
+         (float-editor state id))])))
 
 ;; ---------------------------------------------------------------------------
 ;; 素材庫頁面
+
+(defn- section [heading & body]
+  [:div.detail-section [:h3 heading] body])
 
 (defn- table-view
   "表格區塊的內容；max-cols、max-rows 為 nil 時顯示全部。"

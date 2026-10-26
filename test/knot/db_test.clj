@@ -136,3 +136,26 @@
         (is (contains? (:argument (db/dependents (d/db c) p313)) p411))))
     (testing "樹的順序與編號由 order-key 計算"
       (is (= "3.1" (get (tree/numbering (by :node/id (:nodes loaded))) (id :node/name "測試結果")))))))
+
+(defn- prose [text]
+  {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text text}]}]})
+
+(deftest node-previous-test
+  (let [[_ c loaded] (seeded)
+        para (some #(when (= "節能效益估算" (:node/title %)) (:node/id %)) (:nodes loaded))
+        original (some #(when (= para (:node/id %)) (:node/prose %)) (:nodes loaded))
+        save! (fn [label f]
+                (let [state (client-state (db/load-state (d/db c)))]
+                  (db/apply-changes! c {:label label :changes (sync/diff state (f state))})))]
+    (testing "匯入之後還沒修改過"
+      (is (= {} (db/node-previous (d/db c) para))))
+    (testing "意圖不需要歷程"
+      (save! "編輯文字" #(ui/set-node-field % para :node/draft "新的意圖"))
+      (is (= {} (db/node-previous (d/db c) para))))
+    (testing "連續的逐字輸入算同一次修改"
+      (save! "編輯文字" #(ui/set-prose % para (prose "新")))
+      (save! "編輯文字" #(ui/set-prose % para (prose "新的本文")))
+      (is (= original (get-in (db/node-previous (d/db c) para) [:node/prose :value]))))
+    (testing "其他修改組不合併"
+      (save! "重新生成" #(ui/set-prose % para (prose "生成的本文")))
+      (is (= (prose "新的本文") (get-in (db/node-previous (d/db c) para) [:node/prose :value]))))))

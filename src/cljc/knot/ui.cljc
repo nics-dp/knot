@@ -8,7 +8,9 @@
    :source-filter :all
    :source-query ""
    :viewport-h 640
-   :bias {}})
+   :bias {}
+   ;; 編輯區預設收合，點卡片不會自動打開
+   :editor-collapsed true})
 
 (defn- default-selection
   "預設選取第一個段落；沒有段落時選第一張卡片。"
@@ -73,7 +75,8 @@
 
 (defn select [state id]
   (if (contains? (:nodes state) id)
-    (update state :ui assoc :selected id :bias {} :toast nil :picker nil :rel-picker nil)
+    (update state :ui assoc :selected id :bias {} :toast nil :picker nil :rel-picker nil
+            :editing-relations false)
     state))
 
 (defn navigate
@@ -101,6 +104,16 @@
 
 (defn close-editor [state]
   (assoc-in state [:ui :editor-collapsed] true))
+
+(defn toggle-previous
+  "本文區切換「與前一版比較」。"
+  [state]
+  (update-in state [:ui :show-previous] not))
+
+(defn set-previous
+  "後端讀回的前一版內容（knot.db/node-previous）。"
+  [state id data]
+  (assoc-in state [:ui :previous] {:id id :data data}))
 
 (defn dismiss-toast [state]
   (assoc-in state [:ui :toast] nil))
@@ -203,6 +216,7 @@
             label (str "新增" ({:intro "引言" :paragraph "段落" :heading "下層標題"} kind))
             [id state] (-> state (remember label) (insert-node parent-id node))]
         (update state :ui assoc :selected id :bias {} :focus-title (when-not (= kind :intro) id)
+                :editor-collapsed false
                 :toast (if (= kind :intro)
                          "新增引言：寫下意圖（可留空），本文由 AI 依下層內容生成"
                          label))))))
@@ -318,7 +332,7 @@
             (update :relations #(if (= k :paragraph)
                                   (tree/mark-pending % nodes' [next-para] {next-para id})
                                   %))
-            (update :ui assoc :selected new-id :bias {} :focus-title new-id
+            (update :ui assoc :selected new-id :bias {} :focus-title new-id :editor-collapsed false
                     :toast (if (= k :heading) "已新增同層標題" "已新增段落")))))))
 
 (defn delete-node
@@ -361,6 +375,17 @@
   (if (and (editable-fields field) (contains? (:nodes state) id))
     (assoc-in state [:nodes id field] (or value ""))
     state))
+
+(defn set-prose
+  "在本文編輯器修改本文（逐字輸入，不進復原紀錄；編輯器有自己的復原）。
+  段落改了本文就轉為 :human（SPEC 4 狀態轉換）；鎖定的段落不能修改。"
+  [state id doc]
+  (let [{:node/keys [kind status] :as node} (get-in state [:nodes id])]
+    (if (or (nil? node) (= :locked status) (= doc (:node/prose node)))
+      state
+      (cond-> (assoc-in state [:nodes id :node/prose] doc)
+        (and (= :paragraph kind) (not= :human status))
+        (assoc-in [:nodes id :node/status] :human)))))
 
 (defn add-citation
   "以素材選取器把區塊加入段落的依據。"
@@ -415,6 +440,30 @@
                            (vec (remove #(and (= from (:relation/from %)) (= to (:relation/to %))
                                               (= type (:relation/type %)) (tree/remote-relation? %))
                                         rels))))))
+
+(defn set-remote-relation-type
+  "改變不相鄰關係的類型。類型是關係識別鍵的一部分，因此是換成新的一條；
+  同一對段落已有該類型時直接合併。"
+  [state from to old-type new-type]
+  (if (or (nil? new-type) (= old-type new-type))
+    state
+    (let [same? (fn [t r] (and (= from (:relation/from r)) (= to (:relation/to r))
+                               (= t (:relation/type r)) (tree/remote-relation? r)))
+          exists? (some #(same? new-type %) (:relations state))]
+      (-> state
+          (remember "變更關係類型")
+          (update :relations
+                  (fn [rels]
+                    (cond-> (vec (remove #(same? old-type %) rels))
+                      (not exists?) (conj {:relation/from from :relation/to to
+                                           :relation/type new-type :relation/remote true}))))))))
+
+(defn toggle-relations-edit
+  "關係預設唯讀；按「編輯」進入編輯狀態，按「完成」離開並關閉關係選取器。"
+  [state]
+  (if (get-in state [:ui :editing-relations])
+    (update state :ui assoc :editing-relations false :rel-picker nil)
+    (assoc-in state [:ui :editing-relations] true)))
 
 (defn open-rel-picker [state]
   (update state :ui assoc :rel-picker {:type :basis :query ""} :picker nil))

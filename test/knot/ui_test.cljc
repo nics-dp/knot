@@ -141,8 +141,9 @@
   (is (= state (ui/edge-scroll state 2 -30 -100 0)) "沒有拖曳時邊緣不捲動"))
 
 (deftest toggle-editor-test
-  (is (true? (get-in (ui/toggle-editor state) [:ui :editor-collapsed])))
-  (is (false? (get-in (ui/toggle-editor (ui/toggle-editor state)) [:ui :editor-collapsed]))))
+  (is (true? (get-in state [:ui :editor-collapsed])) "編輯區預設收合")
+  (is (false? (get-in (ui/toggle-editor state) [:ui :editor-collapsed])))
+  (is (true? (get-in (ui/toggle-editor (ui/toggle-editor state)) [:ui :editor-collapsed]))))
 
 (deftest remote-relation-test
   (let [s (ui/add-remote-relation state "b1" "a1" :basis)
@@ -168,4 +169,46 @@
   (let [closed (ui/close-editor state)]
     (is (true? (get-in closed [:ui :editor-collapsed])))
     (is (false? (get-in (ui/open-editor closed) [:ui :editor-collapsed])))
-    (is (true? (get-in (ui/select closed "a2") [:ui :editor-collapsed])) "方向鍵等選取不會自動打開")))
+    (is (true? (get-in (ui/select closed "a2") [:ui :editor-collapsed])) "選取卡片不會自動打開")
+    (is (false? (get-in (ui/add-sibling closed "a2") [:ui :editor-collapsed])) "新增卡片時打開以輸入名稱")))
+
+(deftest previous-test
+  (let [s (ui/toggle-previous state)]
+    (is (true? (get-in s [:ui :show-previous])))
+    (is (= {:id "a2" :data {}} (get-in (ui/set-previous s "a2" {}) [:ui :previous])))))
+
+(deftest set-prose-test
+  (let [doc {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "新的本文"}]}]}]
+    (testing "AI 生成的段落改了本文就轉為人工改過"
+      (let [s (ui/set-prose state "a1" doc)]
+        (is (= doc (get-in s [:nodes "a1" :node/prose])))
+        (is (= :human (get-in s [:nodes "a1" :node/status])))
+        (is (= (:history state) (:history s)) "逐字輸入不進復原紀錄")))
+    (testing "尚未生成的段落直接撰寫也算人工"
+      (is (= :human (get-in (ui/set-prose state "b1" doc) [:nodes "b1" :node/status]))))
+    (testing "鎖定的段落不能修改"
+      (let [locked (assoc-in state [:nodes "a1" :node/status] :locked)]
+        (is (identical? locked (ui/set-prose locked "a1" doc)))))
+    (testing "引言不套用段落狀態"
+      (let [s (ui/add-child state "A" :intro)
+            intro (get-in s [:ui :selected])]
+        (is (nil? (get-in (ui/set-prose s intro doc) [:nodes intro :node/status])))))))
+
+(deftest relations-edit-test
+  (let [s (ui/toggle-relations-edit state)]
+    (is (not (get-in state [:ui :editing-relations])) "關係預設唯讀")
+    (is (true? (get-in s [:ui :editing-relations])))
+    (is (nil? (get-in (-> s ui/open-rel-picker ui/toggle-relations-edit) [:ui :rel-picker]))
+        "完成時關閉關係選取器")
+    (is (false? (get-in (ui/select s "b1") [:ui :editing-relations])) "換卡片時回到唯讀")))
+
+(deftest set-remote-relation-type-test
+  (let [s (ui/add-remote-relation state "b1" "a1" :echo)
+        changed (ui/set-remote-relation-type s "b1" "a1" :echo :basis)
+        remote #(set (map :relation/type (:outgoing (tree/remote-relations (:relations %) "b1"))))]
+    (is (= #{:basis} (remote changed)) "呼應改為依據")
+    (is (= (inc (count (:history s))) (count (:history changed))) "一次可復原的修改")
+    (testing "已有該類型時合併"
+      (let [both (ui/add-remote-relation s "b1" "a1" :basis)]
+        (is (= #{:basis} (remote (ui/set-remote-relation-type both "b1" "a1" :echo :basis))))))
+    (is (identical? s (ui/set-remote-relation-type s "b1" "a1" :echo :echo)))))

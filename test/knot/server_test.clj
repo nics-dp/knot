@@ -51,6 +51,10 @@
         (is (uuid? (get-in res [:body :changeset/id])))
         (is (= "改過的意圖" (some #(when (= para (:node/id %)) (:node/draft %))
                               (:nodes (:body (request :get "/api/report"))))))))
+    (testing "卡片的前一版"
+      (is (= {} (:body (request :get (str "/api/report/nodes/" para "/previous"))))
+          "只改了意圖，本文沒有前一版")
+      (is (= 400 (:status (request :get "/api/report/nodes/not-a-uuid/previous")))))
     (testing "格式不正確的修改組被拒絕"
       (is (= 400 (:status (request :post "/api/report/changes" {:changes {:nodes {:upsert [{:node/id "x"}]}}})))))
     (testing "復原"

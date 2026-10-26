@@ -43,6 +43,13 @@
     (is (= "引言" (tree/display-title nodes nums "iA")))
     (is (= "a1" (tree/display-title nodes nums "a1")))))
 
+(deftest position-label-test
+  (let [nums (tree/numbering nodes)]
+    (is (= "1.1" (tree/position-label nodes nums "a1")) "段落的位置是所屬標題的編號")
+    (is (= "1.1" (tree/position-label nodes nums "t1")) "表格往上找最近的標題")
+    (is (= "第一章" (tree/position-label nodes nums "iA")) "章底下直接的卡片寫第幾章")
+    (is (nil? (tree/position-label nodes nums "A")) "最上層的章沒有位置")))
+
 (deftest chinese-numeral-test
   (is (= ["一" "九" "十" "十一" "二十" "二十三"]
          (map tree/chinese-numeral [1 9 10 11 20 23]))))

@@ -40,6 +40,11 @@
                (if-not (m/validate ChangeSet body)
                  (bad-request "修改內容格式不正確" (me/humanize (m/explain ChangeSet body)))
                  {:status 200 :body {:changeset/id (db/apply-changes! conn body)}})))}]
+   ["/report/nodes/:id/previous"
+    {:get (fn [req]
+            (if-let [id (parse-uuid (get-in req [:path-params :id]))]
+              {:status 200 :body (db/node-previous (d/db conn) id)}
+              (bad-request "卡片 id 格式不正確")))}]
    ["/report/undo"
     {:post (fn [_]
              (let [label (db/undo! conn)]

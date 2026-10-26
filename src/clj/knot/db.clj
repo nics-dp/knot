@@ -575,3 +575,53 @@
                             {} revs)]
         (apply-changes! conn {:origin :undo :label (str "復原：" label) :changes changes :undoes cs-id})
         label))))
+
+;; ---------------------------------------------------------------------------
+;; 卡片的前一個版本
+
+(def ^:private previous-fields
+  "只保留本文的前一版；意圖不需要歷程。"
+  [:node/prose])
+
+(def ^:private session-gap-ms
+  "連續的「編輯文字」修改組相隔不超過這段時間，視為同一次修改。"
+  (* 10 60 1000))
+
+(defn- node-revisions
+  "某張卡片的修訂，新到舊：[{:at :label :before :after}]。"
+  [db node-id]
+  (->> (d/q '[:find ?at ?label ?before ?after
+              :in $ ?target
+              :where [?r :revision/target ?target] [?r :revision/changeset ?c]
+              [?c :changeset/at ?at]
+              [(get-else $ ?c :changeset/label "") ?label]
+              [(get-else $ ?r :revision/before "") ?before]
+              [?r :revision/after ?after]]
+            db (str "nodes/" node-id))
+       (map (fn [[at label before after]]
+              {:at at :label label
+               :before (or (some-> (not-empty before) read-edn) {})
+               :after (or (read-edn after) {})}))
+       (sort-by :at #(compare %2 %1))))
+
+(defn- field-previous [revs field]
+  ;; 建立卡片（匯入、新增）的修訂沒有修改前的內容，不算一次修改
+  (let [changed? #(and (seq (:before %))
+                       (not= (get-in % [:before field]) (get-in % [:after field])))
+        [latest & older] (drop-while (complement changed?) revs)
+        typing? #(= "編輯文字" (:label %))]
+    (when latest
+      ;; 逐字輸入每停頓一次就是一個修改組；把連續的輸入合併回這次修改開始前
+      (let [start (reduce (fn [newer r]
+                            (if (and (typing? newer) (typing? r) (changed? r)
+                                     (< (- (inst-ms (:at newer)) (inst-ms (:at r))) session-gap-ms))
+                              r
+                              (reduced newer)))
+                          latest older)]
+        {:value (get-in start [:before field]) :at (:at latest) :label (:label latest)}))))
+
+(defn node-previous
+  "卡片本文在最近一次修改之前的內容：{:node/prose {:value :at :label}}；沒有修改過時為空 map。"
+  [db node-id]
+  (let [revs (node-revisions db node-id)]
+    (into {} (keep (fn [f] (some->> (field-previous revs f) (vector f)))) previous-fields)))

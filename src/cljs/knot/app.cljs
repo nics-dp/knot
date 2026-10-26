@@ -1,5 +1,6 @@
 (ns knot.app
   (:require [cljs.reader :as reader]
+            [knot.prose-editor :as prose-editor]
             [knot.sync :as sync]
             [knot.tree :as tree]
             [knot.ui :as ui]
@@ -17,6 +18,8 @@
    :ui/toggle-editor ui/toggle-editor
    :ui/open-editor ui/open-editor
    :ui/close-editor ui/close-editor
+   :ui/toggle-previous ui/toggle-previous
+   :ui/toggle-relations-edit ui/toggle-relations-edit
    :ui/move-selected ui/move-selected
    :ui/edge-scroll ui/edge-scroll
    :ui/scroll-column ui/scroll-column
@@ -32,6 +35,7 @@
    :ui/set-source-query ui/set-source-query
    :ui/set-page ui/set-page
    :ui/set-node-field ui/set-node-field
+   :ui/set-prose ui/set-prose
    :ui/add-citation ui/add-citation
    :ui/remove-citation ui/remove-citation
    :ui/set-relation ui/set-relation
@@ -45,6 +49,7 @@
    :ui/open-paragraph ui/open-paragraph
    :ui/add-remote-relation ui/add-remote-relation
    :ui/remove-remote-relation ui/remove-remote-relation
+   :ui/set-remote-relation-type ui/set-remote-relation-type
    :ui/open-rel-picker ui/open-rel-picker
    :ui/close-rel-picker ui/close-rel-picker
    :ui/set-rel-picker-type ui/set-rel-picker-type
@@ -92,7 +97,7 @@
           (.scrollTo el #js {:left target
                              :behavior (if (or first-time? (reduced-motion?)) "auto" "smooth")}))))))
 
-(declare dispatch! import-sample! undo!)
+(declare dispatch! import-sample! undo! load-previous!)
 
 (def nexus
   {:nexus/system->state deref
@@ -162,6 +167,23 @@
           (.observe (js/ResizeObserver. measure) el))
         (measure)))
 
+    ;; 本文編輯器：建立或同步（內容取自目前的狀態）
+    :prose/render
+    (fn [{:keys [dispatch-data]} _ id editable?]
+      (when-let [el (:replicant/node dispatch-data)]
+        (prose-editor/render!
+         el {:doc (get-in @store [:nodes id :node/prose])
+             :editable? editable?
+             :on-change #(dispatch! {} [[:ui/set-prose id %]])
+             :fact-text (fn [k]
+                          (let [{:fact/keys [value unit]} (get-in @store [:facts k])]
+                            (if value (str value unit) k)))
+             :ref-text views/xref-text})))
+
+    :prose/destroy
+    (fn [{:keys [dispatch-data]} _]
+      (some-> (:replicant/node dispatch-data) prose-editor/destroy!))
+
     :dom/reveal-columns
     (fn [{:keys [dispatch-data]} _ depth selected n-cols collapsed?]
       (when-let [el (:replicant/node dispatch-data)]
@@ -223,6 +245,9 @@
                      (some-> (.-target e) (.closest ".card-body") (.getAttribute "data-id")))]
     (.preventDefault e)
     (dispatch! {} [[:ui/select id]]))
+  ;; 在意圖或本文中按 Esc：結束編輯（離開輸入框），再按一次才收合編輯區
+  (when (and (= "Escape" (.-key e)) (editable-target? e))
+    (.blur (.-target e)))
   (when-not (editable-target? e)
     (let [k (.-key e)
           undo? (and (or (.-metaKey e) (.-ctrlKey e)) (not (.-shiftKey e)) (= "z" (.toLowerCase k)))
@@ -293,6 +318,7 @@
                                  (reset! saved data)
                                  (swap! sync-state assoc :in-flight nil
                                         :history-count (count (:history state)))
+                                 (when (get-in @store [:ui :show-previous]) (load-previous!))
                                  ;; 送出期間又有新的修改
                                  (when (sync/diff @saved (sync/data @store)) (flush!))))
                         (.catch (fn [err]
@@ -308,6 +334,23 @@
       (flush!)
       (do (some-> (:timer @sync-state) js/clearTimeout)
           (swap! sync-state assoc :timer (js/setTimeout flush! 800))))))
+
+(defn- load-previous!
+  "讀回選取卡片的前一版內容，供本文區「與前一版比較」。"
+  []
+  (let [id (get-in @store [:ui :selected])]
+    (-> (api "GET" (str "/api/report/nodes/" id "/previous"))
+        (.then (fn [data] (swap! store ui/set-previous id data)))
+        (.catch (fn [err] (show-toast! (str "無法讀取前一版：" (ex-message err))))))))
+
+(defn- watch-previous!
+  "打開比較、或比較打開時換了卡片，就重新讀取前一版。"
+  [old new]
+  (let [on? (get-in new [:ui :show-previous])]
+    (when (and on? (loaded?)
+               (or (not (get-in old [:ui :show-previous]))
+                   (not= (get-in old [:ui :selected]) (get-in new [:ui :selected]))))
+      (load-previous!))))
 
 (defn undo!
   "復原最近一個修改組：先送出尚未儲存的變動，再由後端新增反向的修改組。"
@@ -335,20 +378,24 @@
             (map nodes (tree/document-order nodes)))))
 
 (defn- show-report! [loaded]
-  ;; ?select=、?page=library|tree|fulltext、?drag=、?collapsed=1 指定初始畫面，方便截圖
+  ;; ?select=、?page=library|tree|fulltext、?drag=、?editor=1（展開編輯區）、?previous=1（與前一版比較）
+  ;; 指定初始畫面，方便截圖
   (let [params (js/URLSearchParams. js/location.search)
         nodes (:nodes (ui/from-server loaded))
         select (some->> (.get params "select") (find-node nodes))
         page (.get params "page")
         drag (some->> (.get params "drag") (find-node nodes))
-        collapsed (.get params "collapsed")
+        editor (.get params "editor")
+        previous (.get params "previous")
         state (cond-> (ui/from-server loaded)
                 select (ui/select select)
                 page (ui/set-page (keyword page))
                 drag (ui/drag-start drag)
-                collapsed (ui/toggle-editor))]
+                editor (ui/open-editor)
+                previous (ui/toggle-previous))]
     (reset! saved (sync/data state))
-    (reset! store state)))
+    (reset! store state)
+    (when previous (load-previous!))))
 
 (defn load! []
   (-> (api "GET" "/api/report")
@@ -368,6 +415,7 @@
   (r/set-dispatch! dispatch!)
   (add-watch store ::render (fn [_ _ _ state] (render! state)))
   (add-watch store ::persist (fn [_ _ old new] (schedule-flush! old new)))
+  (add-watch store ::previous (fn [_ _ old new] (watch-previous! old new)))
   (js/document.addEventListener "keydown" on-keydown)
   ;; 離開頁面前送出尚未儲存的文字
   (js/window.addEventListener "beforeunload" (fn [_] (flush!)))
