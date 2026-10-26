@@ -92,9 +92,15 @@
   (assoc-in state [:ui :viewport-h] h))
 
 (defn toggle-editor
-  "收合或展開編輯區，讓卡片看板可以完整呈現。"
+  "收合或展開編輯區（覆蓋在卡片看板上的抽屜）。"
   [state]
   (update-in state [:ui :editor-collapsed] not))
+
+(defn open-editor [state]
+  (assoc-in state [:ui :editor-collapsed] false))
+
+(defn close-editor [state]
+  (assoc-in state [:ui :editor-collapsed] true))
 
 (defn dismiss-toast [state]
   (assoc-in state [:ui :toast] nil))

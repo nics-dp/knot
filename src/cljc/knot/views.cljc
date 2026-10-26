@@ -177,7 +177,8 @@
                       :tabindex 0
                       :data-id id
                       :aria-current (when (= role :active) "true")
-                      :on {:click [[:ui/select id]]}}
+                      ;; 點卡片時打開編輯區
+                      :on {:click [[:ui/select id] [:ui/open-editor]]}}
       (case k
         (:table :figure)
         (list
@@ -281,12 +282,17 @@
        [:span [:i.swatch.swatch-other] "其他"]]]
      [:div.board
       (when-not drag (toast-view toast))
-      [:div.tree-scroll {:class (when drag "is-dragging")
+      [:div.tree-scroll {:class (cond-> []
+                                  drag (conj "is-dragging")
+                                  (not (:editor-collapsed ui)) (conj "drawer-open"))
                         :replicant/on-mount [[:dom/observe-viewport]]
-                        :replicant/on-render [[:dom/reveal-columns sel-depth selected (count cols)]]}
-      ;; 欄寬依可用寬度均分、最窄 min-column-width；放不下時水平捲動
-      [:div.tree-columns {:style {:column-gap (str column-gap "px")
-                                  :grid-template-columns (str "repeat(" (count cols) ", minmax(" min-column-width "px, 1fr))")}}
+                        :replicant/on-render [[:dom/reveal-columns sel-depth selected (count cols)
+                                               (boolean (:editor-collapsed ui))]]}
+      ;; 欄寬依看板全寬均分（不因編輯區而縮小）、最窄 min-column-width；放不下時水平捲動
+      (let [n (count cols)
+            w (str "max(" min-column-width "px, calc((100cqw - " (* (dec n) column-gap) "px) / " n "))")]
+        [:div.tree-columns {:style {:column-gap (str column-gap "px")
+                                    :grid-template-columns (str "repeat(" n ", " w ")")}}
        (for [[i col] (map-indexed vector cols)
              :let [[lo hi] (scroll-range (nth offs i) (layout/column-height col) viewport-h)
                    translate (+ (nth offs i) (get bias i 0))]]
@@ -312,7 +318,7 @@
             (for [c col]
               (tree-card {:nodes nodes :title title :role (roles (:id c)) :drag drag :over over} c))
             (when (and over (some #(= (:id over) (:id %)) col))
-              (insert-marker col over))]]])]]]]))
+              (insert-marker col over))]]])])]]]))
 
 ;; ---------------------------------------------------------------------------
 ;; 全文視圖
@@ -332,7 +338,7 @@
           :intro
           [:div.ft-block.ft-intro {:replicant/key id
                                    :class (when (= id selected) "ft-selected")
-                                   :on {:click [[:ui/select id]]}}
+                                   :on {:click [[:ui/select id] [:ui/open-editor]]}}
            (if-let [doc (:node/prose node)]
              (prose-view facts doc)
              [:p.prose.muted "（引言尚未生成，將由 AI 依下層內容補上）"])]
@@ -342,7 +348,7 @@
                           :role "button"
                           :tabindex 0
                           :class (when (= id selected) "ft-selected")
-                          :on {:click [[:ui/select id]]}}
+                          :on {:click [[:ui/select id] [:ui/open-editor]]}}
            (if-let [doc (:node/prose node)]
              (prose-view facts doc)
              [:p.prose.muted (str "（尚未生成：" (:node/title node) "）")])]
@@ -639,7 +645,7 @@
    [:path {:d (if (= direction :left) "M10 3 5 8l5 5" "M6 3l5 5-5 5")}]])
 
 (defn- editor-rail
-  "收合後的編輯區：一條窄邊欄，顯示選取的卡片並可展開。"
+  "收合後的編輯區：看板右緣的把手，顯示選取的卡片並可展開。"
   [nodes title id]
   [:aside.editor-rail {:aria-label "編輯區（已收合）"}
    [:button.rail-toggle {:type "button" :title "展開編輯區" :aria-label "展開編輯區" :aria-expanded "false"

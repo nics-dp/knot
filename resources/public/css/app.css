@@ -140,7 +140,7 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 
 /* ---------- 撰寫頁：卡片樹＋編輯區，寬度不足時依序換行 ---------- */
 
-.workspace { display: flex; flex: 1; min-height: 0; align-items: stretch; }
+.workspace { position: relative; display: flex; flex: 1; min-height: 0; align-items: stretch; }
 
 .panel-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; }
 
@@ -248,8 +248,10 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 .toast-close { border: 0; background: transparent; color: var(--amber); font-size: 16px; min-width: 32px; min-height: 32px; cursor: pointer; }
 
 /* 欄寬依可用寬度均分（最窄見 views/min-column-width），放不下時水平捲動 */
-.tree-scroll { flex: 1; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 8px; }
-.tree-columns { display: grid; grid-auto-rows: 100%; height: 100%; }
+.tree-scroll { flex: 1; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 8px; container-type: inline-size; }
+.tree-columns { display: grid; grid-auto-rows: 100%; height: 100%; width: max-content; }
+/* 編輯區打開時，在欄位後面留出與抽屜同寬的空間，讓被遮住的欄可以捲到可見範圍 */
+.drawer-open .tree-columns { padding-right: min(560px, 92cqw); }
 /* 每一欄是一條泳道 */
 .tree-col {
   display: flex; flex-direction: column; min-width: 0; min-height: 0;
@@ -380,11 +382,16 @@ h4.ft-heading, h5.ft-heading { font-size: 16px; }
 
 /* ---------- 編輯區 ---------- */
 
+/* 編輯區是覆蓋在看板右側的抽屜，不擠壓卡片看板 */
 .editor {
-  flex: 0 1 560px; min-width: 380px; padding: 20px 24px; overflow-y: auto;
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 20;
+  width: min(560px, 92%); padding: 20px 24px; overflow-y: auto;
   background: var(--surface); border-left: 1px solid var(--line);
+  box-shadow: -12px 0 32px rgba(28, 32, 38, 0.14);
   display: flex; flex-direction: column; gap: 18px;
+  animation: drawer-in 0.2s ease-out;
 }
+@keyframes drawer-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 .detail-head { display: flex; flex-direction: column; gap: 4px; }
 .detail-head h2 { font-size: 18px; }
 .editor-top { display: flex; align-items: center; gap: 8px; }
@@ -398,8 +405,10 @@ h4.ft-heading, h5.ft-heading { font-size: 16px; }
 
 /* 收合後的編輯區 */
 .editor-rail {
-  flex: 0 0 56px; display: flex; flex-direction: column; align-items: center; gap: 12px;
-  padding: 16px 0; background: var(--surface); border-left: 1px solid var(--line);
+  position: absolute; top: 76px; right: 0; z-index: 20; width: 48px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0;
+  background: var(--surface); border: 1px solid var(--line); border-right: 0;
+  border-radius: 12px 0 0 12px; box-shadow: -6px 4px 18px rgba(28, 32, 38, 0.12);
 }
 .rail-title {
   display: flex; align-items: center; gap: 8px; padding: 10px 4px; border: 0; border-radius: 8px;
@@ -518,9 +527,13 @@ h4.ft-heading, h5.ft-heading { font-size: 16px; }
   .app { height: auto; min-height: 100vh; overflow: visible; }
   .workspace, .library-page { flex-wrap: wrap; }
   .tree-panel, .editor, .fulltext, .lib-filters, .lib-list, .lib-detail { flex: 1 1 100%; min-width: 0; overflow: visible; }
+  .editor { position: static; width: auto; box-shadow: none; animation: none; }
+  .editor-rail { position: static; width: auto; flex-direction: row; border-radius: 0; box-shadow: none; border: 0; border-top: 1px solid var(--line); }
   .tree-scroll { flex: none; height: 70vh; }
+  .drawer-open .tree-columns { padding-right: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .tree-inner, .card, .relation { transition: none !important; }
+  .editor { animation: none; }
 }

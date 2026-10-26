@@ -15,6 +15,8 @@
    :ui/navigate ui/navigate
    :ui/dismiss-toast ui/dismiss-toast
    :ui/toggle-editor ui/toggle-editor
+   :ui/open-editor ui/open-editor
+   :ui/close-editor ui/close-editor
    :ui/move-selected ui/move-selected
    :ui/edge-scroll ui/edge-scroll
    :ui/scroll-column ui/scroll-column
@@ -60,25 +62,35 @@
 (defn- reduced-motion? []
   (.-matches (js/window.matchMedia "(prefers-reduced-motion: reduce)")))
 
+(defn- obscured-width
+  "編輯區以抽屜覆蓋在看板上時，它遮住的寬度；收合或窄螢幕（不覆蓋）時為 0。"
+  []
+  (let [ed (js/document.querySelector ".editor")]
+    (if (and ed (= "absolute" (.-position (js/getComputedStyle ed))))
+      (.-offsetWidth ed)
+      0)))
+
 (defn- reveal-columns!
-  "選取時水平捲動，讓選取卡片所在欄與其上、下一欄都在可視範圍內。只在選取改變時捲動。"
-  [^js el depth selected n-cols]
-  (when (not= selected (.-knotRevealed el))
-    (let [first-time? (nil? (.-knotRevealed el))
-          _ (set! (.-knotRevealed el) selected)
-          col-w (some-> (.querySelector el ".tree-col") .-offsetWidth)
-          stride (+ (or col-w 0) views/column-gap)
-          start (* stride (max 0 (- depth 2)))
-          end (- (* stride (min n-cols (inc depth))) views/column-gap)
-          left (.-scrollLeft el)
-          width (.-clientWidth el)
-          target (cond
-                   (or (< start left) (> (- end start) width)) start
-                   (> end (+ left width)) (- end width)
-                   :else left)]
-      (when (not= target left)
-        (.scrollTo el #js {:left target
-                           :behavior (if (or first-time? (reduced-motion?)) "auto" "smooth")})))))
+  "選取時水平捲動，讓選取卡片所在欄與其上、下一欄都在未被編輯區遮住的範圍內。
+  只在選取或編輯區開合改變時捲動。"
+  [^js el depth selected n-cols collapsed?]
+  (let [k (str selected "|" collapsed?)]
+    (when (not= k (.-knotRevealed el))
+      (let [first-time? (nil? (.-knotRevealed el))
+            _ (set! (.-knotRevealed el) k)
+            col-w (some-> (.querySelector el ".tree-col") .-offsetWidth)
+            stride (+ (or col-w 0) views/column-gap)
+            start (* stride (max 0 (- depth 2)))
+            end (- (* stride (min n-cols (inc depth))) views/column-gap)
+            left (.-scrollLeft el)
+            width (max stride (- (.-clientWidth el) (obscured-width)))
+            target (cond
+                     (or (< start left) (> (- end start) width)) start
+                     (> end (+ left width)) (- end width)
+                     :else left)]
+        (when (not= target left)
+          (.scrollTo el #js {:left target
+                             :behavior (if (or first-time? (reduced-motion?)) "auto" "smooth")}))))))
 
 (declare dispatch! import-sample! undo!)
 
@@ -151,9 +163,9 @@
         (measure)))
 
     :dom/reveal-columns
-    (fn [{:keys [dispatch-data]} _ depth selected n-cols]
+    (fn [{:keys [dispatch-data]} _ depth selected n-cols collapsed?]
       (when-let [el (:replicant/node dispatch-data)]
-        (reveal-columns! el depth selected n-cols)))}
+        (reveal-columns! el depth selected n-cols collapsed?)))}
 
    :nexus/placeholders
    {:event/target-value
@@ -218,6 +230,7 @@
           tree? (= :tree (get-in @store [:ui :page]))]
       (cond
         undo? (do (.preventDefault e) (undo!))
+        (= "Escape" k) (dispatch! {} [[:ui/close-editor]])
         ;; Alt+↑／↓：上移、下移（拖曳的鍵盤替代）
         (and tree? (.-altKey e) (#{:up :down} dir))
         (do (.preventDefault e) (dispatch! {} [[:ui/move-selected (if (= dir :up) -1 1)]]))

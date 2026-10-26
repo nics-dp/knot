@@ -163,3 +163,9 @@
     (testing "移動段落時不影響不相鄰的關係"
       (let [moved (ui/move-selected (ui/select s "a2") -1)]
         (is (= outgoing (:outgoing (tree/remote-relations (:relations moved) "b1"))))))))
+
+(deftest open-close-editor-test
+  (let [closed (ui/close-editor state)]
+    (is (true? (get-in closed [:ui :editor-collapsed])))
+    (is (false? (get-in (ui/open-editor closed) [:ui :editor-collapsed])))
+    (is (true? (get-in (ui/select closed "a2") [:ui :editor-collapsed])) "方向鍵等選取不會自動打開")))
