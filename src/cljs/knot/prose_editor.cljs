@@ -47,7 +47,13 @@
        (chip-node "ref" "label" "chip chip-ref" ref-text)])
 
 (defn- ->js [doc] (clj->js doc))
-(defn- ->edn [^js editor] (js->clj (.getJSON editor) :keywordize-keys true))
+(defn json->edn
+  "編輯器的 JSON 轉成 EDN。ProseMirror 的 node attrs 是沒有原型的物件（Object.create(null)），
+  js->clj 不會轉換、會原樣留下而無法送到後端，所以先經過 JSON 變成一般物件。"
+  [json]
+  (js->clj (.parse js/JSON (.stringify js/JSON json)) :keywordize-keys true))
+
+(defn- ->edn [^js editor] (json->edn (.getJSON editor)))
 
 (defn render!
   "Replicant on-render：el 上還沒有編輯器時建立；已有時同步可否編輯，並在內容被外部改變
