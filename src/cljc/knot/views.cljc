@@ -791,8 +791,20 @@
 ;; ---------------------------------------------------------------------------
 
 (defn app [state]
-  (if-not (:nodes state)
+  (cond
+    (:error state)
+    [:main.app [:div.empty-state [:h2 "無法載入報告"] [:p.muted (:error state)]]]
+
+    (:empty state)
+    [:main.app
+     [:div.empty-state
+      [:h2 "還沒有報告"]
+      [:button.btn.btn-primary {:type "button" :on {:click [[:server/create-sample]]}} "建立範例報告"]]]
+
+    (not (:nodes state))
     [:main.app [:div.loading "載入中…"]]
+
+    :else
     (let [nodes (:nodes state)
           numbers (tree/numbering nodes)
           title #(tree/display-title nodes numbers %)

@@ -1,5 +1,7 @@
 (ns knot.app
   (:require [cljs.reader :as reader]
+            [knot.sync :as sync]
+            [knot.tree :as tree]
             [knot.ui :as ui]
             [knot.views :as views]
             [nexus.core :as nexus]
@@ -24,7 +26,6 @@
    :ui/wrap-paragraphs ui/wrap-paragraphs
    :ui/paragraph->intro ui/paragraph->intro
    :ui/toggle-lock ui/toggle-lock
-   :ui/undo ui/undo
    :ui/set-source-filter ui/set-source-filter
    :ui/set-source-query ui/set-source-query
    :ui/set-page ui/set-page
@@ -79,7 +80,7 @@
         (.scrollTo el #js {:left target
                            :behavior (if (or first-time? (reduced-motion?)) "auto" "smooth")})))))
 
-(declare dispatch!)
+(declare dispatch! create-sample! undo!)
 
 (def nexus
   {:nexus/system->state deref
@@ -123,6 +124,9 @@
       (when-let [dt (some-> (:replicant/dom-event dispatch-data) .-dataTransfer)]
         (set! (.-effectAllowed dt) "move")
         (.setData dt "text/plain" id)))
+
+    :server/create-sample
+    (fn [_ _] (create-sample!))
 
     :dom/focus
     (fn [{:keys [dispatch-data]} _]
@@ -213,36 +217,148 @@
           dir ({"ArrowLeft" :left "ArrowRight" :right "ArrowUp" :up "ArrowDown" :down} k)
           tree? (= :tree (get-in @store [:ui :page]))]
       (cond
-        undo? (do (.preventDefault e) (dispatch! {} [[:ui/undo]]))
+        undo? (do (.preventDefault e) (undo!))
         ;; Alt+↑／↓：上移、下移（拖曳的鍵盤替代）
         (and tree? (.-altKey e) (#{:up :down} dir))
         (do (.preventDefault e) (dispatch! {} [[:ui/move-selected (if (= dir :up) -1 1)]]))
         (and dir tree?)
         (do (.preventDefault e) (dispatch! {} [[:ui/navigate dir]]))))))
 
-(defn- load-sample! []
-  (-> (js/fetch "/api/sample-report" #js {:headers #js {"Accept" "application/edn"}})
+;; ---------------------------------------------------------------------------
+;; 與後端同步：前端算出新狀態後，只把變動的實體送到後端（knot.sync/diff）。
+;; 結構類的修改（有記入 :history）立即送出；逐字輸入在停止約 0.8 秒後送出。
+
+(defonce saved
+  ;; 後端已有的資料（sync/data 的形式）
+  (atom nil))
+
+(defonce sync-state (atom {:history-count 0 :timer nil :in-flight nil}))
+
+(defn- report-id [] (get-in @store [:report :report/id]))
+
+(defn- api [method path & [body]]
+  (-> (js/fetch path (clj->js (cond-> {:method method
+                                       :headers {"Accept" "application/edn"}}
+                                body (-> (assoc :body (pr-str body))
+                                         (assoc-in [:headers "Content-Type"] "application/edn")))))
       (.then (fn [res]
-               (if (.-ok res)
-                 (.text res)
-                 (throw (js/Error. (str "載入範例報告失敗：" (.-status res)))))))
-      (.then (fn [text]
-               ;; ?select=<id>、?page=library|tree|fulltext、?drag=<id>、?collapsed=1 指定初始畫面，方便對照設計稿與截圖
+               (-> (.text res)
+                   (.then (fn [text]
+                            (let [data (when (seq text) (reader/read-string text))]
+                              (if (.-ok res)
+                                data
+                                (throw (ex-info (or (:error data) (str "HTTP " (.-status res))) data)))))))))))
+
+(defn- show-toast! [msg]
+  (swap! store assoc-in [:ui :toast] msg))
+
+(defn- changeset-meta
+  "這次送出的修改組名稱與來源：取自上次送出後新增的 :history，沒有時視為文字編輯。"
+  [state from-count]
+  (let [entries (subvec (vec (:history state)) (min from-count (count (:history state))))]
+    (if-let [last-entry (peek entries)]
+      {:label (:label last-entry)
+       :origin (if (some #(= :move (:origin %)) entries) :move :manual)}
+      {:label "編輯文字" :origin :manual})))
+
+(defn flush!
+  "把尚未送出的變動送到後端；回傳 Promise。同一時間只送一個修改組。"
+  []
+  (let [{:keys [in-flight timer]} @sync-state]
+    (when timer (js/clearTimeout timer))
+    (swap! sync-state assoc :timer nil)
+    (or in-flight
+        (let [state @store
+              data (sync/data state)
+              changes (sync/diff @saved data)]
+          (if-not (and changes (report-id))
+            (js/Promise.resolve nil)
+            (let [{:keys [label origin]} (changeset-meta state (:history-count @sync-state))
+                  p (-> (api "POST" (str "/api/reports/" (report-id) "/changes")
+                             {:label label :origin origin :changes changes})
+                        (.then (fn [_]
+                                 (reset! saved data)
+                                 (swap! sync-state assoc :in-flight nil
+                                        :history-count (count (:history state)))
+                                 ;; 送出期間又有新的修改
+                                 (when (sync/diff @saved (sync/data @store)) (flush!))))
+                        (.catch (fn [err]
+                                  (swap! sync-state assoc :in-flight nil)
+                                  (show-toast! (str "無法儲存：" (ex-message err)))
+                                  (js/console.error err))))]
+              (swap! sync-state assoc :in-flight p)
+              p))))))
+
+(defn- schedule-flush! [old new]
+  (when (and @saved (not= (sync/data old) (sync/data new)))
+    (if (> (count (:history new)) (count (:history old)))
+      (flush!)
+      (do (some-> (:timer @sync-state) js/clearTimeout)
+          (swap! sync-state assoc :timer (js/setTimeout flush! 800))))))
+
+(defn undo!
+  "復原最近一個修改組：先送出尚未儲存的變動，再由後端新增反向的修改組。"
+  []
+  (when (report-id)
+    (-> (flush!)
+        (.then #(api "POST" (str "/api/reports/" (report-id) "/undo")))
+        (.then (fn [{:keys [label state]}]
+                 (if label
+                   (do (swap! store #(-> (ui/replace-data % state)
+                                         (assoc-in [:ui :toast] (str "已復原：" label))))
+                       (reset! saved (sync/data @store))
+                       (swap! sync-state assoc :history-count (count (:history @store))))
+                   (show-toast! "沒有可以復原的修改"))))
+        (.catch (fn [err] (show-toast! (str "無法復原：" (ex-message err))))))))
+
+;; ---------------------------------------------------------------------------
+;; 載入
+
+(defn- find-node
+  "?select= 可用卡片 id 或名稱（標題、段落名稱）。"
+  [nodes s]
+  (or (some #(when (= s (str (:node/id %))) (:node/id %)) (vals nodes))
+      (some #(when (#{(:node/name %) (:node/title %)} s) (:node/id %))
+            (map nodes (tree/document-order nodes)))))
+
+(defn- open-report! [id]
+  (-> (api "GET" (str "/api/reports/" id))
+      (.then (fn [loaded]
+               ;; ?select=、?page=library|tree|fulltext、?drag=、?collapsed=1 指定初始畫面，方便截圖
                (let [params (js/URLSearchParams. js/location.search)
-                     select (.get params "select")
+                     select (some->> (.get params "select") (find-node (:nodes (ui/from-server loaded))))
                      page (.get params "page")
-                     drag (.get params "drag")
-                     collapsed (.get params "collapsed")]
-                 (reset! store (cond-> (ui/init-state (reader/read-string text))
-                                 select (ui/select select)
-                                 page (ui/set-page (keyword page))
-                                 drag (ui/drag-start drag)
-                                 collapsed (ui/toggle-editor))))))
-      (.catch (fn [err] (js/console.error err)))))
+                     drag (some->> (.get params "drag") (find-node (:nodes (ui/from-server loaded))))
+                     collapsed (.get params "collapsed")
+                     state (cond-> (ui/from-server loaded)
+                             select (ui/select select)
+                             page (ui/set-page (keyword page))
+                             drag (ui/drag-start drag)
+                             collapsed (ui/toggle-editor))]
+                 (reset! saved (sync/data state))
+                 (reset! store state))))))
+
+(defn load! []
+  (-> (api "GET" "/api/reports")
+      (.then (fn [reports]
+               (if-let [id (:report/id (first reports))]
+                 (open-report! id)
+                 (reset! store {:empty true}))))
+      (.catch (fn [err]
+                (reset! store {:error (ex-message err)})
+                (js/console.error err)))))
+
+(defn create-sample! []
+  (-> (api "POST" "/api/dev/sample-report")
+      (.then (fn [{:report/keys [id]}] (open-report! id)))
+      (.catch (fn [err] (reset! store {:error (ex-message err)})))))
 
 (defn init []
   (r/set-dispatch! dispatch!)
   (add-watch store ::render (fn [_ _ _ state] (render! state)))
+  (add-watch store ::persist (fn [_ _ old new] (schedule-flush! old new)))
   (js/document.addEventListener "keydown" on-keydown)
+  ;; 離開頁面前送出尚未儲存的文字
+  (js/window.addEventListener "beforeunload" (fn [_] (flush!)))
   (render! @store)
-  (load-sample!))
+  (load!))

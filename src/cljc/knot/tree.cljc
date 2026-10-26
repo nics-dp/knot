@@ -257,6 +257,12 @@
   [r]
   (boolean (or (:relation/remote r) (= :summarizes (:relation/type r)))))
 
+(defn relation-key
+  "關係的識別鍵：相鄰關係每對段落只有一條；不相鄰關係每對段落每種類型一條。"
+  [r]
+  (str (:relation/from r) "|" (:relation/to r) "|"
+       (if (remote-relation? r) (name (:relation/type r)) "adjacent")))
+
 (defn- adjacent-relation? [r]
   (not (remote-relation? r)))
 

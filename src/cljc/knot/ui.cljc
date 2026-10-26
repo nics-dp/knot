@@ -3,33 +3,70 @@
   (:require [knot.layout :as layout]
             [knot.tree :as tree]))
 
-(defn init-state [report]
-  {:report (select-keys report [:report/title :report/subtitle :report/style-name
-                                :report/pending-proposals])
-   :nodes (tree/from-nested (:tree report))
-   :relations (vec (:relations report))
-   :facts (into {} (map (juxt :fact/key identity)) (:facts report))
-   :blocks (vec (:blocks report))
-   :history []
-   :ui {:selected (or (:ui/selected report) "p312")
-        :page :tree
-        :source-filter :all
-        :source-query ""
-        :viewport-h 640
-        :bias {}
-        :next-id 1}})
+(def initial-ui
+  {:page :tree
+   :source-filter :all
+   :source-query ""
+   :viewport-h 640
+   :bias {}})
+
+(defn- default-selection
+  "預設選取第一個段落；沒有段落時選第一張卡片。"
+  [nodes]
+  (let [order (tree/document-order nodes)]
+    (or (some #(when (tree/paragraph? nodes %) %) order) (first order))))
+
+(defn init-state
+  "由範例報告（巢狀卡片樹）建立狀態；測試與離線使用。"
+  [report]
+  (let [nodes (tree/from-nested (:tree report))]
+    {:report (select-keys report [:report/title :report/subtitle :report/style-name])
+     :nodes nodes
+     :relations (vec (:relations report))
+     :facts (into {} (map (juxt :fact/key identity)) (:facts report))
+     :blocks (vec (:blocks report))
+     :history []
+     :ui (assoc initial-ui :selected (or (:ui/selected report) (default-selection nodes)))}))
+
+(defn- server-data
+  "後端 load-state 的結果轉成狀態中的資料部分。"
+  [loaded]
+  {:report (:report loaded)
+   :nodes (into {} (map (juxt :node/id identity)) (:nodes loaded))
+   :relations (vec (:relations loaded))
+   :facts (into {} (map (juxt :fact/key identity)) (:facts loaded))
+   :blocks (vec (:blocks loaded))})
+
+(defn from-server
+  "由後端讀回的報告建立狀態。"
+  [loaded]
+  (let [data (server-data loaded)]
+    (assoc data
+           :history []
+           :ui (assoc initial-ui :selected (default-selection (:nodes data))))))
+
+(defn replace-data
+  "以後端的資料取代目前的資料（例如復原之後），保留畫面狀態；選取的卡片已不存在時改選預設。"
+  [state loaded]
+  (let [state (merge state (server-data loaded))]
+    (if (contains? (:nodes state) (get-in state [:ui :selected]))
+      state
+      (assoc-in state [:ui :selected] (default-selection (:nodes state))))))
 
 (defn- titles [{:keys [nodes]}]
   (let [numbers (tree/numbering nodes)]
     #(tree/display-title nodes numbers %)))
 
 (defn- remember
-  "記下目前的卡片與關係，供復原使用；label 說明這次修改。"
-  [state label]
-  (update state :history conj {:nodes (:nodes state)
-                               :relations (:relations state)
-                               :selected (get-in state [:ui :selected])
-                               :label label}))
+  "記下一次修改：label 說明這次修改，origin 為修改組的來源（SPEC 4 :changeset/origin）。
+  前端據此決定修改組的名稱；離線時也供 undo 使用。"
+  ([state label] (remember state label :manual))
+  ([state label origin]
+   (update state :history conj {:nodes (:nodes state)
+                                :relations (:relations state)
+                                :selected (get-in state [:ui :selected])
+                                :label label
+                                :origin origin})))
 
 ;; ---------------------------------------------------------------------------
 ;; 選取與導覽
@@ -81,7 +118,7 @@
     (let [msg (move-message state moving-id place)
           {:keys [nodes relations]} (tree/move-with-relations state moving-id place)]
       (-> state
-          (remember (str "移動「" ((titles state) moving-id) "」"))
+          (remember (str "移動「" ((titles state) moving-id) "」") :move)
           (assoc :nodes nodes :relations relations)
           (update :ui assoc :selected moving-id :bias {} :toast msg)))))
 
@@ -137,8 +174,7 @@
 ;; 新增與轉換
 
 (defn- new-id [state]
-  [(str "new-" (get-in state [:ui :next-id]))
-   (update-in state [:ui :next-id] inc)])
+  [(random-uuid) state])
 
 (defn- insert-node [state parent-id node]
   (let [[id state] (new-id state)
@@ -430,11 +466,13 @@
   (assoc-in state [:ui :library-selected] block-id))
 
 (defn set-block-status
-  "候選區塊的確認或捨棄（M3 之後寫入資料層）。"
+  "候選區塊的確認、捨棄或恢復。"
   [state block-id status]
-  (update state :blocks
-          (fn [blocks]
-            (mapv #(if (= block-id (:block/id %)) (assoc % :block/status status) %) blocks))))
+  (-> state
+      (remember ({:confirmed "確認素材" :discarded "捨棄素材" :candidate "恢復素材"} status "變更素材狀態"))
+      (update :blocks
+              (fn [blocks]
+                (mapv #(if (= block-id (:block/id %)) (assoc % :block/status status) %) blocks)))))
 
 (defn open-paragraph
   "從素材庫跳回撰寫頁的某張卡片。"

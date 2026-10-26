@@ -152,7 +152,10 @@ M0 時建立，至少包含：兩個 nREPL 的 port 與啟動方式、`clj-nrepl
 ;; 結構化值（欄位定義、規則、快照）以 pr-str 存成字串，讀取時用 malli 驗證
 
 ;; 報告
+:report/id              uuid
 :report/title           string
+:report/subtitle        string   ; 顯示用副標題
+:report/style-name      string   ; 顯示用文風名稱
 :report/style-snapshot  string   ; 套用時複製的文風規則（EDN）
 :report/style-source    uuid     ; 來源文風設定，只用於追溯與提示同步
 
@@ -165,6 +168,7 @@ M0 時建立，至少包含：兩個 nREPL 的 port 與啟動方式、`clj-nrepl
 :node/draft       string   ; 意圖：使用者輸入的要點與說明，作為 AI 的提示詞；fulltext
 :node/prose       string   ; 本文，ProseMirror JSON
 :node/status      keyword  ; :none :ai :human :locked
+:node/unlocked-status keyword ; 鎖定前的狀態，解除鎖定時還原
 :node/version     long     ; 每次內容變更 +1
 :node/label       string   ; LaTeX label，:db.unique/value
 :node/facts       ref many ; 由 prose 抽出的事實引用
@@ -176,6 +180,7 @@ M0 時建立，至少包含：兩個 nREPL 的 port 與啟動方式、`clj-nrepl
 :node/contract-items ref many
 
 ;; 段落關係
+:relation/key     string   ; :db.unique/identity，見 tree/relation-key（相鄰：每對一條；不相鄰：每對每種類型一條）
 :relation/from    ref
 :relation/to      ref
 :relation/type    keyword  ; 相鄰：:progression :causal :contrast :example
@@ -209,23 +214,31 @@ M0 時建立，至少包含：兩個 nREPL 的 port 與啟動方式、`clj-nrepl
 :fact/unit        string
 :fact/row         ref      ; 綁定儲存格時：列
 :fact/column      string   ; 綁定儲存格時：欄位 id
+:fact/block       ref      ; 事實所屬的素材區塊
 
 ;; 引用與契約
 :citation/node    ref
 :citation/block   ref
 :citation/row     ref      ; 選填，引用到表格的某一列
+:citation/where   string   ; 選填，引用的範圍說明（例如「欄：場域、節電率」）
+:citation/order   long     ; 依據在段落中的順序
 :contract/code    string   ; 例如 "2.3"
 :contract/text    string
 
 ;; 修訂、修改組、修改建議
-:changeset/origin keyword  ; :manual :propagation :regenerate :move :import
+:changeset/id     uuid
+:changeset/origin keyword  ; :manual :propagation :regenerate :move :import :undo
 :changeset/at     instant
+:changeset/label  string   ; 顯示用名稱，例如「移動「異常狀況說明」」
+:changeset/undoes ref      ; :undo 修改組所復原的修改組
 :revision/changeset ref
-:revision/node    ref
+:revision/collection keyword ; :nodes :relations :blocks :facts
+:revision/target  string   ; 「集合/識別鍵」，例如 "nodes/<uuid>"
+:revision/node    ref      ; 卡片的修訂才有
 :revision/version long
-:revision/kind    keyword  ; :wording :fact :claim :structure
-:revision/before  string   ; 變更前快照（EDN）
-:revision/after   string
+:revision/kind    keyword  ; :wording :fact :claim :structure（M5 判斷）
+:revision/before  string   ; 變更前快照（前端實體形式的 EDN；新增時沒有）
+:revision/after   string   ; 變更後快照（刪除時為 nil）
 :proposal/trigger ref      ; 觸發的修訂
 :proposal/target  ref
 :proposal/base-version long
@@ -253,6 +266,7 @@ M0 時建立，至少包含：兩個 nREPL 的 port 與啟動方式、`clj-nrepl
 - **label 一經建立就不變。** 表格、圖在建立時產生 label，前綴 `tab:`、`fig:`，後接使用者提供的代稱或短 id；重新生成、移動都不改，只有使用者明確改名時才變。
 - **本文的引用要抽出來存。** `prose` 中的事實引用、實體引用、來源引用，存檔時在同一筆交易中寫入 `:node/facts`、`:node/rows`、citation，讓「哪些段落用到這個事實」是一般 Datalog 查詢。
 - **修訂只增不改。** 每次內容變更都屬於一個修改組；復原是新增一個反向的修改組，不刪除歷史。
+- **前後端同步。** 前端以 `.cljc` 純函式算出新狀態，比較上次儲存的狀態（`knot.sync/diff`），只送出變動的卡片、關係、素材、事實；後端以一筆交易寫成一個修改組，並記下每個實體修改前後的快照。結構類的修改立即送出；逐字輸入在停止約 0.8 秒後送出，成為一個「編輯文字」修改組。
 - **狀態轉換：** 生成後 `:none`→`:ai`；人工改本文後 `:ai`→`:human`；`:locked` 只由使用者設定或解除，AI 永遠不改鎖定的段落。引言以 AI 生成為主，不套用這組狀態。
 - **段落關係的方向：** 相鄰關係由前一段指向後一段；不相鄰關係由本段（from）指向目標段落（to），例如「本段依據目標段落」。
 
@@ -356,7 +370,7 @@ M0 時建立，至少包含：兩個 nREPL 的 port 與啟動方式、`clj-nrepl
 
 ### 5.10 復原
 
-- 在本文編輯器以外按 Ctrl+Z 或 Cmd+Z，復原最近一個修改組，不論來源是手動、移動、擴散或重新生成。
+- 在本文編輯器以外按 Ctrl+Z 或 Cmd+Z，復原最近一個尚未復原的修改組，不論來源是手動、移動、擴散或重新生成；先送出尚未儲存的輸入。匯入與復原本身不在復原範圍。
 - 本文編輯器內使用 Tiptap 自己的復原。
 - **驗收：** 每種來源的修改組都能復原，復原後資料與修改前一致。
 

@@ -55,6 +55,10 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 /* 外框固定在視窗高度：頂部列不動，各區自己捲動 */
 .app { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 .loading { padding: 48px; color: var(--muted); }
+.empty-state {
+  margin: auto; display: flex; flex-direction: column; align-items: center; gap: 16px;
+  padding: 48px; text-align: center;
+}
 
 /* ---------- 按鈕與標籤 ---------- */
 

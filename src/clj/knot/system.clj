@@ -12,4 +12,6 @@
   ([] (config {}))
   ([overrides]
    {:knot/config (merge defaults overrides)
-    :knot/http {:config (ig/ref :knot/config)}}))
+    :knot/store {:config (ig/ref :knot/config)}
+    :knot/http {:config (ig/ref :knot/config)
+                :store (ig/ref :knot/store)}}))
