@@ -278,11 +278,6 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 .relation-pending { border: 1px dashed var(--amber-dash); background: var(--amber-bg); color: var(--amber); }
 
 /* 拖曳中：可放置的欄位標示出來，其他欄淡出 */
-.drag-hint {
-  align-self: flex-start; font-size: 13px; color: var(--navy);
-  background: var(--navy-tint); border: 1px solid var(--navy-line);
-  padding: 6px 12px; border-radius: 8px;
-}
 .tree-col .col-viewport { border-radius: 10px; transition: background-color 0.2s, opacity 0.2s; }
 .col-drop-sibling .col-viewport { background: rgba(232, 237, 247, 0.6); box-shadow: inset 0 0 0 2px var(--navy-line); }
 .col-drop-into .col-viewport { box-shadow: inset 0 0 0 2px var(--navy-line); outline: 2px dashed var(--navy-line); outline-offset: -6px; }

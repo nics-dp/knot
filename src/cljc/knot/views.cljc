@@ -1,5 +1,5 @@
 (ns knot.views
-  "畫面（SPEC 6）：撰寫頁（卡片樹＋編輯區）與素材庫頁。
+  "畫面（SPEC 6）：撰寫頁（卡片樹與編輯區）與素材庫頁。
   畫面是狀態的純函式，事件以 Nexus action 描述。"
   (:require [clojure.string :as str]
             [knot.context :as context]
@@ -223,8 +223,7 @@
   "在選取卡片的層級上新增或刪除。"
   [{:keys [nodes ui]}]
   (let [id (:selected ui)
-        k (ui/sibling-kind nodes id)
-        level (case k :heading (kind-label nodes id) :paragraph "段落" nil)]
+        k (ui/sibling-kind nodes id)]
     [:div.toolbar {:role "toolbar" :aria-label "新增與刪除卡片"}
      [:button.btn.btn-small {:type "button"
                              :disabled (nil? k)
@@ -232,12 +231,11 @@
                                       (str "在「" (tree/display-title nodes (tree/numbering nodes) id) "」後面新增")
                                       "表格與圖的 label 命名方式待定，暫不提供新增")
                              :on {:click [[:ui/add-sibling id]]}}
-      "＋ 新增"]
+      "新增"]
      [:button.btn.btn-small.btn-danger {:type "button"
                                         :title "刪除選取的卡片與其下層卡片；可以復原"
                                         :on {:click [[:ui/delete-node id]]}}
-      "刪除"]
-     [:span.muted.small (if level (str "在目前層級（" level "）操作") "")]]))
+      "刪除"]]))
 
 (defn- scroll-range
   "這一欄 bias 的允許範圍：內容頂端不低於上緣、底端不高於下緣（已在範圍外時不再更遠）。"
@@ -257,17 +255,14 @@
         drag-depth (when drag (tree/depth nodes drag))]
     [:section.tree-panel {:aria-label "卡片樹"}
      [:div.panel-head
-      [:h2 "卡片樹"]
-      [:span.muted.small "拖曳只在同一層：同一欄插入前後，或拖到左邊一欄的卡片上移入；滾輪捲動單欄；方向鍵切換卡片；Ctrl／⌘+Z 復原"]]
+      [:h2 "卡片樹"]]
      (tree-toolbar state)
      [:div.legend
       [:span [:i.swatch.swatch-active] "目前選取"]
       [:span [:i.swatch.swatch-path] "上層與下層"]
       [:span {:style {:opacity 0.7}} [:i.swatch] "同一層的兄弟"]
       [:span {:style {:opacity 0.35}} [:i.swatch] "其他內容"]]
-     (if drag
-       [:div.drag-hint {:role "status"} "放到同一欄（藍色）調整順序，或放到左邊一欄（虛線）的卡片上移入；按 Esc 取消"]
-       (toast-view toast))
+     (when-not drag (toast-view toast))
      [:div.tree-scroll {:class (when drag "is-dragging")
                         :replicant/on-mount [[:dom/observe-viewport]]
                         :replicant/on-render [[:dom/reveal-columns sel-depth selected (count cols)]]}
@@ -350,8 +345,7 @@
         down? (tree/sibling-placement nodes id 1)]
     [:div.move-row
      [:button.btn.btn-small {:type "button" :disabled (not up?) :on {:click [[:ui/move-selected -1]]}} "上移"]
-     [:button.btn.btn-small {:type "button" :disabled (not down?) :on {:click [[:ui/move-selected 1]]}} "下移"]
-     [:span.muted.small "也可以直接拖曳卡片"]]))
+     [:button.btn.btn-small {:type "button" :disabled (not down?) :on {:click [[:ui/move-selected 1]]}} "下移"]]))
 
 (defn- name-input [id field value placeholder focus?]
   [:input.title-input {:replicant/key (str id field)
@@ -438,8 +432,8 @@
              [:span.small.text-teal "已加入"]
              [:button.btn.btn-small {:type "button" :on {:click [[:ui/add-citation (:node/id node) id]]}} "加入"])])
         [:span.muted.small "沒有符合的素材區塊"])]
-     [:span.muted.small (str (when (pos? more) (str "還有 " more " 個符合的區塊，請輸入更精確的關鍵字。"))
-                             "目前以字串比對；M3 改用素材庫的中文全文搜尋。")]]))
+     (when (pos? more)
+       [:span.muted.small (str "還有 " more " 個符合的區塊")])]))
 
 (defn- citations [{:keys [blocks ui] :as state} node]
   (let [by-id (block-index blocks)
@@ -462,7 +456,7 @@
      (if (:picker ui)
        (picker state node)
        [:button.btn.btn-dashed {:replicant/key "add" :type "button" :on {:click [[:ui/open-picker]]}}
-        "＋ 搜尋或選取素材"]))))
+        "加入依據"]))))
 
 (defn- context-preview [state id]
   (when-let [{:keys [sections chars]} (context/generation-context state id)]
@@ -470,7 +464,6 @@
      [:summary
       [:span "生成時 AI 會參考的內容"]
       [:span.muted.small (str "約 " chars " 字")]]
-     [:p.muted.small "以相關卡片的意圖代替全文，讓生成貼近你的想法，也節省 context。"]
      (for [{:keys [title entries]} sections]
        [:div.context-section {:replicant/key title}
         [:h4 title]
@@ -497,8 +490,7 @@
        [:span.muted.small (str "文風：" (:report/style-name report))]]
       (if-let [doc (:node/prose node)]
         [:div.prose-box (prose-view facts doc)]
-        [:div.prose-box [:p.prose.muted "尚未生成本文。寫好意圖並加入依據後，按「生成本段」產生。"]])
-      [:span.muted.small "藍色標記為事實引用，數值來自素材表格的儲存格；灰色為 LaTeX 交互參照。本文編輯於 M4 實作。"]]
+        [:div.prose-box [:p.prose.muted "尚未生成本文。寫好意圖並加入依據後，按「生成本段」產生。"]])]
      (context-preview state id)
      [:div.detail-footer {:replicant/key "footer"}
       [:span.small {:class (if (= :human status) "text-teal" "muted")} (status-note status)]
@@ -528,7 +520,7 @@
                  (let [d (get-in nodes [intro :node/draft])]
                    (if (str/blank? d) "（由 AI 依下層內容生成）" (gist d)))]
                 [:button.btn.btn-dashed {:type "button" :on {:click [[:ui/add-child id :intro]]}}
-                 "＋ 新增引言（由 AI 依下層內容生成）"]))
+                 "新增引言"]))
      (section "下層內容"
               [:div.kids
                (for [k kids :when (not= k intro)]
@@ -536,13 +528,12 @@
                   (title k)])]
               [:div.add-row
                (when-not has-heads
-                 [:button.btn.btn-small {:type "button" :on {:click [[:ui/add-child id :paragraph]]}} "＋ 段落"])
+                 [:button.btn.btn-small {:type "button" :on {:click [[:ui/add-child id :paragraph]]}} "新增段落"])
                (when can-sub
                  (if has-paras
                    [:button.btn.btn-small {:type "button" :on {:click [[:ui/wrap-paragraphs id]]}}
-                    "＋ 下層標題（把現有段落移入）"]
-                   [:button.btn.btn-small {:type "button" :on {:click [[:ui/add-child id :heading]]}} "＋ 下層標題"]))]
-              [:span.muted.small "引言之後只能全是段落或全是下層標題；標題最多四層。"]))))
+                    "新增下層標題並移入段落"]
+                   [:button.btn.btn-small {:type "button" :on {:click [[:ui/add-child id :heading]]}} "新增下層標題"]))]))))
 
 (defn- intro-editor [{:keys [nodes facts] :as state} title id]
   (let [node (get nodes id)
@@ -565,8 +556,7 @@
     (list
      (intent-input id (:node/draft node) "這張表／圖要呈現什麼、圖說的重點。")
      (section "LaTeX label"
-              [:span.mono.boxed-muted (:node/label node)]
-              [:span.muted.small "label 一經建立就不變。匯出時產生獨立檔案，本文以 \\ref 參照。"])
+              [:span.mono.boxed-muted (:node/label node)])
      (when-let [f (:node/figure-file node)]
        (section "圖檔" [:span.mono.boxed-muted f])))))
 
@@ -651,8 +641,7 @@
             [:button.btn.btn-small.btn-primary {:type "button" :on {:click [[:ui/set-block-status id :confirmed]]}} "確認"])
           (if (= :discarded status)
             [:button.btn.btn-small {:type "button" :on {:click [[:ui/set-block-status id :candidate]]}} "恢復為候選"]
-            [:button.btn.btn-small {:type "button" :on {:click [[:ui/set-block-status id :discarded]]}} "捨棄"])
-          [:span.muted.small "修改與合併相鄰段落於 M3 實作"]])
+            [:button.btn.btn-small {:type "button" :on {:click [[:ui/set-block-status id :discarded]]}} "捨棄"])])
        (section "內容"
                 (if (= :table (:block/kind block))
                   (table-view block)
@@ -663,7 +652,7 @@
                    (for [n citing]
                      [:button.kid {:replicant/key n :type "button" :on {:click [[:ui/open-paragraph n]]}}
                       (title n)])]
-                  [:span.muted.small "尚未被引用。在撰寫頁的段落編輯區以「搜尋或選取素材」加入。"]))])))
+                  [:span.muted.small "尚未被引用"]))])))
 
 (defn- library-page [{:keys [blocks nodes ui] :as state} title]
   (let [{:keys [source-filter source-query library-selected source-file]} ui
@@ -694,7 +683,7 @@
                               :on {:click [[:ui/toggle-source-file src]]}}
           [:span.source-name src]
           [:span.muted.small.nowrap (str (count bs) " 區塊")]])]
-      [:button.btn.btn-dashed {:type "button" :disabled true :title "M3 實作素材匯入"} "＋ 匯入來源檔"]]
+      [:button.btn.btn-dashed {:type "button" :disabled true :title "M3 實作素材匯入"} "匯入來源檔"]]
      [:section.lib-list {:aria-label "素材區塊"}
       [:div.lib-count.muted.small
        (str "符合 " (count shown) " 個區塊"
