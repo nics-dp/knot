@@ -237,11 +237,21 @@
     state))
 
 ;; ---------------------------------------------------------------------------
+(defn sibling-kind
+  "在 id 的層級上新增時的卡片類型：標題、段落照原類型；引言之後依同層其他卡片，
+  沒有其他卡片時為段落。表格與圖待 label 命名方式定案（回傳 nil）。"
+  [nodes id]
+  (case (tree/kind nodes id)
+    (:heading :paragraph) (tree/kind nodes id)
+    :intro (or (some #{:heading :paragraph} (map #(tree/kind nodes %) (tree/siblings nodes id)))
+               :paragraph)
+    nil))
+
 (defn add-sibling
-  "在選取的卡片後面新增同類卡片（標題或段落）。"
+  "在選取卡片的層級上新增：接在它後面，類型見 sibling-kind。"
   [state id]
   (let [{:keys [nodes]} state
-        k (tree/kind nodes id)
+        k (sibling-kind nodes id)
         p (tree/parent nodes id)]
     (if-not (#{:heading :paragraph} k)
       state

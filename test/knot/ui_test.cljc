@@ -116,6 +116,13 @@
   (let [s (ui/add-sibling state "A")]
     (is (= ["A" (get-in s [:ui :selected]) "B"] (tree/child-ids (:nodes s) nil)) "新章接在後面")))
 
+(deftest sibling-kind-test
+  (let [s (ui/add-child state "B" :intro)
+        intro (get-in s [:ui :selected])]
+    (is (= :paragraph (ui/sibling-kind (:nodes s) intro)) "引言之後依同層卡片")
+    (let [s (ui/add-sibling s intro)]
+      (is (= [intro (get-in s [:ui :selected]) "b1"] (tree/child-ids (:nodes s) "B"))))))
+
 (deftest delete-node-test
   (let [s (ui/delete-node state "A")]
     (testing "連同下層卡片一起刪除，相關關係移除"

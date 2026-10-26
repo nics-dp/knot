@@ -4,7 +4,8 @@
   (:require [clojure.string :as str]
             [knot.context :as context]
             [knot.layout :as layout]
-            [knot.tree :as tree]))
+            [knot.tree :as tree]
+            [knot.ui :as ui]))
 
 (def column-gap 12)
 (def list-limit
@@ -218,44 +219,24 @@
           [:span.insert-marker {:style {:top (str (- y 2) "px")}}])))))
 
 (defn- tree-toolbar
-  "新增與刪除卡片。依選取的卡片決定可用的操作（SPEC 5.3 層級規則）。"
+  "在選取卡片的層級上新增或刪除。"
   [{:keys [nodes ui]}]
   (let [id (:selected ui)
-        k (tree/kind nodes id)
-        kids (tree/child-ids nodes id)
-        has-paras (some #(tree/paragraph? nodes %) kids)
-        has-heads (some #(tree/heading? nodes %) kids)
-        can-sub (and (= k :heading) (< (tree/depth nodes id) tree/max-heading-level))
-        btn (fn [label actions & [title]]
-              [:button.btn.btn-small {:replicant/key label :type "button" :title title
-                                      :on {:click actions}}
-               label])]
+        k (ui/sibling-kind nodes id)
+        level (case k :heading (kind-label nodes id) :paragraph "段落" nil)]
     [:div.toolbar {:role "toolbar" :aria-label "新增與刪除卡片"}
-     [:span.muted.small "新增"]
-     (case k
-       :heading
-       (list
-        (btn (if (= 1 (tree/depth nodes id)) "＋ 章（接在後面）" "＋ 同層標題") [[:ui/add-sibling id]])
-        (when-not has-heads
-          (btn "＋ 下層段落" [[:ui/add-child id :paragraph]]))
-        (when can-sub
-          (if has-paras
-            (btn "＋ 下層標題（把段落移入）" [[:ui/wrap-paragraphs id]])
-            (btn "＋ 下層標題" [[:ui/add-child id :heading]])))
-        (when-not (tree/intro-id nodes id)
-          (btn "＋ 引言" [[:ui/add-child id :intro]] "引言本文由 AI 依下層內容生成")))
-
-       :paragraph
-       (btn "＋ 段落（接在後面）" [[:ui/add-sibling id]])
-
-       nil)
-     (when-not (= k :heading)
-       (btn "＋ 章" [[:ui/add-child nil :heading]] "在報告最後新增一章"))
-     [:span.toolbar-spacer]
+     [:button.btn.btn-small {:type "button"
+                             :disabled (nil? k)
+                             :title (if k
+                                      (str "在「" (tree/display-title nodes (tree/numbering nodes) id) "」後面新增")
+                                      "表格與圖的 label 命名方式待定，暫不提供新增")
+                             :on {:click [[:ui/add-sibling id]]}}
+      "＋ 新增"]
      [:button.btn.btn-small.btn-danger {:type "button"
                                         :title "刪除選取的卡片與其下層卡片；可以復原"
                                         :on {:click [[:ui/delete-node id]]}}
-      "刪除"]]))
+      "刪除"]
+     [:span.muted.small (if level (str "在目前層級（" level "）操作") "")]]))
 
 (defn- scroll-range
   "這一欄 bias 的允許範圍：內容頂端不低於上緣、底端不高於下緣（已在範圍外時不再更遠）。"
