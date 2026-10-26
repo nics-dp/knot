@@ -9,15 +9,15 @@
             [knot.ui :as ui]))
 
 (def ^:dynamic *handler* nil)
-(def ^:dynamic *store* nil)
+(def ^:dynamic *conn* nil)
 
 (use-fixtures :each
   (fn [t]
     (let [dir (str (java.nio.file.Files/createTempDirectory "knot-api" (make-array java.nio.file.attribute.FileAttribute 0)))
-          store (db/open-store dir)]
+          conn (db/open-report dir)]
       (try
-        (binding [*store* store *handler* (server/handler store)] (t))
-        (finally (db/close-store store))))))
+        (binding [*conn* conn *handler* (server/handler conn)] (t))
+        (finally (db/close-report conn))))))
 
 (defn- request [method uri & [body]]
   (let [res (*handler* (cond-> {:request-method method
@@ -36,27 +36,27 @@
     (is (= "no-cache" (get-in res [:headers "Cache-Control"])))))
 
 (deftest report-api-test
-  (let [id (seed/seed! *store* (edn/read-string (slurp (io/resource "fixtures/reports/streetlight.edn"))))
-        path (str "/api/reports/" id)
-        loaded (:body (request :get path))
+  (seed/seed! *conn* (edn/read-string (slurp (io/resource "fixtures/reports/streetlight.edn"))))
+  (let [loaded (:body (request :get "/api/report"))
         state {:nodes (into {} (map (juxt :node/id identity)) (:nodes loaded))
                :relations (:relations loaded)
                :ui {} :history []}
         para (some #(when (= "主要成果" (:node/title %)) (:node/id %)) (:nodes loaded))]
-    (is (= [id] (map :report/id (:body (request :get "/api/reports")))))
+    (is (= "OO 市智慧路燈示範計畫" (get-in loaded [:report :report/title])))
     (is (= 47 (count (:nodes loaded))))
     (testing "送出修改組"
       (let [changes (sync/diff state (ui/set-node-field state para :node/draft "改過的意圖"))
-            res (request :post (str path "/changes") {:label "編輯意圖" :changes changes})]
+            res (request :post "/api/report/changes" {:label "編輯意圖" :changes changes})]
         (is (= 200 (:status res)))
         (is (uuid? (get-in res [:body :changeset/id])))
         (is (= "改過的意圖" (some #(when (= para (:node/id %)) (:node/draft %))
-                             (:nodes (:body (request :get path))))))))
+                              (:nodes (:body (request :get "/api/report"))))))))
     (testing "格式不正確的修改組被拒絕"
-      (is (= 400 (:status (request :post (str path "/changes") {:changes {:nodes {:upsert [{:node/id "x"}]}}})))))
+      (is (= 400 (:status (request :post "/api/report/changes" {:changes {:nodes {:upsert [{:node/id "x"}]}}})))))
     (testing "復原"
-      (let [res (request :post (str path "/undo"))]
+      (let [res (request :post "/api/report/undo")]
         (is (= "編輯意圖" (get-in res [:body :label])))
         (is (not= "改過的意圖" (some #(when (= para (:node/id %)) (:node/draft %))
-                                (get-in res [:body :state :nodes]))))))
-    (is (= 404 (:status (request :get (str "/api/reports/" (random-uuid))))))))
+                                  (get-in res [:body :state :nodes]))))))
+    (testing "已有內容時不能匯入範例"
+      (is (= 409 (:status (request :post "/api/dev/sample")))))))

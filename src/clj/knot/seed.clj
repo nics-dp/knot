@@ -1,7 +1,8 @@
 (ns knot.seed
-  "把範例報告（巢狀的卡片樹、短 id）匯入成一份報告。短 id 一律換成 UUID（SPEC 4：對外只用 UUID）。"
+  "把範例報告（巢狀的卡片樹、短 id）匯入空白報告。短 id 一律換成 UUID（SPEC 4：對外只用 UUID）。"
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [datalevin.core :as d]
             [knot.db :as db]
             [knot.tree :as tree]))
 
@@ -25,22 +26,23 @@
                    (cond-> f (:fact/block f) (update :fact/block id))))}))
 
 (defn import-state!
-  "以 fixture->state 的結果建立一份新報告，回傳 report id。"
-  [store {:keys [report nodes relations blocks facts]}]
-  (let [report-id (db/create-report! store report)]
-    (db/apply-changes! (db/conn store report-id)
-                       {:origin :import
-                        :label "匯入範例報告"
-                        :changes {:nodes {:upsert nodes}
-                                  :relations {:upsert relations}
-                                  :blocks {:upsert blocks}
-                                  :facts {:upsert facts}}})
-    report-id))
+  "把 fixture->state 的結果匯入報告（報告必須是空的）。"
+  [conn {:keys [report nodes relations blocks facts]}]
+  (when-not (db/empty-report? (d/db conn))
+    (throw (ex-info "報告已有內容，不能匯入範例" {})))
+  (db/update-report! conn report)
+  (db/apply-changes! conn
+                     {:origin :import
+                      :label "匯入範例報告"
+                      :changes {:nodes {:upsert nodes}
+                                :relations {:upsert relations}
+                                :blocks {:upsert blocks}
+                                :facts {:upsert facts}}}))
 
 (defn seed!
-  "以範例報告建立一份新報告，回傳 report id。"
-  [store fx]
-  (import-state! store (fixture->state fx)))
+  "把範例報告匯入空白報告。"
+  [conn fx]
+  (import-state! conn (fixture->state fx)))
 
 (def local-sample
   "使用者在本機準備的測試報告（節錄自真實參考資料，不進 git）。"

@@ -9,24 +9,25 @@
             [knot.tree :as tree]
             [knot.ui :as ui]))
 
-(def ^:dynamic *store* nil)
+(def ^:dynamic *conn* nil)
+(def ^:dynamic *dir* nil)
 
 (defn- temp-dir []
   (str (java.nio.file.Files/createTempDirectory "knot-test" (make-array java.nio.file.attribute.FileAttribute 0))))
 
 (use-fixtures :each
   (fn [t]
-    (let [store (db/open-store (temp-dir))]
+    (let [dir (temp-dir)
+          conn (db/open-report dir)]
       (try
-        (binding [*store* store] (t))
-        (finally (db/close-store store))))))
+        (binding [*conn* conn *dir* dir] (t))
+        (finally (db/close-report conn))))))
 
 (def fixture (edn/read-string (slurp (io/resource "fixtures/reports/streetlight.edn"))))
 
 (defn- seeded []
-  (let [id (seed/seed! *store* fixture)
-        c (db/conn *store* id)]
-    [id c (db/load-state (d/db c))]))
+  (seed/seed! *conn* fixture)
+  [nil *conn* (db/load-state (d/db *conn*))])
 
 (defn- by [k coll] (into {} (map (juxt k identity)) coll))
 
@@ -42,7 +43,8 @@
 
 (deftest seed-roundtrip-test
   (let [{:keys [nodes relations blocks facts] :as st} (seed/fixture->state fixture)
-        loaded (db/load-state (d/db (db/conn *store* (seed/import-state! *store* st))))]
+        _ (seed/import-state! *conn* st)
+        loaded (db/load-state (d/db *conn*))]
     (testing "寫入後讀回的內容與寫入時相同（版本號由資料庫管理）"
       (is (= (by :node/id nodes) (update-vals (by :node/id (:nodes loaded)) #(dissoc % :node/version)))))
     (is (= (set relations) (set (:relations loaded))))
@@ -51,7 +53,7 @@
     (is (= "OO 市智慧路燈示範計畫" (get-in loaded [:report :report/title])))))
 
 (deftest changes-and-undo-test
-  (let [[report-id c loaded] (seeded)
+  (let [[_ c loaded] (seeded)
         before (client-state loaded)
         p312 (some #(when (= "各場域結果比較" (:node/title %)) (:node/id %)) (:nodes loaded))
         s311 (some #(when (= "問題與改善" (:node/name %)) (:node/id %)) (:nodes loaded))
@@ -71,8 +73,25 @@
     (testing "匯入不能復原；沒有可復原的修改組時回傳 nil"
       (is (nil? (db/undo! c))))
     (testing "修訂只增不改：修改組保留在歷史中"
-      (is (= 3 (count (d/q '[:find [?c ...] :where [?c :changeset/id]] (d/db c))))))
-    (is (= [report-id] (map :report/id (db/list-reports *store*))))))
+      (is (= 3 (count (d/q '[:find [?c ...] :where [?c :changeset/id]] (d/db c))))))))
+
+(deftest open-report-test
+  (testing "空目錄建立空白報告，名稱取自目錄名稱"
+    (let [info (db/report-info (d/db *conn*))]
+      (is (uuid? (:report/id info)))
+      (is (= (.getName (java.io.File. *dir*)) (:report/title info)))
+      (is (db/empty-report? (d/db *conn*)))))
+  (testing "已有內容的報告不能再匯入範例"
+    (seed/seed! *conn* fixture)
+    (is (thrown? clojure.lang.ExceptionInfo (seed/seed! *conn* fixture))))
+  (testing "重新開啟讀到同一份報告"
+    (let [id (:report/id (db/report-info (d/db *conn*)))]
+      (db/close-report *conn*)
+      (let [c (db/open-report *dir*)]
+        (try
+          (is (= id (:report/id (db/report-info (d/db c)))))
+          (is (= 47 (count (:nodes (db/load-state (d/db c))))))
+          (finally (db/close-report c)))))))
 
 (deftest delete-and-version-test
   (let [[_ c loaded] (seeded)

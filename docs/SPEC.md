@@ -70,16 +70,16 @@ Knot 是一個單機、單人使用的報告撰寫工具：使用者在卡片樹
 - 測試以 `with-redefs` 替換 `llm/call`，回傳 `test-resources/fixtures/llm/` 下的固定回應。
 - 使用的模型名稱放在設定檔，屬待定事項。
 
-**資料目錄**
+**報告目錄**
+
+一個報告目錄就是一份報告，只有一個資料庫。啟動時讀取目錄中的報告；目錄中還沒有報告時，建立一份空白報告（名稱取自目錄名稱）。
 
 ```text
-<data-dir>/                    預設 ~/Knot，可由設定檔指定
-├─ library/                    Datalevin：文風設定、範本（跨報告共用）
-└─ reports/<report-uuid>/
-   ├─ db/                      Datalevin：該報告的所有資料
-   ├─ sources/                 匯入的原始檔複本
-   ├─ figures/                 使用者提供的圖檔
-   └─ export/                  預設的 LaTeX 匯出位置
+<報告目錄>/                    啟動時所在的目錄，或命令列參數指定
+├─ .knot/db/                   Datalevin：這份報告的所有資料
+├─ sources/                    匯入的原始檔複本
+├─ figures/                    使用者提供的圖檔
+└─ export/                     預設的 LaTeX 匯出位置
 ```
 
 **Repo 結構**
@@ -97,7 +97,7 @@ test-resources/fixtures/       虛構的範例報告、素材、LLM 回應
 docs/SPEC.md  docs/ideas.md  docs/design/  docs/QUESTIONS.md
 ```
 
-啟動方式：`clojure -M:run` 啟動伺服器並開啟瀏覽器。打包成可執行 jar 屬待定事項。
+啟動方式：在報告目錄執行 `java -jar knot.jar`（或 `java -jar knot.jar <報告目錄>`），啟動伺服器並開啟瀏覽器；開發時為 `clojure -M:run [報告目錄]`，REPL 開發使用 `local/report`。jar 的打包方式待 M6 前後處理。
 
 ## 3. 開發環境
 
@@ -143,7 +143,7 @@ M0 時建立，至少包含：兩個 nREPL 的 port 與啟動方式、`clj-nrepl
 
 ## 4. 資料模型
 
-每份報告一個 Datalevin 資料庫，另有一個共用的 library 資料庫。下列 schema 是 M1 的起點，實作時可補充屬性，但改名或刪除要先更新本節。
+每個報告目錄一個 Datalevin 資料庫，不另設跨報告共用的資料庫。下列 schema 是 M1 的起點，實作時可補充屬性，但改名或刪除要先更新本節。
 
 **報告資料庫**
 
@@ -247,7 +247,7 @@ M0 時建立，至少包含：兩個 nREPL 的 port 與啟動方式、`clj-nrepl
 :proposal/state   keyword  ; :pending :accepted :rejected :stale :advisory
 ```
 
-**Library 資料庫**
+**文風與範本**（5.1、5.7 實作時加入報告資料庫；跨報告共用方式待定，見 QUESTIONS.md）
 
 ```clojure
 :style/name     string
@@ -346,7 +346,7 @@ M0 時建立，至少包含：兩個 nREPL 的 port 與啟動方式、`clj-nrepl
 
 - 規則清單可新增、編輯、刪除，每條規則有類別、說明、範例。
 - 分層合併：公司 < 機關 < 專案，同 id 的規則由下層覆蓋。
-- 套用到報告時存成快照；library 中的來源更新後，報告顯示「文風設定有更新」並提供同步。
+- 套用到報告時存成快照。跨報告共用的來源與同步方式待定（不另設共用資料庫，見 QUESTIONS.md）。
 - 從範例文字萃取規則（`:extract-style`）放在 M8。
 - **驗收：** 合併結果與快照內容有單元測試。
 
@@ -464,7 +464,7 @@ M0 時建立，至少包含：兩個 nREPL 的 port 與啟動方式、`clj-nrepl
 - LaTeX 範例專案：目錄結構、章節與表格的寫法、表格環境（由使用者提供）
 - LLM 模型的選擇與每次生成的 token 上限
 - label 的命名方式：自動產生短 id，或要求使用者輸入代稱
-- 應用程式的打包與啟動方式（可執行 jar 或其他）
+- 可執行 jar 的打包細節（啟動方式已定：在報告目錄執行 jar）
 - 從舊報告開始時，舊報告的匯入格式（LaTeX、Word 或 PDF）
 - Datalevin 與其他相依套件的版本，於 M0 固定並記錄
 

@@ -80,7 +80,7 @@
         (.scrollTo el #js {:left target
                            :behavior (if (or first-time? (reduced-motion?)) "auto" "smooth")})))))
 
-(declare dispatch! create-sample! undo!)
+(declare dispatch! import-sample! undo!)
 
 (def nexus
   {:nexus/system->state deref
@@ -125,8 +125,8 @@
         (set! (.-effectAllowed dt) "move")
         (.setData dt "text/plain" id)))
 
-    :server/create-sample
-    (fn [_ _] (create-sample!))
+    :server/import-sample
+    (fn [_ _] (import-sample!))
 
     :dom/focus
     (fn [{:keys [dispatch-data]} _]
@@ -234,7 +234,7 @@
 
 (defonce sync-state (atom {:history-count 0 :timer nil :in-flight nil}))
 
-(defn- report-id [] (get-in @store [:report :report/id]))
+(defn- loaded? [] (some? (:report @store)))
 
 (defn- api [method path & [body]]
   (-> (js/fetch path (clj->js (cond-> {:method method
@@ -271,10 +271,10 @@
         (let [state @store
               data (sync/data state)
               changes (sync/diff @saved data)]
-          (if-not (and changes (report-id))
+          (if-not (and changes (loaded?))
             (js/Promise.resolve nil)
             (let [{:keys [label origin]} (changeset-meta state (:history-count @sync-state))
-                  p (-> (api "POST" (str "/api/reports/" (report-id) "/changes")
+                  p (-> (api "POST" "/api/report/changes"
                              {:label label :origin origin :changes changes})
                         (.then (fn [_]
                                  (reset! saved data)
@@ -299,9 +299,9 @@
 (defn undo!
   "復原最近一個修改組：先送出尚未儲存的變動，再由後端新增反向的修改組。"
   []
-  (when (report-id)
+  (when (loaded?)
     (-> (flush!)
-        (.then #(api "POST" (str "/api/reports/" (report-id) "/undo")))
+        (.then #(api "POST" "/api/report/undo"))
         (.then (fn [{:keys [label state]}]
                  (if label
                    (do (swap! store #(-> (ui/replace-data % state)
@@ -321,37 +321,35 @@
       (some #(when (#{(:node/name %) (:node/title %)} s) (:node/id %))
             (map nodes (tree/document-order nodes)))))
 
-(defn- open-report! [id]
-  (-> (api "GET" (str "/api/reports/" id))
-      (.then (fn [loaded]
-               ;; ?select=、?page=library|tree|fulltext、?drag=、?collapsed=1 指定初始畫面，方便截圖
-               (let [params (js/URLSearchParams. js/location.search)
-                     select (some->> (.get params "select") (find-node (:nodes (ui/from-server loaded))))
-                     page (.get params "page")
-                     drag (some->> (.get params "drag") (find-node (:nodes (ui/from-server loaded))))
-                     collapsed (.get params "collapsed")
-                     state (cond-> (ui/from-server loaded)
-                             select (ui/select select)
-                             page (ui/set-page (keyword page))
-                             drag (ui/drag-start drag)
-                             collapsed (ui/toggle-editor))]
-                 (reset! saved (sync/data state))
-                 (reset! store state))))))
+(defn- show-report! [loaded]
+  ;; ?select=、?page=library|tree|fulltext、?drag=、?collapsed=1 指定初始畫面，方便截圖
+  (let [params (js/URLSearchParams. js/location.search)
+        nodes (:nodes (ui/from-server loaded))
+        select (some->> (.get params "select") (find-node nodes))
+        page (.get params "page")
+        drag (some->> (.get params "drag") (find-node nodes))
+        collapsed (.get params "collapsed")
+        state (cond-> (ui/from-server loaded)
+                select (ui/select select)
+                page (ui/set-page (keyword page))
+                drag (ui/drag-start drag)
+                collapsed (ui/toggle-editor))]
+    (reset! saved (sync/data state))
+    (reset! store state)))
 
 (defn load! []
-  (-> (api "GET" "/api/reports")
-      (.then (fn [reports]
-               (if-let [id (:report/id (first reports))]
-                 (open-report! id)
-                 (reset! store {:empty true}))))
+  (-> (api "GET" "/api/report")
+      (.then show-report!)
       (.catch (fn [err]
                 (reset! store {:error (ex-message err)})
                 (js/console.error err)))))
 
-(defn create-sample! []
-  (-> (api "POST" "/api/dev/sample-report")
-      (.then (fn [{:report/keys [id]}] (open-report! id)))
-      (.catch (fn [err] (reset! store {:error (ex-message err)})))))
+(defn import-sample!
+  "開發用：把範例報告匯入空白報告。"
+  []
+  (-> (api "POST" "/api/dev/sample")
+      (.then show-report!)
+      (.catch (fn [err] (show-toast! (str "無法匯入範例：" (ex-message err)))))))
 
 (defn init []
   (r/set-dispatch! dispatch!)

@@ -14,8 +14,10 @@
       (catch Exception _
         (println "請以瀏覽器開啟" url)))))
 
-(defn -main [& _]
-  (let [cfg (system/config)
+(defn -main
+  "java -jar knot.jar [報告目錄]：讀取目錄中的報告，沒有時建立一份空白報告。"
+  [& [report-dir]]
+  (let [cfg (system/config (cond-> {} report-dir (assoc :report-dir report-dir)))
         sys (ig/init cfg)]
     (.addShutdownHook (Runtime/getRuntime) (Thread. #(ig/halt! sys)))
     (open-browser! (str "http://localhost:" (get-in cfg [:knot/config :http/port])))))

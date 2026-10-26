@@ -1,5 +1,5 @@
 (ns knot.db
-  "報告資料庫（SPEC 4）。每份報告一個 Datalevin 資料庫；Datalevin 的 entity id 不離開本命名空間，
+  "報告資料庫（SPEC 4）。一個報告目錄就是一份報告，只有一個 Datalevin 資料庫；entity id 不離開本命名空間，
   對外一律用前端的實體形式（卡片、關係、素材、事實），以 UUID 或 key 識別。
 
   寫入一律經 apply-changes!：一次呼叫是一個修改組，每個實體記下修改前後的快照；
@@ -128,16 +128,6 @@
    :proposal/new-prose string
    :proposal/state kw})
 
-(def library-schema
-  {:style/id (id-attr)
-   :style/name string
-   :style/scope kw
-   :style/parent ref-one
-   :style/rules string
-   :template/id (id-attr)
-   :template/name string
-   :template/skeleton string})
-
 ;; ---------------------------------------------------------------------------
 ;; Datalog 規則
 
@@ -180,66 +170,39 @@
             db rules node-id)))
 
 ;; ---------------------------------------------------------------------------
-;; 連線
+;; 連線：一個報告目錄就是一份報告，資料庫在 <報告目錄>/.knot/db
 
-(defn report-dir [data-dir report-id]
-  (io/file data-dir "reports" (str report-id)))
-
-(defn open-store
-  "data-dir 底下的 library 與各報告資料庫；報告連線開啟後保留在 :conns。"
-  [data-dir]
-  (.mkdirs (io/file data-dir "reports"))
-  {:data-dir data-dir
-   :library (d/get-conn (str (io/file data-dir "library")) library-schema)
-   :conns (atom {})})
-
-(defn close-store [{:keys [library conns]}]
-  (doseq [c (vals @conns)] (d/close c))
-  (reset! conns {})
-  (d/close library))
-
-(defn conn
-  "報告的連線；資料庫不存在時回傳 nil。"
-  [{:keys [data-dir conns]} report-id]
-  (or (get @conns report-id)
-      (let [dir (io/file (report-dir data-dir report-id) "db")]
-        (when (.exists dir)
-          (let [c (d/get-conn (str dir) schema)]
-            (swap! conns assoc report-id c)
-            c)))))
-
-(defn create-report!
-  "建立空白報告，回傳 report id。"
-  [{:keys [data-dir conns]} {:report/keys [title subtitle style-name]}]
-  (let [id (random-uuid)
-        dir (io/file (report-dir data-dir id) "db")
-        _ (.mkdirs dir)
-        c (d/get-conn (str dir) schema)]
-    (d/transact! c [(cond-> {:report/id id :report/title (or title "未命名報告")}
-                      subtitle (assoc :report/subtitle subtitle)
-                      style-name (assoc :report/style-name style-name))])
-    (swap! conns assoc id c)
-    id))
+(defn db-dir [report-dir]
+  (io/file report-dir ".knot" "db"))
 
 (defn report-info [db]
   (d/q '[:find (pull ?r [:report/id :report/title :report/subtitle :report/style-name]) .
          :where [?r :report/id]]
        db))
 
-(defn last-changed-at [db]
-  (d/q '[:find (max ?at) . :where [_ :changeset/at ?at]] db))
+(defn open-report
+  "開啟報告目錄中的報告；還沒有報告時建立一份空白報告，名稱取自目錄名稱。回傳連線。"
+  [report-dir]
+  (let [dir (db-dir report-dir)
+        _ (.mkdirs dir)
+        c (d/get-conn (str dir) schema)]
+    (when-not (report-info (d/db c))
+      (d/transact! c [{:report/id (random-uuid)
+                       :report/title (.getName (.getCanonicalFile (io/file report-dir)))}]))
+    c))
 
-(defn list-reports
-  "所有報告，最近修改的在前。"
-  [{:keys [data-dir] :as store}]
-  (->> (.listFiles (io/file data-dir "reports"))
-       (keep #(some-> (.getName ^java.io.File %) parse-uuid))
-       (keep (fn [id]
-               (when-let [c (conn store id)]
-                 (let [db (d/db c)]
-                   (assoc (report-info db) :report/updated-at (last-changed-at db))))))
-       (sort-by #(or (:report/updated-at %) #inst "1970") #(compare %2 %1))
-       vec))
+(defn close-report [conn]
+  (d/close conn))
+
+(defn update-report!
+  "修改報告的名稱等資訊（不屬於修改組）。"
+  [conn info]
+  (let [id (:report/id (report-info (d/db conn)))]
+    (d/transact! conn [(merge (select-keys info [:report/title :report/subtitle :report/style-name])
+                              {:report/id id})])))
+
+(defn empty-report? [db]
+  (empty? (d/q '[:find [?e ...] :where [?e :node/id]] db)))
 
 ;; ---------------------------------------------------------------------------
 ;; 讀取：資料庫 → 前端形式

@@ -31,39 +31,28 @@
 (defn- bad-request [msg & [data]]
   {:status 400 :body (cond-> {:error msg} data (assoc :details data))})
 
-(defn- with-report
-  "取出路徑中的報告；不存在時回 404。"
-  [store req f]
-  (let [id (parse-uuid (get-in req [:path-params :id]))
-        c (when id (db/conn store id))]
-    (if c
-      (f id c)
-      {:status 404 :body {:error "找不到報告"}})))
-
-(defn routes [store]
-  [["/reports"
-    {:get (fn [_] {:status 200 :body (db/list-reports store)})}]
-   ["/dev/sample-report"
-    ;; 開發用：以範例報告建立一份新報告（本機測試報告優先）
+(defn routes [conn]
+  [["/report"
+    {:get (fn [_] {:status 200 :body (db/load-state (d/db conn))})}]
+   ["/report/changes"
+    {:post (fn [req]
+             (let [body (:body-params req)]
+               (if-not (m/validate ChangeSet body)
+                 (bad-request "修改內容格式不正確" (me/humanize (m/explain ChangeSet body)))
+                 {:status 200 :body {:changeset/id (db/apply-changes! conn body)}})))}]
+   ["/report/undo"
     {:post (fn [_]
-             (if-let [fx (seed/sample-fixture)]
-               {:status 201 :body {:report/id (seed/seed! store fx)}}
-               {:status 404 :body {:error "找不到範例報告"}}))}]
-   ["/reports/:id"
-    {:get (fn [req]
-            (with-report store req
-              (fn [_ c] {:status 200 :body (db/load-state (d/db c))})))}]
-   ["/reports/:id/changes"
-    {:post (fn [req]
-             (with-report store req
-               (fn [_ c]
-                 (let [body (:body-params req)]
-                   (if-not (m/validate ChangeSet body)
-                     (bad-request "修改內容格式不正確" (me/humanize (m/explain ChangeSet body)))
-                     {:status 200 :body {:changeset/id (db/apply-changes! c body)}})))))}]
-   ["/reports/:id/undo"
-    {:post (fn [req]
-             (with-report store req
-               (fn [_ c]
-                 (let [label (db/undo! c)]
-                   {:status 200 :body {:label label :state (db/load-state (d/db c))}}))))}]])
+             (let [label (db/undo! conn)]
+               {:status 200 :body {:label label :state (db/load-state (d/db conn))}}))}]
+   ["/dev/sample"
+    ;; 開發用：把範例報告匯入空白報告（本機測試報告優先）
+    {:post (fn [_]
+             (cond
+               (not (db/empty-report? (d/db conn)))
+               {:status 409 :body {:error "報告已有內容"}}
+
+               :else
+               (if-let [fx (seed/sample-fixture)]
+                 (do (seed/seed! conn fx)
+                     {:status 200 :body (db/load-state (d/db conn))})
+                 {:status 404 :body {:error "找不到範例報告"}})))}]])

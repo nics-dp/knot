@@ -17,13 +17,13 @@
 | ClojureScript 前端 nREPL | `bb dev:cljs`（= `npx shadow-cljs watch app`） | 7889 |
 
 - `bb dev` 同時啟動兩者；頁面在 http://localhost:3000。
-- **資料：** 報告存在 `~/Knot/reports/<uuid>/db`（Datalevin）。前端開啟最近修改的報告；沒有報告時顯示「建立範例報告」（`POST /api/dev/sample-report`，本機測試報告優先）。
-- **API：** `GET /api/reports`、`GET /api/reports/:id`、`POST /api/reports/:id/changes`（malli 驗證）、`POST /api/reports/:id/undo`。
+- **報告目錄：** 一個目錄一份報告，資料庫在 `<報告目錄>/.knot/db`。REPL 開發使用 `local/report`（不進 git）；`clojure -M:run [目錄]` 預設為目前目錄。空白報告的畫面提供「匯入範例內容」（`POST /api/dev/sample`，本機測試報告優先）。
+- **API：** `GET /api/report`、`POST /api/report/changes`（malli 驗證）、`POST /api/report/undo`。
 - URL 參數 `?select=<卡片 id 或名稱>`、`?page=library|tree|fulltext`、`?drag=<卡片 id>`（拖曳中的樣子）指定初始畫面，方便截圖對照設計稿；截圖可用 headless Chrome：
   `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --window-size=1440,1000 --virtual-time-budget=4000 --screenshot=out.png "http://localhost:3000/?select=p312"`
 - 改了 `knot.server` 的路由要 `(user/reset)` 才會生效；reset 失敗時 `(require 'user :reload)` 再 `(user/go)`。
 - **真實參考資料：** 使用者提供的 PDF 放在 repo 根目錄、轉換結果在 `local/sources/*.md`，兩者都在 `.gitignore`。`knot.ingest/markdown->blocks` 可把它們切成候選區塊（M3 的匯入會用到）。**commit 時一律指定路徑，不要 `git add -A`。**
-- **本機測試報告：** `local/sample-report.edn` 存在時，「建立範例報告」與 `(seed! "local/sample-report.edn")` 使用它。它由 `local/make_sample.py` 產生（節錄自參考報告），重新產生：`python3 -I local/make_sample.py local/sample-report.edn`。刪掉這個檔案就改用虛構的路燈範例。自動測試一律使用 `test-resources/` 的虛構資料。
+- **本機測試報告：** `local/sample-report.edn` 存在時，「匯入範例內容」與 `(seed! "local/sample-report.edn")` 使用它。它由 `local/make_sample.py` 產生（節錄自參考報告），重新產生：`python3 -I local/make_sample.py local/sample-report.edn`。刪掉這個檔案就改用虛構的路燈範例。自動測試一律使用 `test-resources/` 的虛構資料。
 - 轉換：`node_modules/.bin/anydoc <檔案.pdf> > local/sources/<檔名>.md`；評估記錄在 `docs/ingest-evaluation.md`。
 - 原則上由使用者啟動兩個 nREPL；沒在執行時可在背景啟動，但不要關閉使用者已啟動的行程。
 
@@ -38,8 +38,9 @@
 ### `dev/user.clj`
 
 - `(go)`、`(halt)`、`(reset)`：透過 integrant.repl 啟動、停止、重新載入系統；`(system)` 取得目前系統
-- `(seed!)`：以虛構範例建立一份新報告；`(seed! "local/sample-report.edn")`：以本機測試報告建立
-- `(db)`：最近修改的報告的 Datalevin 連線；`(db report-id)` 指定報告
+- `(seed!)`：把虛構範例匯入目前的空白報告；`(seed! "local/sample-report.edn")`：匯入本機測試報告
+- `(wipe!)`：刪除 `local/report` 的資料庫並重新啟動（得到空白報告）
+- `(db)`：目前報告的 Datalevin 連線
 - `(import-file! "path")`：M3 加入
 
 ### 測試與 lint

@@ -3,8 +3,9 @@
             [knot.server]))
 
 (def defaults
+  ;; 報告目錄預設為啟動時所在的目錄
   {:http/port 3000
-   :data-dir (str (System/getProperty "user.home") "/Knot")})
+   :report-dir (System/getProperty "user.dir")})
 
 (defmethod ig/init-key :knot/config [_ config] config)
 
@@ -12,6 +13,6 @@
   ([] (config {}))
   ([overrides]
    {:knot/config (merge defaults overrides)
-    :knot/store {:config (ig/ref :knot/config)}
+    :knot/db {:config (ig/ref :knot/config)}
     :knot/http {:config (ig/ref :knot/config)
-                :store (ig/ref :knot/store)}}))
+                :db (ig/ref :knot/db)}}))
