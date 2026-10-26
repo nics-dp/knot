@@ -1,0 +1,188 @@
+;; 虛構範例報告：OO 市智慧路燈示範計畫 期末報告雛形
+;; 介面開發用；M1 之後由 (seed!) 寫入 Datalevin。
+;; 本文以 ProseMirror JSON 的 EDN 形式表示，inline node：fact（事實引用）、ref（交互參照）。
+{:report/title "OO 市智慧路燈示範計畫"
+ :report/subtitle "期末報告雛形"
+ :report/style-name "機關 · OO 局"
+ :report/pending-proposals 3
+
+ :tree
+ [{:node/id "c1" :node/kind :heading :node/name "計畫概述" :node/draft "計畫緣起、目標與範圍"
+   :node/contract-items ["1.1"]
+   :children
+   [{:node/id "i1" :node/kind :intro :node/draft "說明本章涵蓋計畫緣起與目標，作為後續章節的背景"}
+    {:node/id "s11" :node/kind :heading :node/name "計畫緣起" :node/draft "路燈耗電與維護回報的問題"
+     :children
+     [{:node/id "p111" :node/kind :paragraph :node/title "政策背景" :node/status :ai
+       :node/draft "節能減碳政策對路燈的要求；本計畫的定位"
+       :node/citations [{:block "b6"}]
+       :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "因應中央節能減碳政策，地方政府須逐年降低公共照明用電。本計畫以路燈為對象，驗證智慧化管理對節能與維運的效益。"}]}]}}
+      {:node/id "p112" :node/kind :paragraph :node/title "現況問題" :node/status :ai
+       :node/draft "既有路燈耗電偏高；故障回報仰賴民眾通報"
+       :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "既有鈉燈耗電偏高，且故障多仰賴民眾通報，發現與修復時間均長。"}]}]}}]}
+    {:node/id "s12" :node/kind :heading :node/name "計畫目標" :node/draft "示範場域與預期驗證的項目"
+     :children
+     [{:node/id "p121" :node/kind :paragraph :node/title "計畫目標" :node/status :ai
+       :node/draft "建立三處示範場域；驗證節能與維運成效"
+       :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "本計畫建立三處示範場域，驗證智慧路燈於節能與維運兩方面之成效。"}]}]}}]}]}
+
+  {:node/id "c2" :node/kind :heading :node/name "執行方法" :node/draft "場域選定、系統建置與測試設計"
+   :node/contract-items ["2.1" "2.2"]
+   :children
+   [{:node/id "s21" :node/kind :heading :node/name "場域選定" :node/draft "三處示範場域的選定理由"
+     :children
+     [{:node/id "p211" :node/kind :paragraph :node/title "選定原則" :node/status :ai
+       :node/draft "交通量、既有設備與供電條件"
+       :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "場域選定綜合考量交通量、既有設備狀況與供電條件。"}]}]}}
+      {:node/id "p212" :node/kind :paragraph :node/title "三處場域簡介" :node/status :human
+       :node/draft "各場域的位置、規模與特性"
+       :node/citations [{:block "b5"}]
+       :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "三處場域分別位於市區幹道、住宅區與郊區道路，位置如"} {:type "ref" :attrs {:label "fig:site-map"}} {:type "text" :text "所示。"}]}]}
+       :children
+       [{:node/id "f3" :node/kind :figure :node/title "示範場域位置" :node/label "fig:site-map"
+         :node/figure-file "figures/fig-site-map.png" :node/draft "圖檔由使用者提供"}]}]}
+    {:node/id "s22" :node/kind :heading :node/name "場域建置" :node/draft "設備與網路配置"
+     :children
+     [{:node/id "i22" :node/kind :intro :node/draft "說明各場域的設備與通訊網路配置"}
+      {:node/id "s221" :node/kind :heading :node/name "設備配置" :node/draft "燈具、控制器與閘道器"
+       :children
+       [{:node/id "s2211" :node/kind :heading :node/name "燈具" :node/draft "LED 燈具規格與安裝方式"
+         :children
+         [{:node/id "p2211" :node/kind :paragraph :node/title "燈具規格" :node/status :ai
+           :node/draft "色溫、功率與防護等級"
+           :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "燈具採用 LED 光源，具備調光介面與 IP66 防護等級。"}]}]}}]}
+        {:node/id "s2212" :node/kind :heading :node/name "控制器與閘道器" :node/draft "單燈控制器與區域閘道器"
+         :children
+         [{:node/id "p2212a" :node/kind :paragraph :node/title "單燈控制器" :node/status :ai
+           :node/draft "每盞燈具配置一具控制器；回報用電與狀態"
+           :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "每盞燈具配置一具單燈控制器，定時回報用電量與運作狀態。"}]}]}}
+          {:node/id "p2212b" :node/kind :paragraph :node/title "區域閘道器" :node/status :none
+           :node/draft "彙整控制器資料並上傳管理平台"}]}]}
+      {:node/id "s222" :node/kind :heading :node/name "通訊網路" :node/draft "控制器與平台之間的通訊方式"
+       :children
+       [{:node/id "p2221" :node/kind :paragraph :node/title "網路架構" :node/status :none
+         :node/draft "控制器以低功耗廣域網路連線；閘道器以光纖回傳"}]}]}
+    {:node/id "s23" :node/kind :heading :node/name "測試設計" :node/draft "量測項目、頻率與判定方式"
+     :children
+     [{:node/id "p231" :node/kind :paragraph :node/title "量測項目" :node/status :ai
+       :node/draft "以節電率與斷線次數為主要指標"
+       :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "量測項目以節電率與斷線次數為主要指標，詳如"} {:type "ref" :attrs {:label "tab:metrics"}} {:type "text" :text "。"}]}]}
+       :children
+       [{:node/id "t1" :node/kind :table :node/title "量測項目一覽" :node/label "tab:metrics"
+         :node/draft "由素材表產生的獨立表格檔"}]}
+      {:node/id "p232" :node/kind :paragraph :node/title "判定方式" :node/status :none
+       :node/draft "正常運作與異常的判定標準"}]}]}
+
+  {:node/id "c3" :node/kind :heading :node/name "執行成果" :node/draft "測試結果、效益分析，以及執行中的問題與改善"
+   :node/contract-items ["3.1" "3.2"]
+   :children
+   [{:node/id "i3" :node/kind :intro :node/draft "概述三處場域的測試結果與效益，並說明場域 C 的異常與改善"}
+    {:node/id "s31" :node/kind :heading :node/name "測試結果" :node/draft "量測結果、場域比較與異常說明"
+     :node/contract-items ["3.1"]
+     :children
+     [{:node/id "p311" :node/kind :paragraph :node/title "測試方法概述" :node/status :ai
+       :node/draft "三處場域的量測方式與設備；量測期間與資料頻率"
+       :node/citations [{:block "b1" :where "p.12"}]
+       :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "本計畫於三處示範場域設置量測設備，於測試期間持續記錄各路燈之用電量與連線狀態，作為後續比較之基礎。"}]}]}}
+      {:node/id "p312" :node/kind :paragraph :node/title "各場域結果比較" :node/status :human
+       :node/draft "以表格呈現三處場域的節電率；指出場域 C 明顯偏低，原因留待下一段"
+       :node/citations [{:block "b2" :where "欄：場域、節電率"} {:block "b1" :where "p.12"}]
+       :node/prose {:type "doc"
+                    :content [{:type "paragraph"
+                               :content [{:type "text" :text "三處示範場域於測試期間之量測結果如"}
+                                         {:type "ref" :attrs {:label "tab:field-results"}}
+                                         {:type "text" :text "所示。場域 A 與場域 B 之節電率分別為"}
+                                         {:type "fact" :attrs {:key "saving-rate.site-a"}}
+                                         {:type "text" :text "與"}
+                                         {:type "fact" :attrs {:key "saving-rate.site-b"}}
+                                         {:type "text" :text "，場域 C 則為"}
+                                         {:type "fact" :attrs {:key "saving-rate.site-c"}}
+                                         {:type "text" :text "，明顯低於其他兩處，其原因說明如下。"}]}]}
+       :children
+       [{:node/id "t2" :node/kind :table :node/title "各場域量測結果" :node/label "tab:field-results"
+         :node/draft "由素材表「各場域量測結果」產生，欄位：場域、節電率"}
+        {:node/id "f1" :node/kind :figure :node/title "各場域節電率比較" :node/label "fig:saving"
+         :node/figure-file "figures/fig-saving.png" :node/draft "圖檔由使用者提供"}]}
+      {:node/id "p313" :node/kind :paragraph :node/title "異常狀況說明" :node/status :locked
+       :node/draft "場域 C 測試期間多次異常斷線；原因：控制器韌體版本"
+       :node/citations [{:block "b3"} {:block "b4"}]
+       :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "場域 C 於測試期間發生多次異常斷線，經工作會議討論，研判與控制器韌體版本有關。"}]}]}
+       :children
+       [{:node/id "f2" :node/kind :figure :node/title "斷線事件時間分布" :node/label "fig:outage"
+         :node/figure-file "figures/fig-outage.png" :node/draft "圖檔由使用者提供"}]}]}
+    {:node/id "s32" :node/kind :heading :node/name "效益分析" :node/draft "節能效益與維運成本評估"
+     :node/contract-items ["3.2"]
+     :children
+     [{:node/id "p321" :node/kind :paragraph :node/title "節能效益估算" :node/status :ai
+       :node/draft "依量測結果推估全年節電量"
+       :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "依量測結果推估，三處場域全年節電量如"} {:type "ref" :attrs {:label "tab:annual"}} {:type "text" :text "。"}]}]}
+       :children
+       [{:node/id "t3" :node/kind :table :node/title "年節電量推估" :node/label "tab:annual"
+         :node/draft "由素材表產生的獨立表格檔"}]}
+      {:node/id "p322" :node/kind :paragraph :node/title "維運成本比較" :node/status :none
+       :node/draft "與傳統路燈的維護成本比較"}]}
+    {:node/id "s33" :node/kind :heading :node/name "問題與改善" :node/draft "執行中遇到的問題與處理方式"
+     :children
+     [{:node/id "p331" :node/kind :paragraph :node/title "異常斷線處理" :node/status :none
+       :node/draft "場域 C 的處理經過與後續觀察"}]}]}
+
+  {:node/id "c4" :node/kind :heading :node/name "結論與建議" :node/draft "示範成果總結與擴大推動建議"
+   :node/contract-items ["4.1"]
+   :children
+   [{:node/id "s41" :node/kind :heading :node/name "結論" :node/draft "示範成果總結"
+     :children
+     [{:node/id "p411" :node/kind :paragraph :node/title "主要成果" :node/status :none
+       :node/draft "三處場域皆完成建置與測試"}
+      {:node/id "p412" :node/kind :paragraph :node/title "待改進事項" :node/status :none
+       :node/draft "場域條件對系統穩定性的影響"}]}
+    {:node/id "s42" :node/kind :heading :node/name "建議" :node/draft "擴大推動前的評估事項"
+     :children
+     [{:node/id "p421" :node/kind :paragraph :node/title "擴大推動建議" :node/status :none
+       :node/draft "建置前先行檢視場域供電條件"}]}]}]
+
+ :relations
+ [{:relation/from "p111" :relation/to "p112" :relation/type :causal}
+  {:relation/from "p211" :relation/to "p212" :relation/type :example}
+  {:relation/from "p2212a" :relation/to "p2212b" :relation/type :progression}
+  {:relation/from "p231" :relation/to "p232" :relation/type :progression}
+  {:relation/from "p311" :relation/to "p312" :relation/type :progression}
+  {:relation/from "p312" :relation/to "p313" :relation/type :causal}
+  {:relation/from "p321" :relation/to "p322" :relation/type :contrast}
+  {:relation/from "p411" :relation/to "p412" :relation/type :progression}
+  {:relation/from "p321" :relation/to "p312" :relation/type :summarizes}
+  {:relation/from "p411" :relation/to "p312" :relation/type :summarizes}]
+
+ :facts
+ [{:fact/key "saving-rate.site-a" :fact/label "節電率·A" :fact/value "47" :fact/unit "%" :fact/block "b2"}
+  {:fact/key "saving-rate.site-b" :fact/label "節電率·B" :fact/value "40" :fact/unit "%" :fact/block "b2"}
+  {:fact/key "saving-rate.site-c" :fact/label "節電率·C" :fact/value "18" :fact/unit "%" :fact/block "b2"}]
+
+ :blocks
+ [{:block/id "b1" :block/kind :para :block/status :confirmed
+   :block/title "測試期間與場域範圍" :block/source "期中報告.pdf" :block/location "p.12"
+   :block/text "三處示範場域的選定理由、測試起訖與量測頻率。"}
+  {:block/id "b2" :block/kind :table :block/status :confirmed
+   :block/title "各場域量測結果" :block/source "量測紀錄.xlsx" :block/location "工作表 2"
+   :table/columns ["場域" "節電率" "斷線次數"]
+   :table/rows [["場域 A" "47%" "2"] ["場域 B" "40%" "3"] ["場域 C" "18%" "17"]]}
+  {:block/id "b3" :block/kind :para :block/status :confirmed
+   :block/title "場域 C 異常斷線原因討論" :block/source "第 5 次工作會議紀錄.docx"
+   :block/text "會議討論場域 C 多次斷線的可能原因，初判與控制器韌體版本有關。"}
+  {:block/id "b4" :block/kind :para :block/status :candidate :block/ai-split true
+   :block/title "控制器韌體更新說明" :block/source "廠商測試報告.pdf" :block/location "p.3"
+   :block/text "廠商說明控制器韌體更新內容與更新排程。"}
+  {:block/id "b5" :block/kind :table :table/kind :entity :block/status :confirmed
+   :block/title "示範設備與場域" :block/source "設備清單.xlsx"
+   :block/text "名稱寫法以此表為準"
+   :table/columns ["名稱" "類型" "場域"]
+   :table/rows [["場域 A" "場域" "市區幹道"] ["場域 B" "場域" "住宅區"] ["場域 C" "場域" "郊區道路"]]}
+  {:block/id "b6" :block/kind :para :block/status :confirmed
+   :block/title "節能減碳政策摘要" :block/source "期中報告.pdf" :block/location "p.4"
+   :block/text "中央節能減碳政策對地方公共照明用電的要求。"}
+  {:block/id "b7" :block/kind :table :block/status :candidate
+   :block/title "年用電量推估" :block/source "量測紀錄.xlsx" :block/location "工作表 3"
+   :table/columns ["場域" "年用電 (kWh)"]
+   :table/rows [["場域 A" "192920"] ["場域 B" "156000"]]}
+  {:block/id "b8" :block/kind :para :block/status :confirmed
+   :block/title "故障通報時效" :block/source "期末量測紀錄.md" :block/location "p.3"
+   :block/text "導入自動通報後，故障平均發現時間由 3.5 天縮短為 4 小時。"}]}

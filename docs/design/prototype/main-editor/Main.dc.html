@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>主編輯畫面</title>
+<script src="./vendor/react.js"></script>
+<script src="./vendor/react-dom.js"></script>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&amp;family=Noto+Serif+TC:wght@400;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#27457F}a:hover{color:#1A2F58}
+@media (prefers-reduced-motion: reduce){.tree-inner{transition:none !important}}
+</style>
+</helmet>
+<div style="width: 100%; min-height: 980px; box-sizing: border-box; background: #F4F3EF; color: #1C2026; font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', system-ui, sans-serif; display: flex; flex-direction: column">
+
+<header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 12px 24px; background: #FFFFFF; border-bottom: 1px solid #DEDBD3">
+<div style="display: flex; flex-direction: column; gap: 2px; flex: 1 1 320px; min-width: 0">
+<span style="font-size: 12px; color: #59606A">OO 市智慧路燈示範計畫 · 期末報告雛形</span>
+<span style="font-size: 17px; font-weight: 700">{{ headerCrumb }}</span>
+</div>
+<div role="group" aria-label="檢視模式" style="display: flex; border: 1px solid #DEDBD3; border-radius: 8px; overflow: hidden">
+<button type="button" aria-pressed="true" style="font: inherit; font-size: 14px; padding: 10px 16px; min-height: 44px; border: 0; background: #1C2026; color: #FFFFFF; cursor: pointer">卡片樹</button>
+<button type="button" aria-pressed="false" style="font: inherit; font-size: 14px; padding: 10px 16px; min-height: 44px; border: 0; background: #FFFFFF; color: #1C2026; cursor: pointer">全文</button>
+</div>
+<a href="Propagation.dc.html" style="display: inline-flex; align-items: center; gap: 8px; min-height: 44px; box-sizing: border-box; padding: 0 14px; border-radius: 8px; background: #FBF1E4; color: #8A4608; font-size: 14px; font-weight: 500; text-decoration: none; border: 1px solid #EBCFA8">
+<span style="display: inline-flex; width: 20px; height: 20px; border-radius: 10px; background: #A1530A; color: #FFFFFF; font-size: 12px; align-items: center; justify-content: center">3</span>擴散建議待審</a>
+<button type="button" style="font: inherit; font-size: 14px; min-height: 44px; padding: 0 16px; border-radius: 8px; border: 1px solid #C9C5BA; background: #FFFFFF; color: #1C2026; cursor: pointer">交接檢查</button>
+<a href="Export.dc.html" style="display: inline-flex; align-items: center; min-height: 44px; box-sizing: border-box; padding: 0 18px; border-radius: 8px; background: #27457F; color: #FFFFFF; font-size: 14px; font-weight: 500; text-decoration: none">匯出 LaTeX</a>
+</header>
+
+<div style="display: flex; flex-wrap: wrap; flex: 1; align-items: stretch">
+
+<aside aria-label="素材庫" style="flex: 1 1 260px; box-sizing: border-box; padding: 20px; border-right: 1px solid #DEDBD3; background: #FAF9F6; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; align-items: baseline; justify-content: space-between">
+<h2 style="margin: 0; font-size: 15px; font-weight: 700">素材庫</h2>
+<span style="font-size: 12px; color: #59606A">已確認 38 / 共 46 區塊</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 4px">
+<label for="src-search" style="font-size: 12px; color: #59606A">搜尋素材</label>
+<input id="src-search" type="search" placeholder="關鍵字、檔名或欄位" style="font: inherit; font-size: 14px; min-height: 40px; box-sizing: border-box; padding: 0 12px; border: 1px solid #C9C5BA; border-radius: 8px; background: #FFFFFF; color: #1C2026">
+</div>
+<div role="group" aria-label="篩選" style="display: flex; flex-wrap: wrap; gap: 6px">
+<button type="button" aria-pressed="true" style="font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 16px; border: 1px solid #1C2026; background: #1C2026; color: #FFFFFF">全部</button>
+<button type="button" aria-pressed="false" style="font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 16px; border: 1px solid #C9C5BA; background: #FFFFFF; color: #1C2026">段落</button>
+<button type="button" aria-pressed="false" style="font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 16px; border: 1px solid #C9C5BA; background: #FFFFFF; color: #1C2026">表格</button>
+<button type="button" aria-pressed="false" style="font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 16px; border: 1px solid #EBCFA8; background: #FBF1E4; color: #8A4608">未確認 8</button>
+</div>
+<div style="display: flex; flex-direction: column; gap: 10px">
+<div style="background: #FFFFFF; border: 1px solid #DEDBD3; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #59606A">
+<span style="font-family: 'IBM Plex Mono', monospace; padding: 1px 6px; border-radius: 4px; background: #ECEAE4; color: #3E444C">段落</span>
+<span>期中報告.pdf · p.12</span>
+<span style="margin-left: auto; color: #0E6B54">已確認</span>
+</div>
+<span style="font-size: 14px; font-weight: 500">測試期間與場域範圍</span>
+<span style="font-size: 13px; color: #59606A; line-height: 1.6">三處示範場域的選定理由、測試起訖與量測頻率。</span>
+</div>
+<div style="background: #FFFFFF; border: 1px solid #27457F; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #59606A">
+<span style="font-family: 'IBM Plex Mono', monospace; padding: 1px 6px; border-radius: 4px; background: #E8EDF7; color: #27457F">表格</span>
+<span>量測紀錄.xlsx · 工作表 2</span>
+<span style="margin-left: auto; color: #0E6B54">已確認</span>
+</div>
+<span style="font-size: 14px; font-weight: 500">各場域量測結果</span>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: #DEDBD3; border: 1px solid #DEDBD3; border-radius: 6px; overflow: hidden; font-size: 12px">
+<span style="background: #F4F3EF; padding: 4px 6px; font-weight: 500">場域</span>
+<span style="background: #F4F3EF; padding: 4px 6px; font-weight: 500">節電率</span>
+<span style="background: #F4F3EF; padding: 4px 6px; font-weight: 500">斷線次數</span>
+<span style="background: #FFFFFF; padding: 4px 6px">場域 A</span>
+<span style="background: #FFFFFF; padding: 4px 6px; color: #59606A">[值]</span>
+<span style="background: #FFFFFF; padding: 4px 6px; color: #59606A">[值]</span>
+<span style="background: #FFFFFF; padding: 4px 6px">場域 B</span>
+<span style="background: #FFFFFF; padding: 4px 6px; color: #59606A">[值]</span>
+<span style="background: #FFFFFF; padding: 4px 6px; color: #59606A">[值]</span>
+</div>
+<span style="font-size: 12px; color: #59606A">3 欄 × 12 列 · 2 個儲存格已綁定為事實</span>
+</div>
+<div style="background: #FFFFFF; border: 1px solid #DEDBD3; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #59606A">
+<span style="font-family: 'IBM Plex Mono', monospace; padding: 1px 6px; border-radius: 4px; background: #ECEAE4; color: #3E444C">段落</span>
+<span>第 5 次工作會議紀錄.docx</span>
+<span style="margin-left: auto; color: #0E6B54">已確認</span>
+</div>
+<span style="font-size: 14px; font-weight: 500">場域 C 異常斷線原因討論</span>
+</div>
+<div style="background: #FFFFFF; border: 1px dashed #D9A86A; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #59606A">
+<span style="font-family: 'IBM Plex Mono', monospace; padding: 1px 6px; border-radius: 4px; background: #ECEAE4; color: #3E444C">段落</span>
+<span>廠商測試報告.pdf · p.3</span>
+<span style="margin-left: auto; color: #8A4608">未確認</span>
+</div>
+<span style="font-size: 14px; font-weight: 500">控制器韌體更新說明</span>
+<span style="font-size: 12px; color: #8A4608">AI 自動切出，尚未人工確認</span>
+</div>
+<div style="background: #FFFFFF; border: 1px solid #DEDBD3; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #59606A">
+<span style="font-family: 'IBM Plex Mono', monospace; padding: 1px 6px; border-radius: 4px; background: #E8EDF7; color: #27457F">實體表</span>
+<span>設備清單.xlsx</span>
+</div>
+<span style="font-size: 14px; font-weight: 500">示範設備與場域</span>
+<span style="font-size: 12px; color: #59606A">名稱寫法以此表為準</span>
+</div>
+</div>
+<button type="button" style="font: inherit; font-size: 14px; min-height: 44px; border-radius: 8px; border: 1px dashed #A8A397; background: transparent; color: #3E444C; cursor: pointer">＋ 匯入來源檔</button>
+</aside>
+
+<section aria-label="卡片樹" style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 20px 24px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px">
+<h2 style="margin: 0; font-size: 15px; font-weight: 700">卡片樹</h2>
+<span style="font-size: 12px; color: #59606A">拖曳卡片調整順序；拖到上一層的卡片上可移入該章節</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: #3E444C">
+<span style="display: inline-flex; align-items: center; gap: 6px"><span style="width: 14px; height: 10px; border: 2px solid #27457F; border-radius: 3px; background: #FFFFFF"></span>目前選取</span>
+<span style="display: inline-flex; align-items: center; gap: 6px"><span style="width: 14px; height: 10px; border: 1px solid #27457F; border-radius: 3px; background: #E8EDF7"></span>上層與下層</span>
+<span style="display: inline-flex; align-items: center; gap: 6px; opacity: 0.7"><span style="width: 14px; height: 10px; border: 1px solid #A8A397; border-radius: 3px; background: #FFFFFF"></span>同一層的兄弟</span>
+<span style="display: inline-flex; align-items: center; gap: 6px; opacity: 0.35"><span style="width: 14px; height: 10px; border: 1px solid #A8A397; border-radius: 3px; background: #FFFFFF"></span>其他內容</span>
+</div>
+<sc-if value="{{ hasToast }}" hint-placeholder-val="{{ false }}">
+<span role="status" style="align-self: flex-start; font-size: 13px; color: #8A4608; background: #FBF1E4; border: 1px solid #EBCFA8; padding: 6px 12px; border-radius: 8px">{{ toast }}</span>
+</sc-if>
+<div style="overflow-x: auto">
+<div style="position: relative; display: grid; grid-template-columns: 140px 170px 250px 170px; gap: 12px; min-width: 766px; align-items: start">
+
+<div style="display: flex; flex-direction: column; gap: 8px; min-width: 0">
+<span style="font-size: 12px; color: #59606A; padding-left: 2px">章</span>
+<div onDragOver="{{ edge0 }}" style="position: relative; height: 640px; overflow: hidden">
+<div class="tree-inner" style="{{ inner0 }}">
+<sc-for list="{{ c0 }}" as="it" hint-placeholder-count="4">
+<div draggable="true" onDragStart="{{ it.dragStart }}" onDragOver="{{ it.dragOver }}" onDrop="{{ it.drop }}" onDragEnd="{{ it.dragEnd }}" style="{{ it.style }}">
+<span aria-hidden="true" style="flex: none; width: 14px; display: flex; align-items: center; justify-content: center; color: #A8A397; cursor: grab"><svg width="8" height="14" viewBox="0 0 8 14" fill="currentColor"><circle cx="2" cy="2" r="1.2"></circle><circle cx="6" cy="2" r="1.2"></circle><circle cx="2" cy="7" r="1.2"></circle><circle cx="6" cy="7" r="1.2"></circle><circle cx="2" cy="12" r="1.2"></circle><circle cx="6" cy="12" r="1.2"></circle></svg></span>
+<button type="button" onClick="{{ it.pick }}" aria-current="{{ it.current }}" style="{{ it.btnStyle }}">
+<span style="{{ it.titleStyle }}">{{ it.title }}</span>
+<span style="{{ it.gistStyle }}">{{ it.gist }}</span>
+</button>
+</div>
+</sc-for>
+<span style="{{ mark0 }}"></span>
+</div>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px; min-width: 0">
+<span style="font-size: 12px; color: #59606A; padding-left: 2px">節</span>
+<div onDragOver="{{ edge1 }}" style="position: relative; height: 640px; overflow: hidden">
+<div class="tree-inner" style="{{ inner1 }}">
+<sc-for list="{{ c1 }}" as="it" hint-placeholder-count="6">
+<div draggable="true" onDragStart="{{ it.dragStart }}" onDragOver="{{ it.dragOver }}" onDrop="{{ it.drop }}" onDragEnd="{{ it.dragEnd }}" style="{{ it.style }}">
+<span aria-hidden="true" style="flex: none; width: 14px; display: flex; align-items: center; justify-content: center; color: #A8A397; cursor: grab"><svg width="8" height="14" viewBox="0 0 8 14" fill="currentColor"><circle cx="2" cy="2" r="1.2"></circle><circle cx="6" cy="2" r="1.2"></circle><circle cx="2" cy="7" r="1.2"></circle><circle cx="6" cy="7" r="1.2"></circle><circle cx="2" cy="12" r="1.2"></circle><circle cx="6" cy="12" r="1.2"></circle></svg></span>
+<button type="button" onClick="{{ it.pick }}" aria-current="{{ it.current }}" style="{{ it.btnStyle }}">
+<span style="{{ it.titleStyle }}">{{ it.title }}</span>
+<span style="{{ it.gistStyle }}">{{ it.gist }}</span>
+</button>
+</div>
+</sc-for>
+<span style="{{ mark1 }}"></span>
+</div>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px; min-width: 0">
+<span style="font-size: 12px; color: #59606A; padding-left: 2px">段落</span>
+<div onDragOver="{{ edge2 }}" style="position: relative; height: 640px; overflow: hidden">
+<div class="tree-inner" style="{{ inner2 }}">
+<sc-for list="{{ rels }}" as="r" hint-placeholder-count="0">
+<span style="{{ r.style }}"><span style="width: 1px; height: 20px; background: #A8A397"></span><span style="{{ r.chipStyle }}">{{ r.label }}</span></span>
+</sc-for>
+<sc-for list="{{ c2 }}" as="it" hint-placeholder-count="5">
+<div draggable="true" onDragStart="{{ it.dragStart }}" onDragOver="{{ it.dragOver }}" onDrop="{{ it.drop }}" onDragEnd="{{ it.dragEnd }}" style="{{ it.style }}">
+<span aria-hidden="true" style="flex: none; width: 14px; display: flex; align-items: center; justify-content: center; color: #A8A397; cursor: grab"><svg width="8" height="14" viewBox="0 0 8 14" fill="currentColor"><circle cx="2" cy="2" r="1.2"></circle><circle cx="6" cy="2" r="1.2"></circle><circle cx="2" cy="7" r="1.2"></circle><circle cx="6" cy="7" r="1.2"></circle><circle cx="2" cy="12" r="1.2"></circle><circle cx="6" cy="12" r="1.2"></circle></svg></span>
+<button type="button" onClick="{{ it.pick }}" aria-current="{{ it.current }}" style="{{ it.btnStyle }}">
+<span style="display: flex; align-items: center; gap: 6px; min-width: 0; width: 100%"><span style="{{ it.titleStyle }}">{{ it.title }}</span><span style="{{ it.pillStyle }}">{{ it.pillLabel }}</span></span>
+<span style="{{ it.gistStyle }}">{{ it.gist }}</span>
+</button>
+</div>
+</sc-for>
+<span style="{{ mark2 }}"></span>
+</div>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px; min-width: 0">
+<span style="font-size: 12px; color: #59606A; padding-left: 2px">表格與圖</span>
+<div onDragOver="{{ edge3 }}" style="position: relative; height: 640px; overflow: hidden">
+<div class="tree-inner" style="{{ inner3 }}">
+<sc-for list="{{ c3 }}" as="it" hint-placeholder-count="3">
+<div draggable="true" onDragStart="{{ it.dragStart }}" onDragOver="{{ it.dragOver }}" onDrop="{{ it.drop }}" onDragEnd="{{ it.dragEnd }}" style="{{ it.style }}">
+<span aria-hidden="true" style="flex: none; width: 14px; display: flex; align-items: center; justify-content: center; color: #A8A397; cursor: grab"><svg width="8" height="14" viewBox="0 0 8 14" fill="currentColor"><circle cx="2" cy="2" r="1.2"></circle><circle cx="6" cy="2" r="1.2"></circle><circle cx="2" cy="7" r="1.2"></circle><circle cx="6" cy="7" r="1.2"></circle><circle cx="2" cy="12" r="1.2"></circle><circle cx="6" cy="12" r="1.2"></circle></svg></span>
+<button type="button" onClick="{{ it.pick }}" aria-current="{{ it.current }}" style="{{ it.btnStyle }}">
+<span style="display: flex; align-items: center; gap: 6px; min-width: 0; width: 100%"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #27457F; flex: none">{{ it.tag }}</span><span style="{{ it.titleStyle }}">{{ it.title }}</span></span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #59606A">{{ it.label }}</span>
+</button>
+</div>
+</sc-for>
+<span style="{{ mark3 }}"></span>
+</div>
+</div>
+</div>
+
+<span aria-hidden="true" style="position: absolute; left: -10px; top: 336px; width: 4px; height: 24px; border-radius: 2px; background: #27457F"></span>
+</div>
+</div>
+</section>
+
+
+<aside aria-label="選取內容詳情" style="flex: 1 1 360px; box-sizing: border-box; padding: 20px 24px; background: #FFFFFF; border-left: 1px solid #DEDBD3; display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; flex-direction: column; gap: 4px">
+<span style="font-size: 12px; color: #59606A">{{ sel.kindLabel }} · {{ sel.crumb }}</span>
+<h2 style="margin: 0; font-size: 18px; font-weight: 700">{{ sel.title }}</h2>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px">
+<button type="button" onClick="{{ moveUp }}" disabled="{{ upDisabled }}" style="{{ upStyle }}">上移</button>
+<button type="button" onClick="{{ moveDown }}" disabled="{{ downDisabled }}" style="{{ downStyle }}">下移</button>
+<span style="font-size: 12px; color: #59606A">也可以直接拖曳卡片</span>
+</div>
+</div>
+
+<sc-if value="{{ isPara }}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<h3 style="margin: 0; font-size: 13px; font-weight: 500; color: #59606A">要點</h3>
+<div style="border: 1px solid #DEDBD3; border-radius: 8px; padding: 10px 12px; font-size: 14px; line-height: 1.7; white-space: pre-line">{{ sel.points }}</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 6px">
+<h3 style="margin: 0; font-size: 13px; font-weight: 500; color: #59606A">依據</h3>
+<sc-if value="{{ hasSrc }}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-direction: column; gap: 6px; font-size: 13px">
+<sc-for list="{{ sel.src }}" as="s" hint-placeholder-count="2">
+<div style="{{ s.rowStyle }}">
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #27457F">{{ s.kind }}</span>
+<span>{{ s.name }}</span>
+<span style="{{ s.whereStyle }}">{{ s.where }}</span>
+</div>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{ noSrc }}" hint-placeholder-val="{{ false }}">
+<span style="font-size: 13px; color: #8A4608; padding: 8px 10px; border-radius: 8px; background: #FBF1E4">尚未加入依據。從左側素材庫拖曳區塊到這張卡片。</span>
+</sc-if>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 6px">
+<h3 style="margin: 0; font-size: 13px; font-weight: 500; color: #59606A">關係</h3>
+<sc-if value="{{ hasRel }}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-direction: column; gap: 6px; font-size: 13px">
+<sc-for list="{{ sel.rels }}" as="r" hint-placeholder-count="2">
+<div style="display: flex; align-items: center; gap: 10px">
+<span style="color: #59606A; width: 42px; flex: none">{{ r.label }}</span>
+<span style="flex: 1 1 auto; min-width: 0">{{ r.name }}</span>
+<span style="{{ r.chipStyle }}">{{ r.rel }}</span>
+</div>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{ noRel }}" hint-placeholder-val="{{ false }}">
+<span style="font-size: 13px; color: #59606A">尚未標註與其他段落的關係</span>
+</sc-if>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: center; gap: 8px">
+<h3 style="margin: 0; font-size: 13px; font-weight: 500; color: #59606A">本文</h3>
+<span style="margin-left: auto; font-size: 12px; color: #59606A">文風：機關 · OO 局</span>
+</div>
+<sc-if value="{{ isB }}" hint-placeholder-val="{{ true }}">
+<p style="margin: 0; font-family: 'Noto Serif TC', 'Songti TC', serif; font-size: 15px; line-height: 2; color: #1C2026; padding: 14px 16px; border-radius: 8px; background: #FAF9F6; border: 1px solid #ECEAE4">三處示範場域於測試期間之量測結果如<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; padding: 1px 6px; border-radius: 4px; background: #ECEAE4; color: #3E444C">表 tab:field-results</span>所示。場域 A 與場域 B 之節電率分別為<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; padding: 1px 6px; border-radius: 4px; background: #E8EDF7; color: #27457F; border: 1px solid #C9D4EA">節電率·A</span>與<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; padding: 1px 6px; border-radius: 4px; background: #E8EDF7; color: #27457F; border: 1px solid #C9D4EA">節電率·B</span>，場域 C 則為<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; padding: 1px 6px; border-radius: 4px; background: #E8EDF7; color: #27457F; border: 1px solid #C9D4EA">節電率·C</span>，明顯低於其他兩處，其原因說明如下。</p>
+<span style="font-size: 12px; color: #59606A; line-height: 1.6">藍色標記為事實引用，數值來自素材表格的儲存格；灰色為 LaTeX 交互參照。</span>
+</sc-if>
+<sc-if value="{{ notB }}" hint-placeholder-val="{{ false }}">
+<p style="{{ sel.proseStyle }}">{{ sel.prose }}</p>
+</sc-if>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-top: 14px; border-top: 1px solid #ECEAE4">
+<span style="{{ sel.noteStyle }}">{{ sel.note }}</span>
+<button type="button" style="font: inherit; font-size: 14px; min-height: 44px; padding: 0 14px; border-radius: 8px; border: 1px solid #C9C5BA; background: #FFFFFF; color: #1C2026; cursor: pointer">鎖定</button>
+<button type="button" style="font: inherit; font-size: 14px; min-height: 44px; padding: 0 16px; border-radius: 8px; border: 0; background: #1C2026; color: #FFFFFF; cursor: pointer">{{ sel.genLabel }}</button>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ notPara }}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<h3 style="margin: 0; font-size: 13px; font-weight: 500; color: #59606A">內容摘要</h3>
+<div style="border: 1px solid #DEDBD3; border-radius: 8px; padding: 10px 12px; font-size: 14px; line-height: 1.7">{{ sel.gist }}</div>
+</div>
+<sc-if value="{{ isChild }}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<h3 style="margin: 0; font-size: 13px; font-weight: 500; color: #59606A">LaTeX label</h3>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; padding: 8px 10px; border-radius: 8px; background: #F4F3EF">{{ sel.label }}</span>
+<span style="font-size: 12px; color: #59606A; line-height: 1.6">匯出時產生獨立檔案，本文以 \ref 參照。</span>
+</div>
+</sc-if>
+<sc-if value="{{ hasKids }}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<h3 style="margin: 0; font-size: 13px; font-weight: 500; color: #59606A">下層內容</h3>
+<sc-for list="{{ sel.kids }}" as="k" hint-placeholder-count="3">
+<span style="font-size: 14px; padding: 8px 10px; border-radius: 8px; background: #F4F3EF">{{ k.title }}</span>
+</sc-for>
+</div>
+</sc-if>
+</div>
+</sc-if>
+</aside>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":980}}'>
+class Component extends DCLogic {
+  initTree() {
+    return [
+      { id: 'c1', name: '計畫概述', gist: '計畫緣起、目標與範圍', kids: [
+        { id: 's11', name: '計畫緣起', gist: '路燈耗電與維護回報的問題', kids: [
+          { id: 'p111', title: '政策背景', gist: '節能減碳政策對路燈的要求；本計畫的定位', status: 'ai' },
+          { id: 'p112', title: '現況問題', gist: '既有路燈耗電偏高；故障回報仰賴民眾通報', status: 'ai', rel: '因果' } ] },
+        { id: 's12', name: '計畫目標', gist: '示範場域與預期驗證的項目', kids: [
+          { id: 'p121', title: '計畫目標', gist: '建立三處示範場域；驗證節能與維運成效', status: 'ai' } ] } ] },
+      { id: 'c2', name: '執行方法', gist: '場域選定、系統建置與測試設計', kids: [
+        { id: 's21', name: '場域選定', gist: '三處示範場域的選定理由', kids: [
+          { id: 'p211', title: '選定原則', gist: '交通量、既有設備與供電條件', status: 'ai' },
+          { id: 'p212', title: '三處場域簡介', gist: '各場域的位置、規模與特性', status: 'human', rel: '舉例',
+            src: [{ kind: '表', name: '示範設備與場域', where: '設備清單.xlsx' }],
+            kids: [{ id: 'f3', tag: '圖', title: '示範場域位置', label: 'fig:site-map', gist: '圖檔 figures/fig-site-map.png，由使用者提供' }] } ] },
+        { id: 's22', name: '場域建置', gist: '設備與網路配置', kids: [
+          { id: 'p221', title: '設備配置', gist: '燈具、控制器與閘道器的配置方式', status: 'ai' } ] },
+        { id: 's23', name: '測試設計', gist: '量測項目、頻率與判定方式', kids: [
+          { id: 'p231', title: '量測項目', gist: '以節電率與斷線次數為主要指標', status: 'ai',
+            kids: [{ id: 't1', tag: '表', title: '量測項目一覽', label: 'tab:metrics', gist: '由素材表產生的獨立表格檔' }] },
+          { id: 'p232', title: '判定方式', gist: '正常運作與異常的判定標準', status: 'none', rel: '遞進' } ] } ] },
+      { id: 'c3', name: '執行成果', gist: '測試結果、效益分析，以及執行中的問題與改善', kids: [
+        { id: 's31', name: '測試結果', gist: '量測結果、場域比較與異常說明；契約項目 2.3', kids: [
+          { id: 'p311', title: '測試方法概述', gist: '三處場域的量測方式與設備；量測期間與資料頻率', status: 'ai',
+            src: [{ kind: '段', name: '測試期間與場域範圍', where: '期中報告 p.12' }],
+            prose: '本計畫於三處示範場域設置量測設備，於測試期間持續記錄各路燈之用電量與連線狀態，作為後續比較之基礎。' },
+          { id: 'p312', title: '各場域結果比較', gist: '以表格呈現三處場域的節電率；指出場域 C 明顯偏低，原因留待下一段', status: 'human', rel: '遞進', cited: '3.2 效益分析、摘要',
+            src: [{ kind: '表', name: '各場域量測結果', where: '欄：場域、節電率' }, { kind: '段', name: '測試期間與場域範圍', where: '期中報告 p.12' }],
+            kids: [
+              { id: 't2', tag: '表', title: '各場域量測結果', label: 'tab:field-results', gist: '由素材表「各場域量測結果」產生，欄位：場域、節電率' },
+              { id: 'f1', tag: '圖', title: '各場域節電率比較', label: 'fig:saving', gist: '圖檔 figures/fig-saving.png，由使用者提供' } ] },
+          { id: 'p313', title: '異常狀況說明', gist: '場域 C 測試期間多次異常斷線；原因：控制器韌體版本', status: 'locked', rel: '因果',
+            src: [{ kind: '段', name: '異常斷線原因討論', where: '第 5 次工作會議' }, { kind: '段', name: '控制器韌體更新說明', where: '未確認', warn: true }],
+            prose: '場域 C 於測試期間發生多次異常斷線，經工作會議討論，研判與控制器韌體版本有關。',
+            kids: [{ id: 'f2', tag: '圖', title: '斷線事件時間分布', label: 'fig:outage', gist: '圖檔 figures/fig-outage.png，由使用者提供' }] } ] },
+        { id: 's32', name: '效益分析', gist: '節能效益與維運成本評估；契約項目 2.4', kids: [
+          { id: 'p321', title: '節能效益估算', gist: '依量測結果推估全年節電量', status: 'ai',
+            kids: [{ id: 't3', tag: '表', title: '年節電量推估', label: 'tab:annual', gist: '由素材表產生的獨立表格檔' }] },
+          { id: 'p322', title: '維運成本比較', gist: '與傳統路燈的維護成本比較', status: 'none', rel: '對比' } ] },
+        { id: 's33', name: '問題與改善', gist: '執行中遇到的問題與處理方式', kids: [
+          { id: 'p331', title: '異常斷線處理', gist: '場域 C 的處理經過與後續觀察', status: 'none' } ] } ] },
+      { id: 'c4', name: '結論與建議', gist: '示範成果總結與擴大推動建議', kids: [
+        { id: 's41', name: '結論', gist: '示範成果總結', kids: [
+          { id: 'p411', title: '主要成果', gist: '三處場域皆完成建置與測試', status: 'none' },
+          { id: 'p412', title: '待改進事項', gist: '場域條件對系統穩定性的影響', status: 'none', rel: '遞進' } ] },
+        { id: 's42', name: '建議', gist: '擴大推動前的評估事項', kids: [
+          { id: 'p421', title: '擴大推動建議', gist: '建置前先行檢視場域供電條件', status: 'none' } ] } ] }
+    ];
+  }
+
+  renderVals() {
+    const S = this.state || {};
+    const tree = S.tree || this.initTree();
+    const selId = S.sel || 'p312';
+    const dragId = S.drag || null;
+    const over = S.over || null;
+    const bias = S.bias || [0, 0, 0, 0];
+    const PENDING = '待確認';
+
+    const CN = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+    const nodes = {};
+    const cols = [[], [], [], []];
+    let order = 0;
+    const walk = (n, level, parent, idx, chap) => {
+      n.level = level; n.parent = parent; n.order = order++;
+      if (level === 0) n.title = '第' + (CN[idx] || (idx + 1)) + '章 ' + n.name;
+      if (level === 1) n.title = chap + '.' + (idx + 1) + ' ' + n.name;
+      nodes[n.id] = n; cols[level].push(n);
+      (n.kids || []).forEach((k, i) => walk(k, level + 1, n.id, i, level === 0 ? idx + 1 : chap));
+    };
+    tree.forEach((n, i) => walk(n, 0, null, i, 0));
+
+    const isDesc = (aId, bId) => { let p = nodes[bId] ? nodes[bId].parent : null; while (p) { if (p === aId) return true; p = nodes[p].parent; } return false; };
+    const canDrop = (dId, tId, pos) => {
+      const d = nodes[dId]; const t = nodes[tId];
+      if (!d || !t || dId === tId || isDesc(dId, tId)) return false;
+      if (pos === 'into') return t.level === d.level - 1;
+      return t.level === d.level;
+    };
+    const locate = (list, id) => {
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].id === id) return { list: list, i: i, node: list[i] };
+        const r = locate(list[i].kids || [], id);
+        if (r) return r;
+      }
+      return null;
+    };
+    const markRels = (list, from, to) => {
+      for (let i = Math.max(0, from); i <= Math.min(list.length - 1, to); i++) {
+        if (list[i].level !== 2) continue;
+        if (i === 0) delete list[i].rel; else list[i].rel = PENDING;
+      }
+    };
+    const doMove = () => {
+      const st = this.state || {};
+      const d = st.drag; const o = st.over;
+      if (!d || !o || !canDrop(d, o.id, o.pos)) { this.setState({ drag: null, over: null, bias: [0, 0, 0, 0] }); return; }
+      const t = JSON.parse(JSON.stringify(tree));
+      const from = locate(t, d);
+      from.list.splice(from.i, 1);
+      const moved = from.node;
+      if (moved.level === 2) markRels(from.list, from.i, from.i);
+      let newList; let ni;
+      if (o.pos === 'into') {
+        const tg = locate(t, o.id).node;
+        tg.kids = tg.kids || [];
+        tg.kids.push(moved);
+        newList = tg.kids; ni = tg.kids.length - 1;
+      } else {
+        const tg = locate(t, o.id);
+        ni = tg.i + (o.pos === 'after' ? 1 : 0);
+        tg.list.splice(ni, 0, moved);
+        newList = tg.list;
+      }
+      if (moved.level === 2) markRels(newList, ni, ni + 1);
+      const tn = nodes[o.id];
+      const dest = o.pos === 'into' ? tn.title : (tn.parent ? nodes[tn.parent].title : '報告');
+      const msg = '已將「' + nodes[d].title + '」移到' + dest + (moved.level === 2 ? '；相鄰段落的關係標為「待確認」' : '；編號已自動更新');
+      this.setState({ tree: t, drag: null, over: null, bias: [0, 0, 0, 0], sel: d, toast: msg });
+    };
+
+    const A = nodes[selId] || nodes.p312;
+    const anc = {};
+    let p = A.parent;
+    while (p) { anc[p] = true; p = nodes[p].parent; }
+    const desc = {};
+    const mark = n => (n.kids || []).forEach(k => { desc[k.id] = true; mark(k); });
+    mark(A);
+    const role = n => {
+      if (n.id === A.id) return 'active';
+      if (anc[n.id] || desc[n.id]) return 'path';
+      if (n.level === A.level && n.parent === A.parent) return 'sib';
+      return 'other';
+    };
+    const op = { active: 1, path: 1, sib: 0.7, other: 0.35 };
+
+    const H = [80, 80, 100, 72];
+    const GIN = [10, 8, 30, 8];
+    const GOUT = 22;
+    const rels = [];
+    cols.forEach((col, l) => {
+      let y = 0;
+      let prev = null;
+      col.forEach(n => {
+        if (prev) { n.gapBefore = (n.parent === prev.parent ? GIN[l] : GOUT); y += n.gapBefore; } else n.gapBefore = 0;
+        n.top = y;
+        y += H[l];
+        if (l === 2 && n.rel && prev && prev.parent === n.parent) {
+          const o = Math.max(op[role(n)], op[role(prev)]);
+          const pend = n.rel === PENDING;
+          rels.push({
+            label: n.rel,
+            style: 'position: absolute; left: 22px; top: ' + (n.top - 25) + 'px; height: 20px; display: flex; align-items: center; gap: 6px; opacity: ' + o + '; transition: opacity 0.3s',
+            chipStyle: 'font-size: 11px; line-height: 18px; padding: 0 7px; border-radius: 10px; ' + (pend ? 'border: 1px dashed #D9A86A; background: #FBF1E4; color: #8A4608' : 'border: 1px solid #A8A397; background: #FFFFFF; color: #3E444C')
+          });
+        }
+        prev = n;
+      });
+    });
+
+    const V = 640;
+    const C = V / 2;
+    const offsets = cols.map((col, l) => {
+      let t;
+      let b;
+      if (l < A.level) {
+        const a = col.find(n => anc[n.id]);
+        t = a.top; b = a.top + H[l];
+      } else if (l === A.level) {
+        t = A.top; b = A.top + H[l];
+      } else {
+        const ds = col.filter(n => desc[n.id]);
+        if (ds.length) {
+          t = ds[0].top; b = ds[ds.length - 1].top + H[l];
+        } else {
+          const nx = col.find(n => n.order > A.order);
+          const last = col[col.length - 1];
+          const pos = nx ? nx.top - GOUT / 2 : (last ? last.top + H[l] + GOUT / 2 : 0);
+          t = pos; b = pos;
+        }
+      }
+      return ((b - t > V - 48) ? 24 - t : C - (t + b) / 2) + (bias[l] || 0);
+    });
+    const inner = l => 'position: absolute; left: 0; right: 0; top: 0; height: 1px; transform: translateY(' + offsets[l] + 'px); transition: transform ' + (dragId ? '0.1s linear' : '0.45s ease');
+    const edge = l => e => {
+      const st = this.state || {};
+      if (!st.drag) return;
+      const now = Date.now();
+      if (this._lastEdge && now - this._lastEdge < 40) return;
+      const r = e.currentTarget.getBoundingClientRect();
+      const y = e.clientY - r.top;
+      let dlt = 0;
+      if (y < 56) dlt = 16; else if (y > r.height - 56) dlt = -16;
+      if (!dlt) return;
+      this._lastEdge = now;
+      const b = (st.bias || [0, 0, 0, 0]).slice();
+      b[l] = (b[l] || 0) + dlt;
+      this.setState({ bias: b });
+    };
+    const markStyle = l => {
+      if (!over || over.pos === 'into' || !nodes[over.id] || nodes[over.id].level !== l) return 'display: none';
+      const t = nodes[over.id];
+      const col = cols[l];
+      const i = col.indexOf(t);
+      let y;
+      if (over.pos === 'before') y = t.top - (t.gapBefore || 8) / 2;
+      else { const nx = col[i + 1]; y = t.top + H[l] + (nx ? nx.gapBefore : 8) / 2; }
+      return 'position: absolute; left: 0; right: 0; top: ' + (y - 2) + 'px; height: 4px; border-radius: 2px; background: #27457F; pointer-events: none';
+    };
+
+    const pills = {
+      ai: { label: 'AI 生成', style: 'background: #E8EDF7; color: #27457F' },
+      human: { label: '人工改過', style: 'background: #E3F2EC; color: #0E6B54' },
+      locked: { label: '鎖定', style: 'background: #ECEAE4; color: #3E444C' },
+      none: { label: '尚未生成', style: 'background: #F4F3EF; color: #59606A; border: 1px dashed #A8A397' }
+    };
+    const cardStyle = (n, l) => {
+      const r = role(n);
+      const dragging = n.id === dragId;
+      const into = over && over.pos === 'into' && over.id === n.id;
+      const base = 'position: absolute; left: 0; right: 0; top: ' + n.top + 'px; height: ' + H[l] + 'px; box-sizing: border-box; display: flex; align-items: stretch; gap: 2px; border-radius: 8px; overflow: hidden; transition: opacity 0.3s, background-color 0.3s; opacity: ' + (dragging ? 0.3 : op[r]) + ';';
+      if (into) return base + ' background: #E8EDF7; border: 2px dashed #27457F; padding: 5px 7px 5px 1px; opacity: 1;';
+      if (dragging) return base + ' background: #FFFFFF; border: 1px dashed #27457F; padding: 6px 8px 6px 2px;';
+      if (r === 'active') return base + ' background: #FFFFFF; border: 2px solid #27457F; padding: 5px 7px 5px 1px;';
+      if (r === 'path') return base + ' background: #E8EDF7; border: 1px solid #27457F; padding: 6px 8px 6px 2px;';
+      if (r === 'sib') return base + ' background: #FFFFFF; border: 1px solid #A8A397; padding: 6px 8px 6px 2px;';
+      return base + ' background: #FFFFFF; border: 1px solid #DEDBD3; padding: 6px 8px 6px 2px;';
+    };
+    const BTN = 'flex: 1 1 auto; min-width: 0; margin: 0; padding: 2px 2px; border: 0; background: transparent; text-align: left; font: inherit; color: #1C2026; cursor: pointer; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; overflow: hidden';
+    const titleStyle = n => {
+      const r = role(n);
+      return 'font-size: 13px; font-weight: ' + (r === 'active' ? 700 : 500) + '; color: ' + (r === 'path' ? '#1A2F58' : '#1C2026') + '; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; max-width: 100%';
+    };
+    const gistStyle = n => 'font-size: 12px; line-height: 1.6; color: ' + (role(n) === 'path' ? '#2E4472' : '#3E444C') + '; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden';
+    const items = l => cols[l].map(n => ({
+      title: n.title,
+      gist: (n.gist || '').replace(/；/g, '，'),
+      tag: n.tag || '',
+      label: n.label || '',
+      style: cardStyle(n, l),
+      btnStyle: BTN,
+      titleStyle: titleStyle(n),
+      gistStyle: gistStyle(n),
+      pillLabel: n.status ? pills[n.status].label : '',
+      pillStyle: n.status ? 'margin-left: auto; flex: none; font-size: 11px; padding: 1px 7px; border-radius: 10px; ' + pills[n.status].style : 'display: none',
+      current: n.id === A.id ? 'true' : 'false',
+      pick: () => this.setState({ sel: n.id, bias: [0, 0, 0, 0], toast: null }),
+      dragStart: e => {
+        try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', n.id); } catch (x) {}
+        this.setState({ drag: n.id, over: null });
+      },
+      dragOver: e => {
+        const st = this.state || {};
+        const d = st.drag;
+        if (!d || !nodes[d]) return;
+        const dn = nodes[d];
+        let pos = null;
+        if (n.level === dn.level) {
+          const r = e.currentTarget.getBoundingClientRect();
+          pos = e.clientY < r.top + r.height / 2 ? 'before' : 'after';
+        } else if (n.level === dn.level - 1) pos = 'into';
+        if (pos && canDrop(d, n.id, pos)) {
+          e.preventDefault();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+          const o = st.over;
+          if (!o || o.id !== n.id || o.pos !== pos) this.setState({ over: { id: n.id, pos: pos } });
+        }
+      },
+      drop: e => { e.preventDefault(); doMove(); },
+      dragEnd: () => { const st = this.state || {}; if (st.drag) this.setState({ drag: null, over: null, bias: [0, 0, 0, 0] }); }
+    }));
+
+    const crumbs = [];
+    let q = A.parent;
+    while (q) { crumbs.unshift(nodes[q].title); q = nodes[q].parent; }
+    const isPara = A.level === 2;
+    const kindLabel = ['章', '節', '段落', A.tag === '圖' ? '圖' : '表格'][A.level];
+    const sibs = A.parent ? nodes[A.parent].kids : tree;
+    const idx = sibs.indexOf(A);
+    const relChip = rel => 'font-size: 12px; padding: 1px 8px; border-radius: 10px; flex: none; ' + (rel === PENDING ? 'border: 1px dashed #D9A86A; background: #FBF1E4; color: #8A4608' : 'border: 1px solid #A8A397');
+    const relRows = [];
+    if (isPara) {
+      if (A.rel && idx > 0) relRows.push({ label: '承接', name: sibs[idx - 1].title, rel: A.rel, chipStyle: relChip(A.rel) });
+      const nx = sibs[idx + 1];
+      if (nx && nx.rel) relRows.push({ label: '導向', name: nx.title, rel: nx.rel, chipStyle: relChip(nx.rel) });
+      if (A.cited) relRows.push({ label: '被引用', name: A.cited, rel: '摘要依賴', chipStyle: relChip('') });
+      (A.kids || []).forEach(k => relRows.push({ label: '下層', name: k.tag + ' ' + k.title, rel: k.label, chipStyle: relChip('') }));
+    }
+    const src = (A.src || []).map(s => ({
+      kind: s.kind, name: s.name, where: s.where,
+      rowStyle: 'display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; ' + (s.warn ? 'background: #FBF1E4; border: 1px dashed #D9A86A' : 'background: #F4F3EF'),
+      whereStyle: 'margin-left: auto; font-size: 12px; color: ' + (s.warn ? '#8A4608' : '#59606A')
+    }));
+    const st = A.status || 'none';
+    const notes = {
+      ai: '本文由 AI 生成，可直接修改',
+      human: '本文已手動修改；重新生成前會先顯示差異',
+      locked: '已鎖定，重新生成與擴散都不會改寫本段',
+      none: '尚未生成本文'
+    };
+    const prose = A.prose || (st === 'none' ? '尚未生成本文。寫好要點並加入依據後，按「生成本段」產生。' : (A.gist || '').replace(/；/g, '，') + '。');
+    const kidsList = (A.kids || []).map(k => ({ title: k.title }));
+    const sel = {
+      title: A.title,
+      kindLabel: kindLabel,
+      crumb: crumbs.length ? crumbs.join(' / ') : '報告',
+      points: (A.gist || '').split('；').join('\n'),
+      gist: (A.gist || '').replace(/；/g, '，'),
+      label: A.label || '',
+      src: src,
+      rels: relRows,
+      prose: prose,
+      proseStyle: 'margin: 0; font-family: \'Noto Serif TC\', \'Songti TC\', serif; font-size: 15px; line-height: 2; padding: 14px 16px; border-radius: 8px; background: #FAF9F6; border: 1px solid #ECEAE4; color: ' + (st === 'none' ? '#59606A' : '#1C2026'),
+      note: notes[st],
+      noteStyle: 'font-size: 12px; flex: 1 1 200px; color: ' + (st === 'human' ? '#0E6B54' : '#59606A'),
+      genLabel: st === 'none' ? '生成本段' : '重新生成',
+      kids: kidsList
+    };
+
+    const moveBy = k => () => {
+      const t = JSON.parse(JSON.stringify(tree));
+      const at = locate(t, A.id);
+      const j = at.i + k;
+      if (j < 0 || j >= at.list.length) return;
+      const tmp = at.list[j]; at.list[j] = at.list[at.i]; at.list[at.i] = tmp;
+      if (A.level === 2) markRels(at.list, Math.min(at.i, j), Math.max(at.i, j) + 1);
+      this.setState({ tree: t, bias: [0, 0, 0, 0], toast: '已將「' + A.title + '」' + (k < 0 ? '上移' : '下移') + (A.level === 2 ? '；相鄰段落的關係標為「待確認」' : '；編號已自動更新') });
+    };
+    const upDisabled = idx <= 0;
+    const downDisabled = idx >= sibs.length - 1;
+    const mvStyle = dis => 'font: inherit; font-size: 13px; min-height: 36px; padding: 0 12px; border-radius: 8px; border: 1px solid #C9C5BA; background: #FFFFFF; color: #1C2026; cursor: ' + (dis ? 'not-allowed; opacity: 0.4' : 'pointer');
+
+    return {
+      c0: items(0), c1: items(1), c2: items(2), c3: items(3),
+      rels: rels,
+      inner0: inner(0), inner1: inner(1), inner2: inner(2), inner3: inner(3),
+      edge0: edge(0), edge1: edge(1), edge2: edge(2), edge3: edge(3),
+      mark0: markStyle(0), mark1: markStyle(1), mark2: markStyle(2), mark3: markStyle(3),
+      sel: sel,
+      headerCrumb: crumbs.concat([A.title]).join(' / '),
+      isPara: isPara, notPara: !isPara,
+      isB: A.id === 'p312', notB: A.id !== 'p312',
+      hasSrc: src.length > 0, noSrc: src.length === 0,
+      hasRel: relRows.length > 0, noRel: relRows.length === 0,
+      isChild: A.level === 3,
+      hasKids: kidsList.length > 0,
+      toast: S.toast || '', hasToast: !!S.toast,
+      moveUp: moveBy(-1), moveDown: moveBy(1),
+      upDisabled: upDisabled, downDisabled: downDisabled,
+      upStyle: mvStyle(upDisabled), downStyle: mvStyle(downDisabled)
+    };
+  }
+}
+</script>
+</body>
+</html>

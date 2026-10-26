@@ -1,14 +1,25 @@
-/* 視覺規範見 docs/SPEC.md 第 6 節 */
+/* 視覺規範見 docs/SPEC.md 第 6 節；數值對照 docs/design/prototype 的主編輯畫面設計稿 */
 :root {
   --ground: #F4F3EF;
   --surface: #FFFFFF;
+  --surface-soft: #FAF9F6;
   --ink: #1C2026;
+  --ink-2: #3E444C;
   --muted: #59606A;
   --line: #DEDBD3;
+  --line-soft: #ECEAE4;
+  --line-strong: #C9C5BA;
+  --line-faint: #A8A397;
   --navy: #27457F;
+  --navy-deep: #1A2F58;
+  --navy-ink: #2E4472;
   --navy-tint: #E8EDF7;
+  --navy-line: #C9D4EA;
   --amber: #8A4608;
+  --amber-strong: #A1530A;
   --amber-bg: #FBF1E4;
+  --amber-line: #EBCFA8;
+  --amber-dash: #D9A86A;
   --teal: #0E6B54;
   --teal-bg: #E3F2EC;
 
@@ -28,13 +39,287 @@ html, body {
   font-family: var(--font-ui);
 }
 
-.topbar {
-  display: flex;
-  align-items: center;
-  min-height: var(--hit);
-  padding: 0 16px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
+button { font: inherit; color: inherit; }
+button:disabled { cursor: not-allowed; opacity: 0.45; }
+h2 { margin: 0; font-size: 15px; font-weight: 700; }
+h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
+
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.mono { font-family: var(--font-mono); }
+.text-navy { color: var(--navy); }
+.text-amber { color: var(--amber); }
+.text-teal { color: var(--teal); }
+.pre-line { white-space: pre-line; }
+
+.app { min-height: 100vh; display: flex; flex-direction: column; }
+.loading { padding: 48px; color: var(--muted); }
+
+/* ---------- 按鈕與標籤 ---------- */
+
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: var(--hit); padding: 0 16px;
+  border-radius: 8px; border: 1px solid var(--line-strong);
+  background: var(--surface); color: var(--ink);
+  font-size: 14px; cursor: pointer;
+}
+.btn-small { min-height: 36px; padding: 0 12px; font-size: 13px; }
+.btn-primary { background: var(--navy); border-color: var(--navy); color: #FFFFFF; font-weight: 500; }
+.btn-dark { background: var(--ink); border-color: var(--ink); color: #FFFFFF; }
+.btn-amber { background: var(--amber-bg); border-color: var(--amber-line); color: var(--amber); font-weight: 500; }
+.btn-dashed { border-style: dashed; border-color: var(--line-faint); background: transparent; color: var(--ink-2); justify-content: center; }
+.badge {
+  display: inline-flex; width: 20px; height: 20px; border-radius: 10px;
+  background: var(--amber-strong); color: #FFFFFF; font-size: 12px;
+  align-items: center; justify-content: center;
 }
 
-.brand { font-weight: 600; }
+.tag {
+  flex: none; white-space: nowrap;
+  font-family: var(--font-mono); font-size: 12px;
+  padding: 1px 6px; border-radius: 4px;
+  background: var(--line-soft); color: var(--ink-2);
+}
+.tag-navy { background: var(--navy-tint); color: var(--navy); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-btn {
+  font-size: 13px; padding: 6px 12px; min-height: 32px; border-radius: 16px;
+  border: 1px solid var(--line-strong); background: var(--surface); cursor: pointer;
+}
+.chip-btn[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: #FFFFFF; }
+.chip-btn-amber { border-color: var(--amber-line); background: var(--amber-bg); color: var(--amber); }
+.chip-btn-amber[aria-pressed="true"] { border-color: var(--amber); background: var(--amber); color: #FFFFFF; }
+
+.chip {
+  font-family: var(--font-mono); font-size: 12px;
+  padding: 1px 6px; margin: 0 2px; border-radius: 4px;
+  white-space: nowrap;
+}
+.chip-fact { background: var(--navy-tint); color: var(--navy); border: 1px solid var(--navy-line); }
+.chip-ref { background: var(--line-soft); color: var(--ink-2); }
+.chip-warn { background: var(--amber-bg); color: var(--amber); border: 1px dashed var(--amber-dash); }
+
+.pill { margin-left: auto; flex: none; font-size: 11px; padding: 1px 7px; border-radius: 10px; }
+.pill-ai { background: var(--navy-tint); color: var(--navy); }
+.pill-human { background: var(--teal-bg); color: var(--teal); }
+.pill-locked { background: var(--line-soft); color: var(--ink-2); }
+.pill-none { background: var(--ground); color: var(--muted); border: 1px dashed var(--line-faint); }
+
+.notice-amber {
+  font-size: 13px; color: var(--amber);
+  padding: 8px 10px; border-radius: 8px; background: var(--amber-bg);
+}
+
+/* ---------- 頂部列 ---------- */
+
+.topbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px;
+  padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--line);
+}
+.topbar-title { display: flex; flex-direction: column; gap: 2px; flex: 1 1 320px; min-width: 0; }
+.crumb { font-size: 17px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.segmented { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.segmented button {
+  font-size: 14px; padding: 10px 16px; min-height: var(--hit);
+  border: 0; background: var(--surface); color: var(--ink); cursor: pointer;
+}
+.segmented button[aria-pressed="true"] { background: var(--ink); color: #FFFFFF; }
+
+/* ---------- 三欄版面：寬度不足時依序換行 ---------- */
+
+.workspace { display: flex; flex-wrap: wrap; flex: 1; align-items: stretch; }
+
+.panel-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; }
+
+/* ---------- 素材庫 ---------- */
+
+.library {
+  flex: 1 1 260px; max-width: 100%; padding: 20px;
+  border-right: 1px solid var(--line); background: var(--surface-soft);
+  display: flex; flex-direction: column; gap: 14px;
+}
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field input {
+  font: inherit; font-size: 14px; min-height: 40px; padding: 0 12px;
+  border: 1px solid var(--line-strong); border-radius: 8px;
+  background: var(--surface); color: var(--ink);
+}
+.blocks { display: flex; flex-direction: column; gap: 10px; }
+.block {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px; display: flex; flex-direction: column; gap: 6px;
+}
+.block-cited { border-color: var(--navy); }
+.block-candidate { border: 1px dashed var(--amber-dash); }
+.block-meta { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
+.block-meta > span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.block-status { margin-left: auto; flex: none; }
+.block-title { font-size: 14px; font-weight: 500; }
+.block-text {
+  font-size: 13px; color: var(--muted); line-height: 1.6;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.table-preview {
+  display: grid; gap: 1px; background: var(--line);
+  border: 1px solid var(--line); border-radius: 6px; overflow: hidden; font-size: 12px;
+}
+.table-preview span { background: var(--surface); padding: 4px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.table-preview .th { background: var(--ground); font-weight: 500; }
+
+/* ---------- 卡片樹 ---------- */
+
+.tree-panel {
+  flex: 999 1 560px; min-width: 0; padding: 20px 24px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { display: inline-block; width: 14px; height: 10px; border: 1px solid var(--line-faint); border-radius: 3px; background: var(--surface); }
+.swatch-active { border: 2px solid var(--navy); }
+.swatch-path { border-color: var(--navy); background: var(--navy-tint); }
+
+.toast {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--amber); background: var(--amber-bg);
+  border: 1px solid var(--amber-line); padding: 4px 4px 4px 12px; border-radius: 8px;
+}
+.toast-close { border: 0; background: transparent; color: var(--amber); font-size: 16px; min-width: 32px; min-height: 32px; cursor: pointer; }
+
+/* 一次顯示四欄：欄寬依卡片樹區域寬度均分，最窄 170px */
+.tree-scroll { overflow-x: auto; padding-bottom: 8px; container-type: inline-size; }
+.tree-columns {
+  display: grid; grid-auto-flow: column; align-items: start;
+  grid-auto-columns: max(170px, calc((100cqw - 36px) / 4));
+}
+.tree-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.col-label { padding-left: 2px; }
+.col-viewport { position: relative; overflow: hidden; }
+.tree-inner {
+  position: absolute; left: 0; right: 0; top: 0; height: 1px;
+  transition: transform 0.45s ease;
+}
+.is-dragging .tree-inner { transition: transform 0.1s linear; }
+
+.card {
+  position: absolute; left: 0; right: 0;
+  display: flex; align-items: stretch; gap: 2px;
+  border-radius: 8px; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--line);
+  padding: 6px 8px 6px 2px;
+  transition: opacity 0.3s, background-color 0.3s;
+}
+.card-active { border: 2px solid var(--navy); padding: 5px 7px 5px 1px; }
+.card-path { background: var(--navy-tint); border-color: var(--navy); }
+.card-sibling { border-color: var(--line-faint); }
+.card-kind-heading .card-title { font-weight: 700; }
+.card-kind-intro { border-style: dashed; }
+.card-dragging { border: 1px dashed var(--navy); }
+.card-into { background: var(--navy-tint); border: 2px dashed var(--navy); padding: 5px 7px 5px 1px; }
+
+.grip { flex: none; width: 14px; display: flex; align-items: center; justify-content: center; color: var(--line-faint); cursor: grab; }
+.card-body {
+  flex: 1 1 auto; min-width: 0; margin: 0; padding: 2px;
+  border: 0; background: transparent; text-align: left; cursor: pointer;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px; overflow: hidden;
+}
+.card-line { display: flex; align-items: center; gap: 6px; min-width: 0; width: 100%; }
+.card-title {
+  font-size: 13px; font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0;
+}
+.card-active .card-title { font-weight: 700; }
+.card-path .card-title { color: var(--navy-deep); }
+.card-gist {
+  font-size: 12px; line-height: 1.6; color: var(--ink-2);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.card-path .card-gist { color: var(--navy-ink); }
+
+.relation {
+  position: absolute; left: 22px; height: 20px;
+  display: flex; align-items: center; gap: 6px;
+  transition: opacity 0.3s; pointer-events: none;
+}
+.relation-line { width: 1px; height: 20px; background: var(--line-faint); }
+.relation-chip {
+  font-size: 11px; line-height: 18px; padding: 0 7px; border-radius: 10px; flex: none;
+  border: 1px solid var(--line-faint); background: var(--surface); color: var(--ink-2);
+}
+.relation-pending { border: 1px dashed var(--amber-dash); background: var(--amber-bg); color: var(--amber); }
+
+.insert-marker {
+  position: absolute; left: 0; right: 0; height: 4px; border-radius: 2px;
+  background: var(--navy); pointer-events: none;
+}
+
+/* ---------- 全文視圖 ---------- */
+
+.fulltext { flex: 999 1 560px; min-width: 0; padding: 20px 24px; }
+.fulltext-page {
+  max-width: 760px; margin: 0 auto; padding: 32px 40px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+}
+.ft-heading { font-family: var(--font-prose); font-weight: 600; margin: 28px 0 12px; }
+h2.ft-heading { font-size: 22px; }
+h3.ft-heading { font-size: 18px; color: var(--ink); }
+h4.ft-heading, h5.ft-heading { font-size: 16px; }
+.ft-block { margin: 0 -12px; padding: 2px 12px; border-radius: 8px; cursor: pointer; }
+.ft-block:hover { background: var(--surface-soft); }
+.ft-selected { background: var(--navy-tint); }
+.ft-selected:hover { background: var(--navy-tint); }
+.ft-intro { cursor: default; color: var(--ink-2); }
+.ft-float { display: flex; align-items: center; gap: 8px; margin: 8px 0 16px; font-size: 13px; color: var(--muted); }
+
+.prose { margin: 0 0 12px; font-family: var(--font-prose); font-size: 15px; line-height: 2; }
+.prose:last-child { margin-bottom: 0; }
+
+/* ---------- 詳情面板 ---------- */
+
+.detail {
+  flex: 1 1 360px; max-width: 100%; padding: 20px 24px;
+  background: var(--surface); border-left: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 18px;
+}
+.detail-head { display: flex; flex-direction: column; gap: 4px; }
+.detail-head h2 { font-size: 18px; }
+.move-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.detail-section { display: flex; flex-direction: column; gap: 6px; }
+.section-head { display: flex; align-items: center; gap: 8px; }
+.section-head .small { margin-left: auto; }
+.boxed { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 14px; line-height: 1.7; }
+.boxed-muted { font-size: 13px; padding: 8px 10px; border-radius: 8px; background: var(--ground); }
+
+.cites { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.cite { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--ground); }
+.cite-warn { background: var(--amber-bg); border: 1px dashed var(--amber-dash); }
+.cite-where { margin-left: auto; font-size: 12px; color: var(--muted); }
+
+.rel-rows { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.rel-row { display: flex; align-items: center; gap: 10px; }
+.rel-kind { color: var(--muted); width: 42px; flex: none; }
+.rel-name { flex: 1 1 auto; min-width: 0; }
+
+.prose-box { padding: 14px 16px; border-radius: 8px; background: var(--surface-soft); border: 1px solid var(--line-soft); }
+
+.detail-footer {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding-top: 14px; border-top: 1px solid var(--line-soft);
+}
+.detail-footer > .small { flex: 1 1 200px; }
+
+.kids { display: flex; flex-direction: column; gap: 6px; }
+.kid {
+  text-align: left; font-size: 14px; padding: 8px 10px; min-height: 40px;
+  border-radius: 8px; border: 0; background: var(--ground); cursor: pointer;
+}
+.kid:hover { background: var(--navy-tint); }
+.add-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+
+:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tree-inner, .card, .relation { transition: none !important; }
+}
