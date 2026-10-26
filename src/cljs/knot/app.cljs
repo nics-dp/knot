@@ -220,13 +220,15 @@
                  (.text res)
                  (throw (js/Error. (str "載入範例報告失敗：" (.-status res)))))))
       (.then (fn [text]
-               ;; ?select=<id>、?page=library|tree|fulltext 指定初始畫面，方便對照設計稿與截圖
+               ;; ?select=<id>、?page=library|tree|fulltext、?drag=<id> 指定初始畫面，方便對照設計稿與截圖
                (let [params (js/URLSearchParams. js/location.search)
                      select (.get params "select")
-                     page (.get params "page")]
+                     page (.get params "page")
+                     drag (.get params "drag")]
                  (reset! store (cond-> (ui/init-state (reader/read-string text))
                                  select (ui/select select)
-                                 page (ui/set-page (keyword page)))))))
+                                 page (ui/set-page (keyword page))
+                                 drag (ui/drag-start drag))))))
       (.catch (fn [err] (js/console.error err)))))
 
 (defn init []

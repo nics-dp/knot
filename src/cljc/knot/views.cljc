@@ -254,7 +254,7 @@
         sel-depth (tree/depth nodes selected)
         drag-depth (when drag (tree/depth nodes drag))]
     [:section.tree-panel {:aria-label "卡片"}
-     [:div.panel-head
+     [:header.board-head
       [:h2.area-title "卡片"]
       (tree-toolbar state)
       [:div.legend {:aria-label "圖例"}
@@ -262,8 +262,9 @@
        [:span [:i.swatch.swatch-path] "上層與下層"]
        [:span [:i.swatch.swatch-sibling] "同一層"]
        [:span [:i.swatch.swatch-other] "其他"]]]
-     (when-not drag (toast-view toast))
-     [:div.tree-scroll {:class (when drag "is-dragging")
+     [:div.board
+      (when-not drag (toast-view toast))
+      [:div.tree-scroll {:class (when drag "is-dragging")
                         :replicant/on-mount [[:dom/observe-viewport]]
                         :replicant/on-render [[:dom/reveal-columns sel-depth selected (count cols)]]}
       [:div.tree-columns {:style {:column-gap (str column-gap "px")}}
@@ -277,13 +278,13 @@
                                     (dec drag-depth) "col-drop-into"
                                     "col-drop-none"))}
           [:div.col-head
+           [:span.col-level (inc i)]
            [:span.col-name (case i 0 "章" 1 "節" (str "第 " (inc i) " 層"))]
-           [:span.col-count (count col)]
-           (when drag
-             (condp = (inc i)
-               drag-depth [:span.col-drop-tag "調整順序"]
-               (dec drag-depth) [:span.col-drop-tag "移入"]
-               nil))]
+           ;; 拖曳時以可否放置的標籤取代卡片數
+           (condp = (when drag (inc i))
+             drag-depth [:span.col-drop-tag "調整順序"]
+             (some-> drag-depth dec) [:span.col-drop-tag "移入"]
+             [:span.col-count (str (count col) " 張")])]
           [:div.col-viewport {:on {:wheel [[:ui/wheel-column i [:event/wheel-delta] lo hi]]
                                    :dragover [[:drag/over i [:event/viewport-y] translate]
                                               [:ui/edge-scroll i [:event/edge-delta] lo hi]]
@@ -293,7 +294,7 @@
             (for [c col]
               (tree-card {:nodes nodes :title title :role (roles (:id c)) :drag drag :over over} c))
             (when (and over (some #(= (:id over) (:id %)) col))
-              (insert-marker col over))]]])]]]))
+              (insert-marker col over))]]])]]]]))
 
 ;; ---------------------------------------------------------------------------
 ;; 全文視圖

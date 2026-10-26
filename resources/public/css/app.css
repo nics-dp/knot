@@ -196,28 +196,44 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 
 /* ---------- 卡片樹 ---------- */
 
+/* 卡片看板：冷灰藍底色，與頁面暖色底、編輯區白底區隔 */
 .tree-panel {
-  flex: 1 1 560px; min-width: 0; padding: 20px 24px 12px;
-  display: flex; flex-direction: column; gap: 12px; overflow: hidden;
+  --board-bg: #E6EAF0;
+  --lane-bg: #F2F4F8;
+  --lane-line: #D3DAE5;
+  --lane-ink: #33415C;
+  flex: 1 1 560px; min-width: 0;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--board-bg);
 }
-.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-/* 卡片區標題列：標題、新增刪除、圖例 */
-.tree-panel .panel-head { justify-content: flex-start; align-items: center; gap: 12px 20px; }
-.area-title { font-size: 20px; font-weight: 700; color: var(--ink); }
+.board-head {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+  padding: 12px 20px; background: var(--surface);
+  border-bottom: 1px solid var(--lane-line);
+  box-shadow: 0 1px 3px rgba(28, 32, 38, 0.05);
+}
+.area-title {
+  display: inline-flex; align-items: center; gap: 10px;
+  font-size: 17px; font-weight: 700; color: var(--ink); margin-right: 4px;
+}
+.area-title::before {
+  content: ""; width: 4px; height: 20px; border-radius: 2px; background: var(--navy);
+}
 .legend {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-left: auto;
-  font-size: 13px; color: var(--ink); padding: 8px 14px;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin-left: auto;
+  font-size: 12px; color: var(--ink-2);
 }
-.legend span { display: inline-flex; align-items: center; gap: 8px; }
-.swatch { display: inline-block; width: 22px; height: 14px; border: 1px solid var(--line-faint); border-radius: 4px; background: var(--surface); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { display: inline-block; width: 18px; height: 12px; border: 1px solid var(--line-faint); border-radius: 3px; background: var(--surface); }
 .swatch-active { border: 2px solid var(--navy); }
 .swatch-path { border-color: var(--navy); background: var(--navy-tint); }
 .swatch-sibling { opacity: 0.7; }
 .swatch-other { opacity: 0.35; }
 
+.board { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 10px; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .toast {
-  align-self: flex-start; display: inline-flex; align-items: center; gap: 8px;
+  align-self: flex-start; background-clip: padding-box; display: inline-flex; align-items: center; gap: 8px;
   font-size: 13px; color: var(--amber); background: var(--amber-bg);
   border: 1px solid var(--amber-line); padding: 4px 4px 4px 12px; border-radius: 8px;
 }
@@ -229,23 +245,31 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
   display: grid; grid-auto-flow: column; grid-auto-rows: 100%; height: 100%;
   grid-auto-columns: max(170px, calc((100cqw - 36px) / 4));
 }
-.tree-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
-/* 欄位標頭 */
+/* 每一欄是一條泳道 */
+.tree-col {
+  display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  background: var(--lane-bg); border-radius: 12px;
+  box-shadow: inset 0 0 0 1px var(--lane-line);
+  transition: background-color 0.2s, box-shadow 0.2s, opacity 0.2s;
+}
 .col-head {
   display: flex; align-items: center; gap: 8px; flex: none;
-  padding: 8px 12px; border-radius: 8px;
-  background: var(--ink); color: #FFFFFF;
+  padding: 10px 12px; border-bottom: 1px solid var(--lane-line);
+  color: var(--lane-ink);
 }
-.col-name { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; }
-.col-count {
-  font-size: 12px; font-weight: 500; line-height: 18px; padding: 0 7px; border-radius: 9px;
-  background: rgba(255, 255, 255, 0.18);
+.col-level {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 11px;
+  background: var(--lane-ink); color: #FFFFFF; font-size: 12px; font-weight: 700;
 }
+.col-name { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.col-count { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .col-drop-tag {
-  margin-left: auto; font-size: 12px; font-weight: 500; padding: 1px 8px; border-radius: 9px;
-  background: #FFFFFF; color: var(--navy);
+  margin-left: auto; white-space: nowrap; flex: none;
+  font-size: 12px; font-weight: 500; padding: 1px 8px; border-radius: 9px;
+  background: var(--navy); color: #FFFFFF;
 }
-.col-viewport { position: relative; overflow: hidden; flex: 1; min-height: 0; overscroll-behavior: contain; }
+.col-viewport { position: relative; overflow: hidden; flex: 1; min-height: 0; overscroll-behavior: contain; margin: 0 8px; }
 .tree-inner {
   position: absolute; left: 0; right: 0; top: 0; height: 1px;
   transition: transform 0.45s ease;
@@ -258,7 +282,8 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
   border-radius: 8px; overflow: hidden;
   background: var(--surface); border: 1px solid var(--line);
   padding: 6px 8px 6px 2px;
-  transition: opacity 0.3s, background-color 0.3s;
+  box-shadow: 0 1px 2px rgba(28, 32, 38, 0.06);
+  transition: opacity 0.3s, background-color 0.3s, box-shadow 0.2s;
 }
 .card-active { border: 2px solid var(--navy); padding: 5px 7px 5px 1px; }
 .card-path { background: var(--navy-tint); border-color: var(--navy); }
@@ -301,12 +326,14 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 .relation-pending { border: 1px dashed var(--amber-dash); background: var(--amber-bg); color: var(--amber); }
 
 /* 拖曳中：可放置的欄位標示出來，其他欄淡出 */
-.tree-col .col-viewport { border-radius: 10px; transition: background-color 0.2s, opacity 0.2s; }
-.col-drop-sibling .col-viewport { background: rgba(232, 237, 247, 0.6); box-shadow: inset 0 0 0 2px var(--navy-line); }
-.col-drop-into .col-viewport { box-shadow: inset 0 0 0 2px var(--navy-line); outline: 2px dashed var(--navy-line); outline-offset: -6px; }
-.col-drop-none .col-viewport { opacity: 0.4; }
-.col-drop-sibling .col-head, .col-drop-into .col-head { background: var(--navy); }
+/* 拖曳中：整條泳道標示可否放置 */
+.col-drop-sibling { background: var(--navy-tint); box-shadow: inset 0 0 0 2px var(--navy); }
+.col-drop-into { box-shadow: inset 0 0 0 2px var(--navy-line); outline: 2px dashed var(--navy); outline-offset: -2px; }
+.col-drop-none { opacity: 0.45; }
+.col-drop-sibling .col-level, .col-drop-into .col-level { background: var(--navy); }
 .card { cursor: grab; }
+.card:hover { box-shadow: 0 2px 8px rgba(28, 32, 38, 0.12); }
+.card-active { box-shadow: 0 4px 14px rgba(39, 69, 127, 0.18); }
 .card:active { cursor: grabbing; }
 
 .insert-marker {
