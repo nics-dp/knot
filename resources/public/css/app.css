@@ -363,12 +363,39 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 
 /* ---------- 全文視圖 ---------- */
 
-.fulltext { flex: 1 1 560px; min-width: 0; padding: 20px 24px; overflow-y: auto; }
+/* 全文頁：左側大綱、中間全文（靠左、限制行寬）、右側固定的編輯區 */
+.fulltext { flex: 1 1 560px; min-width: 0; padding: 20px 24px 40px; overflow-y: auto; scroll-padding: 24px; }
 .fulltext-page {
-  max-width: 760px; margin: 0 auto; padding: 32px 40px;
+  max-width: 760px; margin: 0; padding: 32px 40px;
   background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
 }
-.ft-heading { font-family: var(--font-prose); font-weight: 600; margin: 28px 0 12px; }
+.outline {
+  flex: 0 0 248px; min-width: 0; overflow-y: auto; padding: 20px 12px 40px 16px;
+  border-right: 1px solid var(--line); background: var(--surface-soft);
+}
+.outline-head { font-size: 13px; font-weight: 700; color: var(--muted); padding: 0 8px 8px; }
+.outline-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.outline-item {
+  display: block; width: 100%; text-align: left; font: inherit; font-size: 14px; line-height: 1.5;
+  padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-2);
+  cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.outline-item:hover { background: var(--ground); color: var(--ink); }
+.outline-d1 { font-weight: 700; color: var(--ink); margin-top: 8px; }
+.outline-d2 { padding-left: 20px; }
+.outline-d3 { padding-left: 34px; font-size: 13px; }
+.outline-d4 { padding-left: 48px; font-size: 13px; }
+/* 選取的卡片所在的章節：左側標線；選取的標題本身：底色 */
+.outline-here { color: var(--navy); box-shadow: inset 3px 0 0 var(--navy); border-radius: 0 6px 6px 0; }
+.outline-selected { background: var(--navy-tint); font-weight: 700; }
+/* 全文頁的編輯區固定在右側，不覆蓋全文 */
+.editor.editor-docked {
+  position: static; flex: 0 0 min(520px, 40%); width: auto; z-index: auto;
+  box-shadow: none; animation: none;
+}
+.ft-heading { cursor: pointer; border-radius: 6px; margin-left: -12px; margin-right: -12px; padding: 2px 12px; }
+.ft-heading:hover { background: var(--surface-soft); }
+.ft-heading { font-family: var(--font-prose); font-weight: 600; margin-top: 28px; margin-bottom: 12px; }
 h2.ft-heading { font-size: 22px; }
 h3.ft-heading { font-size: 18px; color: var(--ink); }
 h4.ft-heading, h5.ft-heading { font-size: 16px; }
@@ -715,7 +742,7 @@ h4.ft-heading, h5.ft-heading { font-size: 16px; }
 @media (max-width: 960px) {
   .app { height: auto; min-height: 100vh; overflow: visible; }
   .workspace, .library-page { flex-wrap: wrap; }
-  .tree-panel, .editor, .fulltext, .lib-filters, .lib-list, .lib-detail { flex: 1 1 100%; min-width: 0; overflow: visible; }
+  .tree-panel, .editor, .fulltext, .outline, .lib-filters, .lib-list, .lib-detail { flex: 1 1 100%; min-width: 0; overflow: visible; }
   .editor { position: static; width: auto; box-shadow: none; animation: none; }
   .editor-rail { position: static; width: auto; flex-direction: row; border-radius: 0; box-shadow: none; border: 0; border-top: 1px solid var(--line); }
   .tree-scroll { flex: none; height: 70vh; }

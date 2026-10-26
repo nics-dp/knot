@@ -45,3 +45,14 @@
       (is (str/includes? html ":del"))
       (is (str/includes? html "舊"))
       (is (str/includes? html ":ins")))))
+
+(deftest fulltext-page-test
+  (let [html (render (ui/set-page state :fulltext))]
+    (testing "全文頁有大綱，列出標題"
+      (is (str/includes? html "outline"))
+      (is (str/includes? html "第一章 甲")))
+    (testing "編輯區固定在右側，即使卡片頁收合也顯示"
+      (is (true? (get-in state [:ui :editor-collapsed])))
+      (is (str/includes? html "editor-docked"))
+      (is (not (str/includes? html "editor-rail")))
+      (is (not (str/includes? html "收合編輯區"))))))

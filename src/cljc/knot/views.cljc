@@ -15,16 +15,13 @@
   60)
 
 (def status-pill
-  {:ai {:label "AI 生成" :class "pill-ai"}
-   :human {:label "人工改過" :class "pill-human"}
-   :locked {:label "鎖定" :class "pill-locked"}
-   :none {:label "尚未生成" :class "pill-none"}})
+  "卡片與編輯區名稱旁的狀態標籤：只標出尚未生成的段落。
+  AI 生成與人工改過仍記錄在 :node/status（重新生成時人工改過的段落要先顯示差異），但不標示。"
+  {:none {:label "尚未生成" :class "pill-none"}})
 
 (def status-note
-  {:ai "本文由 AI 生成，可直接修改"
-   :human "本文已手動修改；重新生成前會先顯示差異"
-   :locked "已鎖定：本文不能修改，重新生成與修改建議也不會改寫本段"
-   :none "尚未生成本文"})
+  "本文下方的狀態說明：只在鎖定時顯示。"
+  {:locked "已鎖定：本文不能修改，重新生成與修改建議也不會改寫本段"})
 
 (def relation-label context/relation-label)
 
@@ -324,9 +321,36 @@
 ;; ---------------------------------------------------------------------------
 ;; 全文視圖
 
-(defn- fulltext [{:keys [nodes facts ui]} title]
-  (let [selected (:selected ui)]
-    [:section.fulltext {:aria-label "全文"}
+(defn- outline
+  "全文頁左側的大綱：所有標題依層級縮排；選取的卡片所在的章節標為目前位置。"
+  [{:keys [nodes ui]} title]
+  (let [selected (:selected ui)
+        here (set (cons selected (tree/ancestor-ids nodes selected)))]
+    [:nav.outline {:aria-label "大綱"}
+     [:div.outline-head "大綱"]
+     [:ol.outline-list
+      (for [id (tree/document-order nodes)
+            :when (tree/heading? nodes id)
+            :let [d (tree/depth nodes id)]]
+        [:li {:replicant/key id}
+         [:button.outline-item {:type "button"
+                                :class [(str "outline-d" d)
+                                        (when (here id) "outline-here")
+                                        (when (= id selected) "outline-selected")]
+                                :aria-current (when (= id selected) "true")
+                                :on {:click [[:ui/select id]]}}
+          (title id)]])]]))
+
+(defn- fulltext
+  "全文：依序呈現整份報告的標題與本文。點標題或段落選取，右側編輯區隨之切換；
+  從大綱等處選取時捲到該處。"
+  [{:keys [nodes facts ui]} title]
+  (let [selected (:selected ui)
+        select-on #(hash-map :replicant/key % :data-id (str %)
+                             :class (when (= % selected) "ft-selected")
+                             :on {:click [[:ui/select %]]})]
+    [:section.fulltext {:aria-label "全文"
+                        :replicant/on-render [[:dom/reveal-selected (str selected)]]}
      (toast-view (:toast ui))
      [:div.fulltext-page
       (for [id (tree/document-order nodes)
@@ -334,22 +358,16 @@
         (case (:node/kind node)
           :heading
           (let [d (tree/depth nodes id)]
-            [(keyword (str "h" (inc d))) {:replicant/key id :class "ft-heading"} (title id)])
+            [(keyword (str "h" (inc d) ".ft-heading")) (select-on id) (title id)])
 
           :intro
-          [:div.ft-block.ft-intro {:replicant/key id
-                                   :class (when (= id selected) "ft-selected")
-                                   :on {:click [[:ui/select id] [:ui/open-editor]]}}
+          [:div.ft-block.ft-intro (select-on id)
            (if-let [doc (:node/prose node)]
              (prose-view facts doc)
              [:p.prose.muted "（引言尚未生成，將由 AI 依下層內容補上）"])]
 
           :paragraph
-          [:div.ft-block {:replicant/key id
-                          :role "button"
-                          :tabindex 0
-                          :class (when (= id selected) "ft-selected")
-                          :on {:click [[:ui/select id] [:ui/open-editor]]}}
+          [:div.ft-block (assoc (select-on id) :role "button" :tabindex 0)
            (if-let [doc (:node/prose node)]
              (prose-view facts doc)
              [:p.prose.muted (str "（尚未生成：" (:node/title node) "）")])]
@@ -822,16 +840,18 @@
                                 :on {:click [[:ui/paragraph->intro id]]}}
              "改為引言"]))))
 
-(defn- editor-pane [{:keys [nodes ui] :as state} title]
+(defn- editor-pane
+  "編輯區。卡片頁是覆蓋看板的抽屜，可收合；docked? 為真時（全文頁）固定在右側、不收合。"
+  [{:keys [nodes ui] :as state} title & {:keys [docked?]}]
   (let [id (:selected ui)
         node (get nodes id)
         k (:node/kind node)
         crumbs (crumb-titles nodes title id)
         focus? (= id (:focus-title ui))
         actions (structure-actions nodes id)]
-    (if (:editor-collapsed ui)
+    (if (and (:editor-collapsed ui) (not docked?))
       (editor-rail nodes title id)
-      [:aside.editor {:aria-label "編輯區"}
+      [:aside.editor {:aria-label "編輯區" :class (when docked? "editor-docked")}
        [:div.detail-head
         [:div.editor-top
          [:span.muted.small (str (kind-label nodes id) " · " (if (seq crumbs) (str/join " / " crumbs) "報告"))]
@@ -840,9 +860,10 @@
            [:details.more-menu {:replicant/key (str "menu-" id)}
             [:summary {:title "其他操作" :aria-label "其他操作"} "⋯"]
             [:div.menu (seq actions)]])
-         [:button.collapse-btn {:type "button" :title "收合編輯區" :aria-label "收合編輯區" :aria-expanded "true"
-                                :on {:click [[:ui/toggle-editor]]}}
-          (chevron :right)]]
+         (when-not docked?
+           [:button.collapse-btn {:type "button" :title "收合編輯區" :aria-label "收合編輯區" :aria-expanded "true"
+                                  :on {:click [[:ui/toggle-editor]]}}
+            (chevron :right)])]
         (case k
           ;; 名稱框：編號是固定的前綴，與名稱同在一個框內，只有名稱可以改
           :heading [:div.title-row
@@ -1002,5 +1023,8 @@
        (topbar state title)
        (case page
          :library (library-page state title)
-         :fulltext [:div.workspace (fulltext state title) (editor-pane state title)]
+         :fulltext [:div.workspace.workspace-fulltext
+                    (outline state title)
+                    (fulltext state title)
+                    (editor-pane state title :docked? true)]
          [:div.workspace (tree-panel state title) (editor-pane state title)])])))

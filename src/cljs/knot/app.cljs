@@ -184,6 +184,20 @@
     (fn [{:keys [dispatch-data]} _]
       (some-> (:replicant/node dispatch-data) prose-editor/destroy!))
 
+    ;; 全文頁：選取改變時，把選取的標題或段落捲到可視範圍（使用者自己點的已在畫面中，不會移動）
+    :dom/reveal-selected
+    (fn [{:keys [dispatch-data]} _ selected]
+      (when-let [^js el (:replicant/node dispatch-data)]
+        (when (not= selected (.-knotRevealed el))
+          (let [first-time? (nil? (.-knotRevealed el))]
+            (set! (.-knotRevealed el) selected)
+            (when-let [target (.querySelector el (str "[data-id=\"" selected "\"]"))]
+              ;; 剛進入全文頁時直接置中；之後切換選取時平順捲到最近的位置
+              (.scrollIntoView target (if first-time?
+                                        #js {:block "center" :behavior "auto"}
+                                        #js {:block "nearest"
+                                             :behavior (if (reduced-motion?) "auto" "smooth")})))))))
+
     :dom/reveal-columns
     (fn [{:keys [dispatch-data]} _ depth selected n-cols collapsed?]
       (when-let [el (:replicant/node dispatch-data)]
