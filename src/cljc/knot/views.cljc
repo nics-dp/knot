@@ -225,14 +225,14 @@
   (let [id (:selected ui)
         k (ui/sibling-kind nodes id)]
     [:div.toolbar {:role "toolbar" :aria-label "新增與刪除卡片"}
-     [:button.btn.btn-small {:type "button"
+     [:button.btn.btn-primary {:type "button"
                              :disabled (nil? k)
                              :title (if k
                                       (str "在「" (tree/display-title nodes (tree/numbering nodes) id) "」後面新增")
                                       "表格與圖的 label 命名方式待定，暫不提供新增")
                              :on {:click [[:ui/add-sibling id]]}}
       "新增"]
-     [:button.btn.btn-small.btn-danger {:type "button"
+     [:button.btn.btn-danger {:type "button"
                                         :title "刪除選取的卡片與其下層卡片；可以復原"
                                         :on {:click [[:ui/delete-node id]]}}
       "刪除"]]))
@@ -253,15 +253,15 @@
         roles (memoize #(card-role selected anc desc nodes %))
         sel-depth (tree/depth nodes selected)
         drag-depth (when drag (tree/depth nodes drag))]
-    [:section.tree-panel {:aria-label "卡片樹"}
+    [:section.tree-panel {:aria-label "卡片"}
      [:div.panel-head
-      [:h2 "卡片樹"]]
-     (tree-toolbar state)
-     [:div.legend
-      [:span [:i.swatch.swatch-active] "目前選取"]
-      [:span [:i.swatch.swatch-path] "上層與下層"]
-      [:span {:style {:opacity 0.7}} [:i.swatch] "同一層的兄弟"]
-      [:span {:style {:opacity 0.35}} [:i.swatch] "其他內容"]]
+      [:h2.area-title "卡片"]
+      (tree-toolbar state)
+      [:div.legend {:aria-label "圖例"}
+       [:span [:i.swatch.swatch-active] "目前選取"]
+       [:span [:i.swatch.swatch-path] "上層與下層"]
+       [:span [:i.swatch.swatch-sibling] "同一層"]
+       [:span [:i.swatch.swatch-other] "其他"]]]
      (when-not drag (toast-view toast))
      [:div.tree-scroll {:class (when drag "is-dragging")
                         :replicant/on-mount [[:dom/observe-viewport]]
@@ -276,12 +276,13 @@
                                     drag-depth "col-drop-sibling"
                                     (dec drag-depth) "col-drop-into"
                                     "col-drop-none"))}
-          [:span.col-label.muted.small
-           (case i 0 "章" 1 "節" (str "第 " (inc i) " 層"))
+          [:div.col-head
+           [:span.col-name (case i 0 "章" 1 "節" (str "第 " (inc i) " 層"))]
+           [:span.col-count (count col)]
            (when drag
              (condp = (inc i)
-               drag-depth " · 調整順序"
-               (dec drag-depth) " · 移入"
+               drag-depth [:span.col-drop-tag "調整順序"]
+               (dec drag-depth) [:span.col-drop-tag "移入"]
                nil))]
           [:div.col-viewport {:on {:wheel [[:ui/wheel-column i [:event/wheel-delta] lo hi]]
                                    :dragover [[:drag/over i [:event/viewport-y] translate]

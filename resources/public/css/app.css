@@ -201,11 +201,20 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
   display: flex; flex-direction: column; gap: 12px; overflow: hidden;
 }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--ink-2); }
-.legend span { display: inline-flex; align-items: center; gap: 6px; }
-.swatch { display: inline-block; width: 14px; height: 10px; border: 1px solid var(--line-faint); border-radius: 3px; background: var(--surface); }
+/* 卡片區標題列：標題、新增刪除、圖例 */
+.tree-panel .panel-head { justify-content: flex-start; align-items: center; gap: 12px 20px; }
+.area-title { font-size: 20px; font-weight: 700; color: var(--ink); }
+.legend {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-left: auto;
+  font-size: 13px; color: var(--ink); padding: 8px 14px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+}
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.swatch { display: inline-block; width: 22px; height: 14px; border: 1px solid var(--line-faint); border-radius: 4px; background: var(--surface); }
 .swatch-active { border: 2px solid var(--navy); }
 .swatch-path { border-color: var(--navy); background: var(--navy-tint); }
+.swatch-sibling { opacity: 0.7; }
+.swatch-other { opacity: 0.35; }
 
 .toast {
   align-self: flex-start; display: inline-flex; align-items: center; gap: 8px;
@@ -221,7 +230,21 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
   grid-auto-columns: max(170px, calc((100cqw - 36px) / 4));
 }
 .tree-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
-.col-label { padding-left: 2px; }
+/* 欄位標頭 */
+.col-head {
+  display: flex; align-items: center; gap: 8px; flex: none;
+  padding: 8px 12px; border-radius: 8px;
+  background: var(--ink); color: #FFFFFF;
+}
+.col-name { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; }
+.col-count {
+  font-size: 12px; font-weight: 500; line-height: 18px; padding: 0 7px; border-radius: 9px;
+  background: rgba(255, 255, 255, 0.18);
+}
+.col-drop-tag {
+  margin-left: auto; font-size: 12px; font-weight: 500; padding: 1px 8px; border-radius: 9px;
+  background: #FFFFFF; color: var(--navy);
+}
 .col-viewport { position: relative; overflow: hidden; flex: 1; min-height: 0; overscroll-behavior: contain; }
 .tree-inner {
   position: absolute; left: 0; right: 0; top: 0; height: 1px;
@@ -282,7 +305,7 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 .col-drop-sibling .col-viewport { background: rgba(232, 237, 247, 0.6); box-shadow: inset 0 0 0 2px var(--navy-line); }
 .col-drop-into .col-viewport { box-shadow: inset 0 0 0 2px var(--navy-line); outline: 2px dashed var(--navy-line); outline-offset: -6px; }
 .col-drop-none .col-viewport { opacity: 0.4; }
-.col-drop-sibling .col-label, .col-drop-into .col-label { color: var(--navy); font-weight: 500; }
+.col-drop-sibling .col-head, .col-drop-into .col-head { background: var(--navy); }
 .card { cursor: grab; }
 .card:active { cursor: grabbing; }
 
