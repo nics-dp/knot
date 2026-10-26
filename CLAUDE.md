@@ -5,7 +5,7 @@
 ## 文件
 
 - `docs/SPEC.md`：開發規格
-- `docs/ideas.md`：先前的討論文件，說明設計緣由，不是需求清單（由使用者匯出）
+- `docs/ideas.md`：設計緣由與尚未納入規格的構想（例如 agent 透過 MCP 使用 Knot），不是需求清單
 - `docs/design/README.md`：設計稿索引；圖檔在 `docs/design/screens/`
 - `docs/QUESTIONS.md`：待使用者決定的問題
 
