@@ -288,8 +288,16 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 .card-active { border: 2px solid var(--navy); padding: 5px 7px 5px 1px; }
 .card-path { background: var(--navy-tint); border-color: var(--navy); }
 .card-sibling { border-color: var(--line-faint); }
+/* 卡片類型：標題有左側深色條與灰藍底，段落白底，引言虛線，表與圖淡暖底 */
 .card-kind-heading .card-title { font-weight: 700; }
+.card-kind-heading:not(.card-path):not(.card-active):not(.card-into) { background: #EEF1F6; }
+.card-kind-heading::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: #33415C;
+}
+.card-kind-heading.card-path::before, .card-kind-heading.card-active::before { background: var(--navy); }
 .card-kind-intro { border-style: dashed; }
+.card-kind-intro:not(.card-path):not(.card-active) { background: #FAFBFC; }
+.card-kind-table:not(.card-path):not(.card-active), .card-kind-figure:not(.card-path):not(.card-active) { background: #FBFAF6; }
 .card-dragging { border: 1px dashed var(--navy); }
 .card-into { background: var(--navy-tint); border: 2px dashed var(--navy); padding: 5px 7px 5px 1px; }
 
