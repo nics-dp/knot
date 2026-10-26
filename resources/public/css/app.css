@@ -1,0 +1,40 @@
+/* 視覺規範見 docs/SPEC.md 第 6 節 */
+:root {
+  --ground: #F4F3EF;
+  --surface: #FFFFFF;
+  --ink: #1C2026;
+  --muted: #59606A;
+  --line: #DEDBD3;
+  --navy: #27457F;
+  --navy-tint: #E8EDF7;
+  --amber: #8A4608;
+  --amber-bg: #FBF1E4;
+  --teal: #0E6B54;
+  --teal-bg: #E3F2EC;
+
+  --font-ui: "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", system-ui, sans-serif;
+  --font-prose: "Noto Serif TC", "Songti TC", serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --hit: 44px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-ui);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  min-height: var(--hit);
+  padding: 0 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand { font-weight: 600; }

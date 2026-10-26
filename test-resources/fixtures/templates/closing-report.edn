@@ -1,0 +1,26 @@
+;; 虛構範本：OO 市智慧路燈示範計畫 結案技術報告
+;; :contract 為契約項目；標題的 :contract-items 指向其 :code
+{:template/name "智慧路燈示範計畫結案報告"
+ :contract [{:code "1.1" :text "說明計畫背景與目標"}
+            {:code "2.1" :text "說明系統架構與佈建範圍"}
+            {:code "2.2" :text "說明通訊與管理平台"}
+            {:code "3.1" :text "提出節電成效量測結果"}
+            {:code "3.2" :text "提出故障通報時效分析"}
+            {:code "4.1" :text "提出後續推廣建議"}]
+ :skeleton [{:name "計畫概述"
+             :contract-items ["1.1"]
+             :children [{:name "計畫背景"}
+                        {:name "計畫目標"}]}
+            {:name "系統建置"
+             :children [{:name "系統架構" :contract-items ["2.1"]}
+                        {:name "通訊與管理平台"
+                         :contract-items ["2.2"]
+                         :children [{:name "通訊方式"}
+                                    {:name "管理平台功能"
+                                     :children [{:name "遠端調光"}
+                                                {:name "故障通報"}]}]}]}
+            {:name "實證成果"
+             :children [{:name "節電成效" :contract-items ["3.1"]}
+                        {:name "維運效率" :contract-items ["3.2"]}]}
+            {:name "結論與建議"
+             :contract-items ["4.1"]}]}

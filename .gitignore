@@ -1,0 +1,22 @@
+# Clojure / deps
+.cpcache/
+.nrepl-port
+.lsp/.cache/
+.clj-kondo/.cache/
+.calva/
+target/
+
+# shadow-cljs / npm
+.shadow-cljs/
+node_modules/
+resources/public/js/
+
+# 本機資料目錄與環境變數（不得進 repo）
+.env
+*.local.edn
+
+# OS / editor
+.DS_Store
+.idea/
+*.iml
+.vscode/

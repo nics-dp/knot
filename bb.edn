@@ -1,0 +1,18 @@
+{:tasks
+ {dev {:doc "同時啟動後端 nREPL（7888，含 HTTP 伺服器）與 shadow-cljs watch（7889）"
+       :task (run '-dev {:parallel true})}
+  -dev {:depends [dev:clj dev:cljs]}
+  dev:clj {:doc "後端 nREPL，啟動時自動 (user/go)"
+           :task (clojure "-M:dev:nrepl")}
+  dev:cljs {:doc "前端 shadow-cljs watch"
+            :task (shell "npx shadow-cljs watch app")}
+
+  start {:doc "以一般模式啟動伺服器並開啟瀏覽器（clojure -M:run）"
+         :task (clojure "-M:run")}
+
+  test {:doc "後端測試"
+        :task (clojure "-M:test")}
+  cljs-test {:doc "前端測試（node）"
+             :task (shell "npx shadow-cljs compile test")}
+  lint {:doc "clj-kondo"
+        :task (clojure "-M:lint --lint src test dev")}}}

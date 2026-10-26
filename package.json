@@ -1,0 +1,14 @@
+{
+  "name": "knot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "報告撰寫工具：卡片樹、AI 生成本文、LaTeX 匯出",
+  "dependencies": {
+    "@tiptap/core": "3.32.0",
+    "@tiptap/pm": "3.32.0"
+  },
+  "devDependencies": {
+    "@firecrawl/anydoc": "0.2.4",
+    "shadow-cljs": "3.5.7"
+  }
+}

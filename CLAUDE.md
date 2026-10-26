@@ -1,0 +1,85 @@
+# Knot
+
+**先讀 `docs/SPEC.md`。** 它是開發的唯一依據；與其他資料衝突時以規格為準，要改規格先提出。
+
+## 文件
+
+- `docs/SPEC.md`：開發規格
+- `docs/ideas.md`：先前的討論文件，說明設計緣由，不是需求清單（由使用者匯出）
+- `docs/design/README.md`：設計稿索引；圖檔在 `docs/design/screens/`
+- `docs/QUESTIONS.md`：待使用者決定的問題
+
+## 開發環境
+
+| 用途 | 啟動指令 | Port |
+|---|---|---|
+| Clojure 後端 nREPL（啟動時自動 `(user/go)`，HTTP 在 3000） | `bb dev:clj`（= `clojure -M:dev:nrepl`） | 7888 |
+| ClojureScript 前端 nREPL | `bb dev:cljs`（= `npx shadow-cljs watch app`） | 7889 |
+
+- `bb dev` 同時啟動兩者；頁面在 http://localhost:3000。
+- 原則上由使用者啟動兩個 nREPL；沒在執行時可在背景啟動，但不要關閉使用者已啟動的行程。
+
+### 用 `clj-nrepl-eval` 求值
+
+- 後端：`clj-nrepl-eval -p 7888 "(user/reset)"`；改了檔案後 `(require 'knot.xxx :reload)` 或 `(user/reset)`。
+- 前端（瀏覽器需開著 http://localhost:3000）：
+  - 單次求值：`clj-nrepl-eval -p 7889 "(shadow.cljs.devtools.api/cljs-eval :app \"(+ 1 2)\" {})"`
+  - 或先 `(shadow.cljs.devtools.api/repl :app)` 把該 session 切成 CLJS 模式，之後直接送 CLJS 程式碼。
+- `clj-nrepl-eval --discover-ports` 可列出執行中的 nREPL。
+
+### `dev/user.clj`
+
+- `(go)`、`(halt)`、`(reset)`：透過 integrant.repl 啟動、停止、重新載入系統；`(system)` 取得目前系統
+- `(seed!)`、`(db)`：M1 加入；`(import-file! "path")`：M3 加入
+
+### 測試與 lint
+
+- `bb test`（= `clojure -M:test`）：後端測試，含 `.cljc`
+- `bb cljs-test`：前端測試（shadow-cljs `:test` build，node 執行）
+- `bb lint`（= `clojure -M:lint --lint src test dev`）：clj-kondo，裝在 repo 的 alias 內
+- `bb start`（= `clojure -M:run`）：一般模式啟動並開啟瀏覽器
+
+## 每項工作的完成條件
+
+1. 修改後在 REPL 重新載入並驗證行為。
+2. 補上或更新測試。
+3. 測試全數通過，shadow-cljs 編譯沒有 warning，clj-kondo 沒有 error。
+
+## 開發守則
+
+- **測試不呼叫真實 API。** 以 `with-redefs` 替換 `llm/call`，回傳 `test-resources/fixtures/llm/` 的固定回應。
+- **只用虛構資料。** repo 內不放真實政府專案素材。
+- **純函式優先放 `.cljc`。** 編號、label、樹運算、合法性判斷、文風合併。
+- **新增相依套件要說明**名稱、版本與理由；版本一律固定（npm 有 `.npmrc` 的 `save-exact`）。
+- **不擴大範圍。** SPEC 第 1 節的範圍外項目不實作。
+- **遇到待定事項就停下**，列出選項請使用者決定；疑問記在 `docs/QUESTIONS.md`。
+- 每個里程碑開一個分支，測試通過且使用者確認畫面後再合併。
+
+## 環境備忘
+
+- **JDK 25。** Datalevin 需要 `--add-opens` 與 `--enable-native-access`，已寫在 deps.edn 的 `:dev`、`:test`、`:run` alias。
+- **anydoc 的 npm 套件是 `@firecrawl/anydoc`。** npm 上名為 `anydoc` 的是無關的套件。執行方式仍是 `node_modules/.bin/anydoc <檔案>`。
+- **integrant 1.0。** 每個 key 都要有 `ig/init-key` 方法，否則會嘗試 require 同名 namespace 而失敗。
+- **Datalevin 中文全文搜尋。** 預設分詞器查不到中文（M0 已實測），M3 須自訂 bigram 分析器。
+
+## 固定版本（M0，2026-10-26）
+
+| 套件 | 版本 |
+|---|---|
+| org.clojure/clojure | 1.12.6 |
+| http-kit/http-kit | 2.8.1 |
+| metosin/reitit-ring、reitit-middleware | 0.11.0 |
+| metosin/muuntaja | 0.6.12 |
+| metosin/malli | 0.20.3 |
+| integrant/integrant、integrant/repl | 1.0.1、0.5.1 |
+| datalevin/datalevin | 1.2.7 |
+| org.commonmark/commonmark、ext-gfm-tables | 0.31.0 |
+| nrepl/nrepl、cider/cider-nrepl | 1.8.0、0.63.1 |
+| thheller/shadow-cljs（clj 與 npm） | 3.5.7 |
+| no.cjohansen/replicant | 2026.07.1 |
+| no.cjohansen/nexus | 2026.08.1 |
+| clj-kondo/clj-kondo | 2026.10.20 |
+| cognitect-labs/test-runner | v0.5.1 (5e91ee0) |
+| @tiptap/core、@tiptap/pm | 3.32.0 |
+| @firecrawl/anydoc | 0.2.4 |
+| clojure-mcp-light（bbin，全域） | v0.2.2 |
