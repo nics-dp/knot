@@ -208,19 +208,15 @@
           {:parent p :index index})))))
 
 (defn drop-position
-  "依拖曳目標決定放置方式：目標在較淺的欄時移入；同一欄時優先插在前後，
-  前後不合法才改為移入；目標在較深的欄時插在前後。half 為指標在目標卡片的
-  :top 或 :bottom 半部。回傳 :before、:after、:into 或 nil。"
+  "拖曳只在同一層（SPEC 5.3）：目標在同一欄時依 half（:top／:bottom）插在前後；
+  目標在左邊一欄（深度少一）時移入。其他欄不接受。回傳 :before、:after、:into 或 nil。"
   [nodes moving-id target-id half]
   (let [dm (depth nodes moving-id)
         dt (depth nodes target-id)
         side (if (= half :top) :before :after)]
     (cond
-      (< dt dm) (when (placement nodes moving-id target-id :into) :into)
-      (= dt dm) (cond
-                  (placement nodes moving-id target-id side) side
-                  (placement nodes moving-id target-id :into) :into)
-      :else (when (placement nodes moving-id target-id side) side))))
+      (= dt dm) (when (placement nodes moving-id target-id side) side)
+      (= dt (dec dm)) (when (placement nodes moving-id target-id :into) :into))))
 
 (defn move
   "依 placement 移動卡片：只改被移動卡片的 parent 與 order-key。"

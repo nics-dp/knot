@@ -83,17 +83,30 @@
     (is (nil? (tree/placement nodes "A" "A" :into)))
     (is (nil? (tree/placement nodes "A2" "A211" :into)))))
 
+(def nodes2
+  "加上第三章 C：一個有段落的節、一個空的節，段落 c1 與 a1 同在深度 3。"
+  (-> (tree/from-nested [(h "C" "丙" (h "C1" "丙一" (p "c1")) (h "C2" "丙二"))])
+      (assoc-in ["C" :node/order-key] "z")
+      (merge nodes)))
+
 (deftest drop-position-test
-  (testing "同欄同類：依上下半部插入前後"
+  (testing "同一欄：依上下半部插入前後"
     (is (= :before (tree/drop-position nodes "a3" "a1" :top)))
     (is (= :after (tree/drop-position nodes "a3" "a1" :bottom))))
-  (testing "上一層的卡片：移入"
-    (is (= :into (tree/drop-position nodes "a1" "B" :top))))
-  (testing "上一層但不能容納：不合法"
+  (testing "同一欄跨 parent：只要 parent 能容納就能插入"
+    (is (= :before (tree/drop-position nodes2 "a1" "c1" :top))))
+  (testing "左邊一欄：移入"
+    (is (= :into (tree/drop-position nodes2 "a1" "C1" :top)))
+    (is (= :into (tree/drop-position nodes2 "a1" "C2" :top)) "還沒有子卡片的標題也能移入")
+    (is (nil? (tree/drop-position nodes "a1" "A2" :top)) "A2 只有下層標題，不收段落 → 不合法"))
+  (testing "左邊一欄但不能容納：不合法"
     (is (nil? (tree/drop-position nodes "b1" "A" :top))))
-  (testing "同欄但前後不合法時改為移入"
-    ;; 段落 x1 與 A211 不同欄；段落 b1（深度 2）拖到標題 A1（深度 2）：A 不收段落，改為移入 A1
-    (is (= :into (tree/drop-position nodes "b1" "A1" :top)))))
+  (testing "同一欄但 parent 不能容納：不合法（不再自動改為移入）"
+    ;; A21（深度 3 標題）與 a1（深度 3 段落）同欄；A21 的 parent A2 不收段落
+    (is (nil? (tree/drop-position nodes "a1" "A21" :top))))
+  (testing "其他欄不接受"
+    (is (nil? (tree/drop-position nodes "x1" "A1" :top)) "深度 5 拖到深度 2")
+    (is (nil? (tree/drop-position nodes "A1" "x1" :top)) "較深的欄")))
 
 (deftest move-test
   (let [moved (tree/move nodes "a3" (tree/placement nodes "a3" "a1" :before))]

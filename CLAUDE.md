@@ -18,7 +18,7 @@
 
 - `bb dev` 同時啟動兩者；頁面在 http://localhost:3000。
 - M1 之前前端資料來自 `/api/sample-report`（讀 `test-resources/fixtures/reports/streetlight.edn`，只在 `:dev` 存在），修改只存在瀏覽器記憶體。
-- URL 參數 `?select=<卡片 id>`、`?view=fulltext` 指定初始畫面，方便截圖對照設計稿；截圖可用 headless Chrome：
+- URL 參數 `?select=<卡片 id>`、`?view=fulltext`、`?page=library` 指定初始畫面，方便截圖對照設計稿；截圖可用 headless Chrome：
   `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --window-size=1440,1000 --virtual-time-budget=4000 --screenshot=out.png "http://localhost:3000/?select=p312"`
 - 改了 `knot.server` 的路由要 `(user/reset)` 才會生效。
 - 原則上由使用者啟動兩個 nREPL；沒在執行時可在背景啟動，但不要關閉使用者已啟動的行程。

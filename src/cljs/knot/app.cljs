@@ -22,13 +22,27 @@
    :ui/undo ui/undo
    :ui/set-source-filter ui/set-source-filter
    :ui/set-source-query ui/set-source-query
+   :ui/set-page ui/set-page
+   :ui/set-node-field ui/set-node-field
+   :ui/add-citation ui/add-citation
+   :ui/remove-citation ui/remove-citation
+   :ui/set-relation ui/set-relation
+   :ui/open-picker ui/open-picker
+   :ui/close-picker ui/close-picker
+   :ui/set-picker-query ui/set-picker-query
+   :ui/set-picker-filter ui/set-picker-filter
+   :ui/select-block ui/select-block
+   :ui/set-block-status ui/set-block-status
+   :ui/open-paragraph ui/open-paragraph
    :drag/end ui/drag-end})
 
 (defn- transition-action [f]
   (fn [state & args]
-    (let [state' (apply f state args)]
-      (when-not (identical? state state')
-        [[:store/reset state']]))))
+    ;; 中文輸入法選字中（isComposing）不更新，等 compositionend 再寫入
+    (when-not (some #{::composing} args)
+      (let [state' (apply f state args)]
+        (when-not (identical? state state')
+          [[:store/reset state']])))))
 
 (defn- reduced-motion? []
   (.-matches (js/window.matchMedia "(prefers-reduced-motion: reduce)")))
@@ -90,6 +104,10 @@
         (set! (.-effectAllowed dt) "move")
         (.setData dt "text/plain" id)))
 
+    :dom/focus
+    (fn [{:keys [dispatch-data]} _]
+      (some-> (:replicant/node dispatch-data) .focus))
+
     :dom/reveal-columns
     (fn [{:keys [dispatch-data]} _ depth selected n-cols]
       (when-let [el (:replicant/node dispatch-data)]
@@ -98,7 +116,15 @@
    :nexus/placeholders
    {:event/target-value
     (fn [{:replicant/keys [dom-event]}]
-      (some-> dom-event .-target .-value))
+      (if (some-> dom-event .-isComposing)
+        ::composing
+        (some-> dom-event .-target .-value)))
+
+    ;; <select> 的值轉為 keyword；空字串為 nil
+    :event/target-keyword
+    (fn [{:replicant/keys [dom-event]}]
+      (let [v (some-> dom-event .-target .-value)]
+        (when-not (or (nil? v) (= "" v)) (keyword v))))
 
     ;; 指標在卡片的上半或下半
     :event/half
@@ -138,7 +164,9 @@
           dir ({"ArrowLeft" :left "ArrowRight" :right "ArrowUp" :up "ArrowDown" :down} k)]
       (cond
         undo? (do (.preventDefault e) (dispatch! {} [[:ui/undo]]))
-        (and dir (= :tree (get-in @store [:ui :view])))
+        (and dir
+             (= :editor (get-in @store [:ui :page]))
+             (= :tree (get-in @store [:ui :view])))
         (do (.preventDefault e) (dispatch! {} [[:ui/navigate dir]]))))))
 
 (defn- viewport-height []
@@ -154,15 +182,17 @@
                  (.text res)
                  (throw (js/Error. (str "載入範例報告失敗：" (.-status res)))))))
       (.then (fn [text]
-               ;; ?select=<id>、?view=fulltext 指定初始畫面，方便對照設計稿與截圖
+               ;; ?select=<id>、?view=fulltext、?page=library 指定初始畫面，方便對照設計稿與截圖
                (let [params (js/URLSearchParams. js/location.search)
                      select (.get params "select")
-                     view (.get params "view")]
+                     view (.get params "view")
+                     page (.get params "page")]
                  (reset! store (cond-> (-> (reader/read-string text)
                                            ui/init-state
                                            (ui/set-viewport-height (viewport-height)))
                                  select (ui/select select)
-                                 view (ui/set-view (keyword view)))))))
+                                 view (ui/set-view (keyword view))
+                                 page (ui/set-page (keyword page)))))))
       (.catch (fn [err] (js/console.error err)))))
 
 (defn init []

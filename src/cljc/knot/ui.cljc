@@ -11,6 +11,7 @@
    :blocks (vec (:blocks report))
    :history []
    :ui {:selected (or (:ui/selected report) "p312")
+        :page :editor
         :view :tree
         :source-filter :all
         :source-query ""
@@ -148,7 +149,10 @@
                    :heading {:node/kind :heading :node/name "新標題" :node/draft ""})
             label (str "新增" ({:intro "引言" :paragraph "段落" :heading "下層標題"} kind))
             [id state] (-> state (remember label) (insert-node parent-id node))]
-        (update state :ui assoc :selected id :bias {} :toast label)))))
+        (update state :ui assoc :selected id :bias {}
+                :toast (if (= kind :intro)
+                         "新增引言：寫下意圖（可留空），本文由 AI 依下層內容生成"
+                         label))))))
 
 (defn wrap-paragraphs
   "已有段落的標題要新增下層標題時：把現有段落移到新的下層標題。"
@@ -229,10 +233,88 @@
     state))
 
 ;; ---------------------------------------------------------------------------
-;; 素材庫
+;; 編輯：使用者輸入的內容都是卡片的意圖（SPEC 5.4）
+
+(def editable-fields #{:node/draft :node/title :node/name})
+
+(defn set-node-field
+  "編輯卡片的名稱或意圖。逐字輸入不進復原紀錄（輸入框有自己的復原）。"
+  [state id field value]
+  (if (and (editable-fields field) (contains? (:nodes state) id))
+    (assoc-in state [:nodes id field] (or value ""))
+    state))
+
+(defn add-citation
+  "以素材選取器把區塊加入段落的依據。"
+  [state id block-id]
+  (let [cites (get-in state [:nodes id :node/citations])]
+    (if (or (not (tree/paragraph? (:nodes state) id))
+            (some #(= block-id (:block %)) cites))
+      state
+      (-> state
+          (remember "加入依據")
+          (update-in [:nodes id :node/citations] (fnil conj []) {:block block-id})
+          (assoc-in [:ui :toast] "已加入依據")))))
+
+(defn remove-citation [state id block-id]
+  (-> state
+      (remember "移除依據")
+      (update-in [:nodes id :node/citations] #(vec (remove (fn [c] (= block-id (:block c))) %)))))
+
+(defn set-relation
+  "設定兩個相鄰段落的關係類型並確認；type 為 nil 時移除關係。"
+  [state from to type]
+  (let [others (vec (remove #(and (= from (:relation/from %)) (= to (:relation/to %))
+                                  (not= :summarizes (:relation/type %)))
+                            (:relations state)))]
+    (-> state
+        (remember "設定段落關係")
+        (assoc :relations (cond-> others
+                            type (conj {:relation/from from :relation/to to
+                                        :relation/type type :relation/pending false}))))))
+
+;; ---------------------------------------------------------------------------
+;; 素材選取器（段落編輯區）
+
+(defn open-picker [state]
+  (update state :ui assoc :picker {:query "" :filter :all}))
+
+(defn close-picker [state]
+  (update state :ui dissoc :picker))
+
+(defn set-picker-query [state q]
+  (if (get-in state [:ui :picker])
+    (assoc-in state [:ui :picker :query] (or q ""))
+    state))
+
+(defn set-picker-filter [state f]
+  (if (get-in state [:ui :picker])
+    (assoc-in state [:ui :picker :filter] f)
+    state))
+
+;; ---------------------------------------------------------------------------
+;; 素材庫頁面
+
+(defn set-page [state page]
+  (update state :ui assoc :page page :picker nil))
 
 (defn set-source-filter [state f]
   (assoc-in state [:ui :source-filter] f))
 
 (defn set-source-query [state q]
   (assoc-in state [:ui :source-query] (or q "")))
+
+(defn select-block [state block-id]
+  (assoc-in state [:ui :library-selected] block-id))
+
+(defn set-block-status
+  "候選區塊的確認或捨棄（M3 之後寫入資料層）。"
+  [state block-id status]
+  (update state :blocks
+          (fn [blocks]
+            (mapv #(if (= block-id (:block/id %)) (assoc % :block/status status) %) blocks))))
+
+(defn open-paragraph
+  "從素材庫跳回撰寫頁的某張卡片。"
+  [state id]
+  (-> state (set-page :editor) (assoc-in [:ui :view] :tree) (select id)))

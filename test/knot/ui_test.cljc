@@ -74,3 +74,30 @@
   (let [s (ui/toggle-lock state "a2")]
     (is (= :locked (get-in s [:nodes "a2" :node/status])))
     (is (= :human (get-in (ui/toggle-lock s "a2") [:nodes "a2" :node/status])))))
+
+(deftest edit-intent-test
+  (let [s (ui/set-node-field state "a1" :node/draft "新的意圖")]
+    (is (= "新的意圖" (get-in s [:nodes "a1" :node/draft])))
+    (is (empty? (:history s)) "逐字輸入不進復原紀錄"))
+  (is (= state (ui/set-node-field state "a1" :node/status :locked)) "只能編輯名稱與意圖"))
+
+(deftest citation-test
+  (let [s (ui/add-citation state "a1" "b9")]
+    (is (= [{:block "b9"}] (get-in s [:nodes "a1" :node/citations])))
+    (is (= s (ui/add-citation s "a1" "b9")) "不重複加入")
+    (is (empty? (get-in (ui/remove-citation s "a1" "b9") [:nodes "a1" :node/citations]))))
+  (is (= state (ui/add-citation state "A" "b9")) "只有段落有依據"))
+
+(deftest set-relation-test
+  (let [moved (ui/move-selected (ui/select state "a2") -1)
+        s (ui/set-relation moved "a2" "a1" :contrast)
+        rel (tree/relation-between (:relations s) "a2" "a1")]
+    (is (= :contrast (:relation/type rel)))
+    (is (false? (:relation/pending rel)) "設定類型即確認")
+    (is (nil? (tree/relation-between (:relations (ui/set-relation s "a2" "a1" nil)) "a2" "a1"))
+        "選「未標註」移除關係")))
+
+(deftest pages-test
+  (let [s (-> state (ui/set-page :library) (ui/open-paragraph "b1"))]
+    (is (= :editor (get-in s [:ui :page])))
+    (is (= "b1" (get-in s [:ui :selected])))))
