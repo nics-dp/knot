@@ -52,7 +52,8 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 .text-teal { color: var(--teal); }
 .pre-line { white-space: pre-line; }
 
-.app { min-height: 100vh; display: flex; flex-direction: column; }
+/* 外框固定在視窗高度：頂部列不動，各區自己捲動 */
+.app { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 .loading { padding: 48px; color: var(--muted); }
 
 /* ---------- 按鈕與標籤 ---------- */
@@ -67,6 +68,8 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 .btn-small { min-height: 36px; padding: 0 12px; font-size: 13px; }
 .btn-primary { background: var(--navy); border-color: var(--navy); color: #FFFFFF; font-weight: 500; }
 .btn-dark { background: var(--ink); border-color: var(--ink); color: #FFFFFF; }
+.btn-danger { color: #A3261B; border-color: #E5BDB7; }
+.btn-danger:hover { background: #FBEDEB; }
 .btn-amber { background: var(--amber-bg); border-color: var(--amber-line); color: var(--amber); font-weight: 500; }
 .btn-dashed { border-style: dashed; border-color: var(--line-faint); background: transparent; color: var(--ink-2); justify-content: center; }
 .badge {
@@ -130,28 +133,36 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 
 /* ---------- 撰寫頁：卡片樹＋編輯區，寬度不足時依序換行 ---------- */
 
-.workspace { display: flex; flex-wrap: wrap; flex: 1; align-items: stretch; }
+.workspace { display: flex; flex: 1; min-height: 0; align-items: stretch; }
 
 .panel-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; }
 
 /* ---------- 素材庫頁面 ---------- */
 
-.library-page { display: flex; flex-wrap: wrap; flex: 1; align-items: stretch; }
+.library-page { display: flex; flex: 1; min-height: 0; align-items: stretch; }
 .lib-filters {
-  flex: 1 1 240px; max-width: 100%; padding: 20px;
+  flex: 0 0 260px; padding: 20px; overflow-y: auto;
   border-right: 1px solid var(--line); background: var(--surface-soft);
   display: flex; flex-direction: column; gap: 14px;
 }
 .lib-list {
-  flex: 999 1 420px; min-width: 0; padding: 20px 24px;
+  flex: 1 1 420px; min-width: 0; padding: 20px 24px; overflow-y: auto;
   display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; align-content: start;
 }
 .lib-detail {
-  flex: 1 1 400px; max-width: 100%; padding: 20px 24px;
+  flex: 0 1 440px; min-width: 320px; padding: 20px 24px; overflow-y: auto;
   background: var(--surface); border-left: 1px solid var(--line);
   display: flex; flex-direction: column; gap: 18px;
 }
-.source-row { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+.lib-count { grid-column: 1 / -1; }
+.source-row {
+  display: flex; align-items: baseline; gap: 8px; font-size: 13px; text-align: left;
+  min-height: 32px; padding: 6px 8px; margin: 0 -8px; border: 0; border-radius: 6px;
+  background: transparent; cursor: pointer;
+}
+.source-row:hover { background: var(--line-soft); }
+.source-row[aria-pressed="true"] { background: var(--navy-tint); color: var(--navy); }
+.nowrap { white-space: nowrap; flex: none; }
 .source-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field input {
@@ -186,9 +197,11 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 /* ---------- 卡片樹 ---------- */
 
 .tree-panel {
-  flex: 999 1 560px; min-width: 0; padding: 20px 24px;
-  display: flex; flex-direction: column; gap: 12px;
+  flex: 1 1 560px; min-width: 0; padding: 20px 24px 12px;
+  display: flex; flex-direction: column; gap: 12px; overflow: hidden;
 }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.toolbar-spacer { flex: 1 1 auto; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--ink-2); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .swatch { display: inline-block; width: 14px; height: 10px; border: 1px solid var(--line-faint); border-radius: 3px; background: var(--surface); }
@@ -203,14 +216,14 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 .toast-close { border: 0; background: transparent; color: var(--amber); font-size: 16px; min-width: 32px; min-height: 32px; cursor: pointer; }
 
 /* 一次顯示四欄：欄寬依卡片樹區域寬度均分，最窄 170px */
-.tree-scroll { overflow-x: auto; padding-bottom: 8px; container-type: inline-size; }
+.tree-scroll { flex: 1; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 8px; container-type: inline-size; }
 .tree-columns {
-  display: grid; grid-auto-flow: column; align-items: start;
+  display: grid; grid-auto-flow: column; grid-auto-rows: 100%; height: 100%;
   grid-auto-columns: max(170px, calc((100cqw - 36px) / 4));
 }
-.tree-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.tree-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
 .col-label { padding-left: 2px; }
-.col-viewport { position: relative; overflow: hidden; }
+.col-viewport { position: relative; overflow: hidden; flex: 1; min-height: 0; overscroll-behavior: contain; }
 .tree-inner {
   position: absolute; left: 0; right: 0; top: 0; height: 1px;
   transition: transform 0.45s ease;
@@ -271,7 +284,7 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 
 /* ---------- 全文視圖 ---------- */
 
-.fulltext { flex: 999 1 560px; min-width: 0; padding: 20px 24px; }
+.fulltext { flex: 1 1 560px; min-width: 0; padding: 20px 24px; overflow-y: auto; }
 .fulltext-page {
   max-width: 760px; margin: 0 auto; padding: 32px 40px;
   background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
@@ -293,7 +306,7 @@ h4.ft-heading, h5.ft-heading { font-size: 16px; }
 /* ---------- 編輯區 ---------- */
 
 .editor {
-  flex: 1 1 520px; max-width: 100%; padding: 20px 24px;
+  flex: 0 1 560px; min-width: 380px; padding: 20px 24px; overflow-y: auto;
   background: var(--surface); border-left: 1px solid var(--line);
   display: flex; flex-direction: column; gap: 18px;
 }
@@ -402,6 +415,14 @@ h4.ft-heading, h5.ft-heading { font-size: 16px; }
 .add-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 
 :focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+
+/* 窄螢幕：各區依序排列，回到整頁捲動 */
+@media (max-width: 960px) {
+  .app { height: auto; min-height: 100vh; overflow: visible; }
+  .workspace, .library-page { flex-wrap: wrap; }
+  .tree-panel, .editor, .fulltext, .lib-filters, .lib-list, .lib-detail { flex: 1 1 100%; min-width: 0; overflow: visible; }
+  .tree-scroll { flex: none; height: 70vh; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .tree-inner, .card, .relation { transition: none !important; }

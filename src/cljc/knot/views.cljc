@@ -7,6 +7,9 @@
             [knot.tree :as tree]))
 
 (def column-gap 12)
+(def list-limit
+  "素材清單一次顯示的上限，避免上千個區塊拖慢畫面。"
+  60)
 
 (def status-pill
   {:ai {:label "AI 生成" :class "pill-ai"}
@@ -107,8 +110,10 @@
 ;; ---------------------------------------------------------------------------
 ;; 頂部列
 
+(def tabs [[:library "素材"] [:tree "卡片"] [:fulltext "全文"]])
+
 (defn- topbar [{:keys [report nodes ui]} title]
-  (let [{:keys [page selected view]} ui
+  (let [{:keys [page selected]} ui
         crumb (if (= page :library)
                 "素材庫"
                 (str/join " / " (conj (crumb-titles nodes title selected) (title selected))))]
@@ -116,21 +121,13 @@
      [:div.topbar-title
       [:span.muted.small (:report/title report) " · " (:report/subtitle report)]
       [:span.crumb crumb]]
-     [:nav.segmented {:aria-label "頁面"}
-      (for [[p label] [[:editor "撰寫"] [:library "素材庫"]]]
+     [:nav.segmented {:aria-label "頁籤"}
+      (for [[p label] tabs]
         [:button {:replicant/key p
                   :type "button"
                   :aria-pressed (str (= p page))
                   :on {:click [[:ui/set-page p]]}}
          label])]
-     (when (= page :editor)
-       [:div.segmented {:role "group" :aria-label "檢視模式"}
-        (for [[v label] [[:tree "卡片樹"] [:fulltext "全文"]]]
-          [:button {:replicant/key v
-                    :type "button"
-                    :aria-pressed (str (= v view))
-                    :on {:click [[:ui/set-view v]]}}
-           label])])
      [:button.btn.btn-amber {:type "button" :disabled true :title "M5 實作修改建議審查"}
       [:span.badge (:report/pending-proposals report)] "修改建議待審"]
      [:button.btn {:type "button" :disabled true :title "M7 實作交接檢查"} "交接檢查"]
@@ -220,6 +217,53 @@
                   (+ top height (/ (max (or (:gap-before nxt) 0) 8) 2)))]
           [:span.insert-marker {:style {:top (str (- y 2) "px")}}])))))
 
+(defn- tree-toolbar
+  "新增與刪除卡片。依選取的卡片決定可用的操作（SPEC 5.3 層級規則）。"
+  [{:keys [nodes ui]}]
+  (let [id (:selected ui)
+        k (tree/kind nodes id)
+        kids (tree/child-ids nodes id)
+        has-paras (some #(tree/paragraph? nodes %) kids)
+        has-heads (some #(tree/heading? nodes %) kids)
+        can-sub (and (= k :heading) (< (tree/depth nodes id) tree/max-heading-level))
+        btn (fn [label actions & [title]]
+              [:button.btn.btn-small {:replicant/key label :type "button" :title title
+                                      :on {:click actions}}
+               label])]
+    [:div.toolbar {:role "toolbar" :aria-label "新增與刪除卡片"}
+     [:span.muted.small "新增"]
+     (case k
+       :heading
+       (list
+        (btn (if (= 1 (tree/depth nodes id)) "＋ 章（接在後面）" "＋ 同層標題") [[:ui/add-sibling id]])
+        (when-not has-heads
+          (btn "＋ 下層段落" [[:ui/add-child id :paragraph]]))
+        (when can-sub
+          (if has-paras
+            (btn "＋ 下層標題（把段落移入）" [[:ui/wrap-paragraphs id]])
+            (btn "＋ 下層標題" [[:ui/add-child id :heading]])))
+        (when-not (tree/intro-id nodes id)
+          (btn "＋ 引言" [[:ui/add-child id :intro]] "引言本文由 AI 依下層內容生成")))
+
+       :paragraph
+       (btn "＋ 段落（接在後面）" [[:ui/add-sibling id]])
+
+       nil)
+     (when-not (= k :heading)
+       (btn "＋ 章" [[:ui/add-child nil :heading]] "在報告最後新增一章"))
+     [:span.toolbar-spacer]
+     [:button.btn.btn-small.btn-danger {:type "button"
+                                        :title "刪除選取的卡片與其下層卡片；可以復原"
+                                        :on {:click [[:ui/delete-node id]]}}
+      "刪除"]]))
+
+(defn- scroll-range
+  "這一欄 bias 的允許範圍：內容頂端不低於上緣、底端不高於下緣（已在範圍外時不再更遠）。"
+  [offset col-h viewport-h]
+  (let [t-max (max offset layout/top-margin)
+        t-min (min offset (- viewport-h col-h layout/top-margin))]
+    [(- t-min offset) (- t-max offset)]))
+
 (defn- tree-panel [{:keys [nodes ui] :as state} title]
   (let [{:keys [selected drag over bias viewport-h toast]} ui
         cols (layout/columns nodes)
@@ -231,7 +275,8 @@
     [:section.tree-panel {:aria-label "卡片樹"}
      [:div.panel-head
       [:h2 "卡片樹"]
-      [:span.muted.small "拖曳只在同一層：同一欄插入前後，或拖到左邊一欄的卡片上移入；方向鍵切換卡片，Ctrl／⌘+Z 復原"]]
+      [:span.muted.small "拖曳只在同一層：同一欄插入前後，或拖到左邊一欄的卡片上移入；滾輪捲動單欄；方向鍵切換卡片；Ctrl／⌘+Z 復原"]]
+     (tree-toolbar state)
      [:div.legend
       [:span [:i.swatch.swatch-active] "目前選取"]
       [:span [:i.swatch.swatch-path] "上層與下層"]
@@ -239,13 +284,15 @@
       [:span {:style {:opacity 0.35}} [:i.swatch] "其他內容"]]
      (toast-view toast)
      [:div.tree-scroll {:class (when drag "is-dragging")
+                        :replicant/on-mount [[:dom/observe-viewport]]
                         :replicant/on-render [[:dom/reveal-columns sel-depth selected (count cols)]]}
       [:div.tree-columns {:style {:column-gap (str column-gap "px")}}
-       (for [[i col] (map-indexed vector cols)]
+       (for [[i col] (map-indexed vector cols)
+             :let [[lo hi] (scroll-range (nth offs i) (layout/column-height col) viewport-h)]]
          [:div.tree-col {:replicant/key i}
           [:span.col-label.muted.small (case i 0 "章" 1 "節" (str "第 " (inc i) " 層"))]
-          [:div.col-viewport {:style {:height (str viewport-h "px")}
-                              :on {:dragover [[:ui/edge-scroll i [:event/edge-delta]]]}}
+          [:div.col-viewport {:on {:wheel [[:ui/wheel-column i [:event/wheel-delta] lo hi]]
+                                   :dragover [[:ui/edge-scroll i [:event/edge-delta] lo hi]]}}
            [:div.tree-inner {:style {:transform (str "translateY(" (+ (nth offs i) (get bias i 0)) "px)")}}
             (relation-chips state col roles)
             (for [c col]
@@ -307,8 +354,9 @@
      [:button.btn.btn-small {:type "button" :disabled (not down?) :on {:click [[:ui/move-selected 1]]}} "下移"]
      [:span.muted.small "也可以直接拖曳卡片"]]))
 
-(defn- name-input [id field value placeholder]
+(defn- name-input [id field value placeholder focus?]
   [:input.title-input {:replicant/key (str id field)
+                       :replicant/on-mount (when focus? [[:dom/select-all] [:ui/clear-focus-title]])
                        :type "text"
                        :aria-label "名稱"
                        :placeholder placeholder
@@ -367,7 +415,8 @@
 (defn- picker [{:keys [blocks ui]} node]
   (let [{:keys [query filter]} (:picker ui)
         linked (set (map :block (:node/citations node)))
-        shown (remove #(= :discarded (:block/status %)) (filter-blocks blocks filter query))]
+        shown (remove #(= :discarded (:block/status %)) (filter-blocks blocks filter query))
+        more (- (count shown) list-limit)]
     [:div.picker {:role "dialog" :aria-label "選取素材"}
      [:div.picker-head
       [:input.picker-search {:type "search"
@@ -380,7 +429,7 @@
      (filter-chips blocks filter :ui/set-picker-filter)
      [:div.picker-list
       (if (seq shown)
-        (for [{:block/keys [id title source location] :as b} shown]
+        (for [{:block/keys [id title source location] :as b} (take list-limit shown)]
           [:div.picker-row {:replicant/key id}
            (block-tag b)
            [:span.picker-title title]
@@ -390,7 +439,8 @@
              [:span.small.text-teal "已加入"]
              [:button.btn.btn-small {:type "button" :on {:click [[:ui/add-citation (:node/id node) id]]}} "加入"])])
         [:span.muted.small "沒有符合的素材區塊"])]
-     [:span.muted.small "目前以字串比對；M3 改用素材庫的中文全文搜尋。"]]))
+     [:span.muted.small (str (when (pos? more) (str "還有 " more " 個符合的區塊，請輸入更精確的關鍵字。"))
+                             "目前以字串比對；M3 改用素材庫的中文全文搜尋。")]]))
 
 (defn- citations [{:keys [blocks ui] :as state} node]
   (let [by-id (block-index blocks)
@@ -525,16 +575,17 @@
   (let [id (:selected ui)
         node (get nodes id)
         k (:node/kind node)
-        crumbs (crumb-titles nodes title id)]
+        crumbs (crumb-titles nodes title id)
+        focus? (= id (:focus-title ui))]
     [:aside.editor {:aria-label "編輯區"}
      [:div.detail-head
       [:span.muted.small (str (kind-label nodes id) " · " (if (seq crumbs) (str/join " / " crumbs) "報告"))]
       (case k
         :heading [:div.title-row
                   [:span.title-number (some-> (title id) (str/split #" " 2) first)]
-                  (name-input id :node/name (:node/name node) "標題名稱")]
+                  (name-input id :node/name (:node/name node) "標題名稱" focus?)]
         :intro [:h2 "引言"]
-        (name-input id :node/title (:node/title node) "名稱"))
+        (name-input id :node/title (:node/title node) "名稱" focus?))
       (move-buttons nodes id)]
      (case k
        :paragraph (paragraph-editor state title id)
@@ -616,8 +667,9 @@
                   [:span.muted.small "尚未被引用。在撰寫頁的段落編輯區以「搜尋或選取素材」加入。"]))])))
 
 (defn- library-page [{:keys [blocks nodes ui] :as state} title]
-  (let [{:keys [source-filter source-query library-selected]} ui
-        shown (filter-blocks blocks source-filter source-query)
+  (let [{:keys [source-filter source-query library-selected source-file]} ui
+        shown (cond->> (filter-blocks blocks source-filter source-query)
+                source-file (filter #(= source-file (:block/source %))))
         confirmed (count (filter #(= :confirmed (:block/status %)) blocks))
         selected (some #(when (= library-selected (:block/id %)) %) blocks)]
     [:div.library-page
@@ -636,13 +688,20 @@
       [:div.detail-section
        [:h3 "來源檔"]
        (for [[src bs] (sort-by key (group-by :block/source blocks))]
-         [:div.source-row {:replicant/key src}
+         [:button.source-row {:replicant/key src
+                              :type "button"
+                              :title src
+                              :aria-pressed (str (= src source-file))
+                              :on {:click [[:ui/toggle-source-file src]]}}
           [:span.source-name src]
-          [:span.muted.small (str (count bs) " 區塊")]])]
+          [:span.muted.small.nowrap (str (count bs) " 區塊")]])]
       [:button.btn.btn-dashed {:type "button" :disabled true :title "M3 實作素材匯入"} "＋ 匯入來源檔"]]
      [:section.lib-list {:aria-label "素材區塊"}
+      [:div.lib-count.muted.small
+       (str "符合 " (count shown) " 個區塊"
+            (when (> (count shown) list-limit) (str "，顯示前 " list-limit " 個；請用搜尋或篩選縮小範圍")))]
       (if (seq shown)
-        (map #(library-card nodes library-selected %) shown)
+        (map #(library-card nodes library-selected %) (take list-limit shown))
         [:span.muted.small "沒有符合的素材區塊"])]
      (library-detail state title selected)]))
 
@@ -654,13 +713,10 @@
     (let [nodes (:nodes state)
           numbers (tree/numbering nodes)
           title #(tree/display-title nodes numbers %)
-          {:keys [page view]} (:ui state)]
+          page (get-in state [:ui :page])]
       [:main.app
        (topbar state title)
-       (if (= page :library)
-         (library-page state title)
-         [:div.workspace
-          (if (= :fulltext view)
-            (fulltext state title)
-            (tree-panel state title))
-          (editor-pane state title)])])))
+       (case page
+         :library (library-page state title)
+         :fulltext [:div.workspace (fulltext state title) (editor-pane state title)]
+         [:div.workspace (tree-panel state title) (editor-pane state title)])])))

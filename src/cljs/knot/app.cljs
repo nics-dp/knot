@@ -11,10 +11,14 @@
 (def transitions
   {:ui/select ui/select
    :ui/navigate ui/navigate
-   :ui/set-view ui/set-view
    :ui/dismiss-toast ui/dismiss-toast
    :ui/move-selected ui/move-selected
    :ui/edge-scroll ui/edge-scroll
+   :ui/scroll-column ui/scroll-column
+   :ui/add-sibling ui/add-sibling
+   :ui/delete-node ui/delete-node
+   :ui/clear-focus-title ui/clear-focus-title
+   :ui/set-viewport-height ui/set-viewport-height
    :ui/add-child ui/add-child
    :ui/wrap-paragraphs ui/wrap-paragraphs
    :ui/paragraph->intro ui/paragraph->intro
@@ -32,6 +36,7 @@
    :ui/set-picker-query ui/set-picker-query
    :ui/set-picker-filter ui/set-picker-filter
    :ui/select-block ui/select-block
+   :ui/toggle-source-file ui/toggle-source-file
    :ui/set-block-status ui/set-block-status
    :ui/open-paragraph ui/open-paragraph
    :drag/end ui/drag-end})
@@ -67,6 +72,8 @@
         (.scrollTo el #js {:left target
                            :behavior (if (or first-time? (reduced-motion?)) "auto" "smooth")})))))
 
+(declare dispatch!)
+
 (def nexus
   {:nexus/system->state deref
 
@@ -88,7 +95,13 @@
      :drag/drop
      (fn [state]
        [[:event/prevent-default]
-        [:store/reset (ui/drop-dragged state)]])})
+        [:store/reset (ui/drop-dragged state)]])
+
+     ;; 滾輪在卡片欄位上只捲動該欄，不捲動整頁
+     :ui/wheel-column
+     (fn [_ column delta lo hi]
+       [[:event/prevent-default]
+        [:ui/scroll-column column delta lo hi]])})
 
    :nexus/effects
    {:store/reset
@@ -108,6 +121,24 @@
     (fn [{:keys [dispatch-data]} _]
       (some-> (:replicant/node dispatch-data) .focus))
 
+    :dom/select-all
+    (fn [{:keys [dispatch-data]} _]
+      (when-let [el (:replicant/node dispatch-data)]
+        (.focus el)
+        (.select el)))
+
+    ;; 卡片欄位的可視高度由 CSS 決定；量測後交給版面計算選取置中
+    :dom/observe-viewport
+    (fn [_ _]
+      (let [measure (fn []
+                      (when-let [vp (js/document.querySelector ".col-viewport")]
+                        (let [h (.-clientHeight vp)]
+                          (when (and (pos? h) (not= h (get-in @store [:ui :viewport-h])))
+                            (dispatch! {} [[:ui/set-viewport-height h]])))))]
+        (when-let [el (js/document.querySelector ".tree-scroll")]
+          (.observe (js/ResizeObserver. measure) el))
+        (measure)))
+
     :dom/reveal-columns
     (fn [{:keys [dispatch-data]} _ depth selected n-cols]
       (when-let [el (:replicant/node dispatch-data)]
@@ -125,6 +156,13 @@
     (fn [{:replicant/keys [dom-event]}]
       (let [v (some-> dom-event .-target .-value)]
         (when-not (or (nil? v) (= "" v)) (keyword v))))
+
+    ;; 滾輪往下時內容往上移
+    :event/wheel-delta
+    (fn [{:replicant/keys [dom-event]}]
+      (when dom-event
+        (let [unit (case (.-deltaMode dom-event) 1 16 2 400 1)]
+          (- (* unit (.-deltaY dom-event))))))
 
     ;; 指標在卡片的上半或下半
     :event/half
@@ -164,16 +202,8 @@
           dir ({"ArrowLeft" :left "ArrowRight" :right "ArrowUp" :up "ArrowDown" :down} k)]
       (cond
         undo? (do (.preventDefault e) (dispatch! {} [[:ui/undo]]))
-        (and dir
-             (= :editor (get-in @store [:ui :page]))
-             (= :tree (get-in @store [:ui :view])))
+        (and dir (= :tree (get-in @store [:ui :page])))
         (do (.preventDefault e) (dispatch! {} [[:ui/navigate dir]]))))))
-
-(defn- viewport-height []
-  (-> (- js/window.innerHeight 250) (max 360) (min 1200)))
-
-(defn- on-resize [_]
-  (swap! store ui/set-viewport-height (viewport-height)))
 
 (defn- load-sample! []
   (-> (js/fetch "/api/sample-report" #js {:headers #js {"Accept" "application/edn"}})
@@ -182,16 +212,12 @@
                  (.text res)
                  (throw (js/Error. (str "載入範例報告失敗：" (.-status res)))))))
       (.then (fn [text]
-               ;; ?select=<id>、?view=fulltext、?page=library 指定初始畫面，方便對照設計稿與截圖
+               ;; ?select=<id>、?page=library|tree|fulltext 指定初始畫面，方便對照設計稿與截圖
                (let [params (js/URLSearchParams. js/location.search)
                      select (.get params "select")
-                     view (.get params "view")
                      page (.get params "page")]
-                 (reset! store (cond-> (-> (reader/read-string text)
-                                           ui/init-state
-                                           (ui/set-viewport-height (viewport-height)))
+                 (reset! store (cond-> (ui/init-state (reader/read-string text))
                                  select (ui/select select)
-                                 view (ui/set-view (keyword view))
                                  page (ui/set-page (keyword page)))))))
       (.catch (fn [err] (js/console.error err)))))
 
@@ -199,6 +225,5 @@
   (r/set-dispatch! dispatch!)
   (add-watch store ::render (fn [_ _ _ state] (render! state)))
   (js/document.addEventListener "keydown" on-keydown)
-  (js/window.addEventListener "resize" on-resize)
   (render! @store)
   (load-sample!))

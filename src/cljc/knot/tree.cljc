@@ -244,6 +244,12 @@
       (ok/between nil (some-> (first sibs) :node/order-key))
       (ok/between (some-> (peek sibs) :node/order-key) nil))))
 
+(defn key-after
+  "緊接在 id 後面的 order-key。"
+  [nodes id]
+  (ok/between (get-in nodes [id :node/order-key])
+              (some->> (next-sibling nodes id) (get nodes) :node/order-key)))
+
 ;; ---------------------------------------------------------------------------
 ;; 段落關係
 

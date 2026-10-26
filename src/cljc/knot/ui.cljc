@@ -11,8 +11,7 @@
    :blocks (vec (:blocks report))
    :history []
    :ui {:selected (or (:ui/selected report) "p312")
-        :page :editor
-        :view :tree
+        :page :tree
         :source-filter :all
         :source-query ""
         :viewport-h 640
@@ -50,9 +49,6 @@
                  :up (tree/prev-sibling nodes id)
                  :down (tree/next-sibling nodes id))]
     (if target (select state target) state)))
-
-(defn set-view [state view]
-  (assoc-in state [:ui :view] view))
 
 (defn set-viewport-height [state h]
   (assoc-in state [:ui :viewport-h] h))
@@ -115,11 +111,19 @@
     (-> (apply-move state drag place)
         (drag-end))))
 
+(defn scroll-column
+  "捲動卡片樹的一欄：delta 為位移變化量，[lo hi] 為這一欄允許的 bias 範圍。"
+  [state column delta lo hi]
+  (if (and delta (not (zero? delta)))
+    (let [b (+ (get-in state [:ui :bias column] 0) delta)]
+      (assoc-in state [:ui :bias column] (-> b (max lo) (min hi))))
+    state))
+
 (defn edge-scroll
   "拖曳時指標靠近欄位上下緣，該欄自動捲動。"
-  [state column delta]
-  (if (and (get-in state [:ui :drag]) delta (not (zero? delta)))
-    (update-in state [:ui :bias column] (fnil + 0) delta)
+  [state column delta lo hi]
+  (if (get-in state [:ui :drag])
+    (scroll-column state column delta lo hi)
     state))
 
 ;; ---------------------------------------------------------------------------
@@ -149,7 +153,7 @@
                    :heading {:node/kind :heading :node/name "新標題" :node/draft ""})
             label (str "新增" ({:intro "引言" :paragraph "段落" :heading "下層標題"} kind))
             [id state] (-> state (remember label) (insert-node parent-id node))]
-        (update state :ui assoc :selected id :bias {}
+        (update state :ui assoc :selected id :bias {} :focus-title (when-not (= kind :intro) id)
                 :toast (if (= kind :intro)
                          "新增引言：寫下意圖（可留空），本文由 AI 依下層內容生成"
                          label))))))
@@ -233,6 +237,61 @@
     state))
 
 ;; ---------------------------------------------------------------------------
+(defn add-sibling
+  "在選取的卡片後面新增同類卡片（標題或段落）。"
+  [state id]
+  (let [{:keys [nodes]} state
+        k (tree/kind nodes id)
+        p (tree/parent nodes id)]
+    (if-not (#{:heading :paragraph} k)
+      state
+      (let [[new-id state] (new-id (remember state (if (= k :heading) "新增同層標題" "新增段落")))
+            node (if (= k :heading)
+                   {:node/kind :heading :node/name "新標題" :node/draft ""}
+                   {:node/kind :paragraph :node/title "新段落" :node/status :none :node/draft ""})
+            nodes' (assoc (:nodes state) new-id
+                          (assoc node :node/id new-id :node/parent p
+                                 :node/order-key (tree/key-after (:nodes state) id)))
+            next-para (tree/next-sibling nodes' new-id)]
+        (-> state
+            (assoc :nodes nodes')
+            ;; 原本接在後面的段落改為承接新段落，關係待確認
+            (update :relations #(if (= k :paragraph)
+                                  (tree/mark-pending % nodes' [next-para] {next-para id})
+                                  %))
+            (update :ui assoc :selected new-id :bias {} :focus-title new-id
+                    :toast (if (= k :heading) "已新增同層標題" "已新增段落")))))))
+
+(defn delete-node
+  "刪除卡片與其所有下層卡片；可以復原。"
+  [state id]
+  (let [{:keys [nodes]} state]
+    (if-not (contains? nodes id)
+      state
+      (let [title ((titles state) id)
+            gone (set (cons id (tree/descendant-ids nodes id)))
+            fallback (or (tree/prev-sibling nodes id) (tree/next-sibling nodes id) (tree/parent nodes id))
+            next-para (let [n (tree/next-sibling nodes id)] (when (tree/paragraph? nodes n) n))
+            nodes' (apply dissoc nodes gone)]
+        (if (empty? nodes')
+          state
+          (-> state
+              (remember (str "刪除「" title "」"))
+              (assoc :nodes nodes')
+              (update :relations (fn [rels]
+                                   (let [rels (vec (remove #(or (gone (:relation/from %)) (gone (:relation/to %))) rels))]
+                                     (if next-para
+                                       (tree/mark-pending rels nodes' [next-para] {next-para id})
+                                       rels))))
+              (update :ui assoc :selected (or fallback (first (tree/child-ids nodes' nil))) :bias {}
+                      :toast (str "已刪除「" title "」"
+                                  (when (> (count gone) 1) (str "與 " (dec (count gone)) " 張下層卡片"))
+                                  "；Ctrl／⌘+Z 可復原"))))))))
+
+(defn clear-focus-title [state]
+  (update state :ui dissoc :focus-title))
+
+;; ---------------------------------------------------------------------------
 ;; 編輯：使用者輸入的內容都是卡片的意圖（SPEC 5.4）
 
 (def editable-fields #{:node/draft :node/title :node/name})
@@ -304,6 +363,11 @@
 (defn set-source-query [state q]
   (assoc-in state [:ui :source-query] (or q "")))
 
+(defn toggle-source-file
+  "素材庫依來源檔篩選；再點一次取消。"
+  [state source]
+  (update-in state [:ui :source-file] #(when-not (= % source) source)))
+
 (defn select-block [state block-id]
   (assoc-in state [:ui :library-selected] block-id))
 
@@ -317,4 +381,4 @@
 (defn open-paragraph
   "從素材庫跳回撰寫頁的某張卡片。"
   [state id]
-  (-> state (set-page :editor) (assoc-in [:ui :view] :tree) (select id)))
+  (-> state (set-page :tree) (select id)))

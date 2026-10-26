@@ -99,5 +99,35 @@
 
 (deftest pages-test
   (let [s (-> state (ui/set-page :library) (ui/open-paragraph "b1"))]
-    (is (= :editor (get-in s [:ui :page])))
+    (is (= :tree (get-in s [:ui :page])))
     (is (= "b1" (get-in s [:ui :selected])))))
+
+(deftest add-sibling-test
+  (let [s (ui/add-sibling state "a1")
+        id (get-in s [:ui :selected])]
+    (testing "新段落接在選取段落的後面，並準備編輯名稱"
+      (is (= ["a1" id "a2"] (tree/child-ids (:nodes s) "A")))
+      (is (= id (get-in s [:ui :focus-title]))))
+    (testing "原本的下一段改為承接新段落，關係待確認"
+      (is (nil? (tree/relation-between (:relations s) "a1" "a2")))
+      (is (:relation/pending (tree/relation-between (:relations s) id "a2"))))
+    (testing "可以復原"
+      (is (= (:nodes state) (:nodes (ui/undo s))))))
+  (let [s (ui/add-sibling state "A")]
+    (is (= ["A" (get-in s [:ui :selected]) "B"] (tree/child-ids (:nodes s) nil)) "新章接在後面")))
+
+(deftest delete-node-test
+  (let [s (ui/delete-node state "A")]
+    (testing "連同下層卡片一起刪除，相關關係移除"
+      (is (= ["B" "b1"] (tree/document-order (:nodes s))))
+      (is (empty? (:relations s))))
+    (is (= "B" (get-in s [:ui :selected])))
+    (is (= (:nodes state) (:nodes (ui/undo s))) "可以復原"))
+  (let [s (ui/delete-node state "a1")]
+    (is (= ["a2"] (tree/child-ids (:nodes s) "A")))
+    (is (= "a2" (get-in s [:ui :selected])))))
+
+(deftest scroll-column-test
+  (is (= -30 (get-in (ui/scroll-column state 2 -30 -100 0) [:ui :bias 2])))
+  (is (= -100 (get-in (ui/scroll-column state 2 -500 -100 0) [:ui :bias 2])) "不超出範圍")
+  (is (= state (ui/edge-scroll state 2 -30 -100 0)) "沒有拖曳時邊緣不捲動"))
