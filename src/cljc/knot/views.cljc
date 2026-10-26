@@ -844,12 +844,14 @@
                                 :on {:click [[:ui/toggle-editor]]}}
           (chevron :right)]]
         (case k
+          ;; 名稱框：編號是固定的前綴，與名稱同在一個框內，只有名稱可以改
           :heading [:div.title-row
-                    [:span.title-number (some-> (title id) (str/split #" " 2) first)]
-                    (name-input id :node/name (:node/name node) "標題名稱" focus?)]
+                    [:label.title-field
+                     [:span.title-number (some-> (title id) (str/split #" " 2) first)]
+                     (name-input id :node/name (:node/name node) "標題名稱" focus?)]]
           :intro [:h2 "引言"]
           [:div.title-row
-           (name-input id :node/title (:node/title node) "名稱" focus?)
+           [:label.title-field (name-input id :node/title (:node/title node) "名稱" focus?)]
            (when-let [{:keys [label class]} (and (= :paragraph k) (status-pill (or (:node/status node) :none)))]
              [:span.pill.title-pill {:class class} label])])]
        (case k

@@ -426,17 +426,27 @@ h4.ft-heading, h5.ft-heading { font-size: 16px; }
 .rail-title:hover { background: var(--ground); }
 .rail-kind { color: var(--muted); font-size: 12px; }
 .rail-name { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.title-row { display: flex; align-items: center; gap: 8px; }
-.title-pill { margin-left: 0; font-size: 12px; padding: 2px 8px; }
-.title-number { flex: none; font-size: 18px; font-weight: 700; }
-.title-input {
-  flex: 1 1 auto; min-width: 0; width: 100%;
-  font: inherit; font-size: 18px; font-weight: 700; color: var(--ink);
-  padding: 6px 10px; margin-left: -10px; min-height: var(--hit);
-  border: 1px solid transparent; border-radius: 8px; background: transparent;
+.title-row { display: flex; align-items: center; gap: 12px; }
+.title-pill { margin-left: 0; flex: none; font-size: 12px; padding: 2px 8px; }
+/* 名稱框：平常只見文字（與上方路徑對齊），滑過顯示框線，編輯時與意圖、本文同樣是藍框 */
+.title-field {
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 10px;
+  margin-left: -11px; padding: 4px 10px; min-height: var(--hit); cursor: text;
+  border: 1px solid transparent; border-radius: 8px;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
 }
-.title-input:hover { border-color: var(--line); }
-.title-input:focus { border-color: var(--navy); background: var(--surface); outline: none; }
+.title-field:hover { border-color: var(--line-strong); }
+.title-field:focus-within {
+  background: var(--surface); border-color: var(--navy);
+  box-shadow: 0 0 0 1px var(--navy), 0 0 0 5px var(--navy-tint);
+}
+.title-number { flex: none; font-size: 18px; font-weight: 700; color: var(--ink-2); }
+.title-input {
+  flex: 1 1 auto; min-width: 0; width: 100%; padding: 0; margin: 0;
+  font: inherit; font-size: 18px; font-weight: 700; color: var(--ink);
+  border: 0; background: transparent;
+}
+.title-input:focus, .title-input:focus-visible { outline: none; }
 /* 意圖與本文編輯器用同一種框：高度隨內容、點進去就編輯 */
 .intent {
   font: inherit; font-size: 15px; line-height: 1.8; color: var(--ink);
