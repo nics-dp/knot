@@ -1,6 +1,7 @@
 (ns knot.ui
   "主編輯畫面的狀態轉換。每個函式都是 (state & args) → state 的純函式。"
-  (:require [knot.tree :as tree]))
+  (:require [knot.layout :as layout]
+            [knot.tree :as tree]))
 
 (defn init-state [report]
   {:report (select-keys report [:report/title :report/subtitle :report/style-name
@@ -92,11 +93,12 @@
   (update state :ui assoc :drag id :over nil))
 
 (defn drag-over
-  "指標在 target 卡片的 half（:top／:bottom）上方；更新插入位置提示。"
-  [state target half]
+  "指標在第 column 欄、欄內內容座標 y；更新放置位置提示（見 layout/drop-target）。"
+  [state column y]
   (let [{:keys [drag over]} (:ui state)
-        pos (when drag (tree/drop-position (:nodes state) drag target half))
-        over' (when pos {:id target :pos pos})]
+        nodes (:nodes state)
+        over' (when (and drag y)
+                (layout/drop-target nodes (layout/columns nodes) drag column y))]
     (if (= over over')
       state
       (assoc-in state [:ui :over] over'))))

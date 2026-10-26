@@ -47,3 +47,30 @@
     (testing "範圍高於可視區時改為頂端對齊"
       (let [offs (layout/offsets nodes cols "A" 120)]
         (is (= layout/top-margin (+ (nth offs 1) (:top (first (nth cols 1))))))))))
+
+(deftest drop-target-test
+  ;; 欄 1：a1（0–104）、a2（134–238）屬 A1；欄 0：A（0–84）、B（92–176）
+  (let [cols (layout/columns nodes)
+        nodes2 (tree/from-nested
+                [{:node/id "A" :node/kind :heading
+                  :children [{:node/id "a1" :node/kind :paragraph}
+                             {:node/id "a2" :node/kind :paragraph}]}
+                 {:node/id "B" :node/kind :heading
+                  :children [{:node/id "b1" :node/kind :paragraph}]}
+                 {:node/id "C" :node/kind :heading}])
+        cols2 (layout/columns nodes2)]
+    (testing "同一欄：取最近的合法間隙"
+      (is (= {:id "a1" :pos :before} (layout/drop-target nodes2 cols2 "b1" 1 -3)))
+      (is (= {:id "a1" :pos :after} (layout/drop-target nodes2 cols2 "b1" 1 112)))
+      (is (= {:id "a2" :pos :before} (layout/drop-target nodes2 cols2 "a1" 1 50))
+          "停在自己身上：最近的合法位置就是原位，放下後不變"))
+    (testing "組與組之間：靠近上方卡片是接在後面，靠近下方卡片是插在前面"
+      (let [a2-bottom (+ 104 30 104)
+            b1-top (+ a2-bottom layout/gap-between-groups)]
+        (is (= {:id "a2" :pos :after} (layout/drop-target nodes2 cols2 "a1" 1 (+ a2-bottom 2))))
+        (is (= {:id "b1" :pos :before} (layout/drop-target nodes2 cols2 "a1" 1 (- b1-top 2))))))
+    (testing "左邊一欄：移入指標所在的卡片，空標題也可以"
+      (is (= {:id "B" :pos :into} (layout/drop-target nodes2 cols2 "a1" 0 120)))
+      (is (= {:id "C" :pos :into} (layout/drop-target nodes2 cols2 "a1" 0 500))))
+    (testing "其他欄不接受"
+      (is (nil? (layout/drop-target nodes cols "t1" 0 10))))))

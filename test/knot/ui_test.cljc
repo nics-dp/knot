@@ -23,7 +23,8 @@
 (deftest drag-and-drop-test
   (let [s (-> state
               (ui/drag-start "a1")
-              (ui/drag-over "B" :top))]
+              ;; 欄 0 的 B 卡片在 92–176
+              (ui/drag-over 0 120))]
     (is (= {:id "B" :pos :into} (get-in s [:ui :over])))
     (let [s (ui/drop-dragged s)]
       (testing "移動後被移動的卡片成為選取狀態，並顯示訊息"
@@ -39,7 +40,7 @@
           (is (empty? (:history u))))))))
 
 (deftest illegal-drop-test
-  (let [s (-> state (ui/drag-start "a1") (ui/drag-over "a1" :top))]
+  (let [s (-> state (ui/drag-start "a1") (ui/drag-over 3 0))]
     (is (nil? (get-in s [:ui :over])))
     (is (= (:nodes state) (:nodes (ui/drop-dragged s))))))
 

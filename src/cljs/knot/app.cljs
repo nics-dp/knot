@@ -86,8 +86,8 @@
         [:store/reset (ui/drag-start state id)]])
 
      :drag/over
-     (fn [state target half]
-       (let [state' (ui/drag-over state target half)]
+     (fn [state column viewport-y translate]
+       (let [state' (ui/drag-over state column (some-> viewport-y (- translate)))]
          (cond-> []
            (get-in state' [:ui :over]) (conj [:event/prevent-default])
            (not (identical? state state')) (conj [:store/reset state']))))
@@ -164,12 +164,11 @@
         (let [unit (case (.-deltaMode dom-event) 1 16 2 400 1)]
           (- (* unit (.-deltaY dom-event))))))
 
-    ;; 指標在卡片的上半或下半
-    :event/half
+    ;; 指標在事件目標（欄位）內的垂直位置
+    :event/viewport-y
     (fn [{:replicant/keys [dom-event]}]
       (when dom-event
-        (let [rect (.getBoundingClientRect (.-currentTarget dom-event))]
-          (if (< (.-clientY dom-event) (+ (.-top rect) (/ (.-height rect) 2))) :top :bottom))))
+        (- (.-clientY dom-event) (.-top (.getBoundingClientRect (.-currentTarget dom-event))))))
 
     ;; 拖曳時指標靠近欄位上下緣：往下捲為負、往上捲為正
     :event/edge-delta
@@ -196,13 +195,22 @@
         (.-isContentEditable t))))
 
 (defn- on-keydown [^js e]
+  ;; 卡片本體是 div：Enter／空白鍵選取
+  (when-let [id (and (#{"Enter" " "} (.-key e))
+                     (some-> (.-target e) (.closest ".card-body") (.getAttribute "data-id")))]
+    (.preventDefault e)
+    (dispatch! {} [[:ui/select id]]))
   (when-not (editable-target? e)
     (let [k (.-key e)
           undo? (and (or (.-metaKey e) (.-ctrlKey e)) (not (.-shiftKey e)) (= "z" (.toLowerCase k)))
-          dir ({"ArrowLeft" :left "ArrowRight" :right "ArrowUp" :up "ArrowDown" :down} k)]
+          dir ({"ArrowLeft" :left "ArrowRight" :right "ArrowUp" :up "ArrowDown" :down} k)
+          tree? (= :tree (get-in @store [:ui :page]))]
       (cond
         undo? (do (.preventDefault e) (dispatch! {} [[:ui/undo]]))
-        (and dir (= :tree (get-in @store [:ui :page])))
+        ;; Alt+↑／↓：上移、下移（拖曳的鍵盤替代）
+        (and tree? (.-altKey e) (#{:up :down} dir))
+        (do (.preventDefault e) (dispatch! {} [[:ui/move-selected (if (= dir :up) -1 1)]]))
+        (and dir tree?)
         (do (.preventDefault e) (dispatch! {} [[:ui/navigate dir]]))))))
 
 (defn- load-sample! []

@@ -166,13 +166,14 @@
                         :height (str height "px")
                         :opacity (cond into? 1 dragging? 0.3 :else (role-opacity role))}
                 :on {:dragstart [[:drag/start id]]
-                     :dragover [[:drag/over id [:event/half]]]
-                     :drop [[:drag/drop]]
                      :dragend [[:drag/end]]}}
      (grip)
-     [:button.card-body {:type "button"
-                         :aria-current (when (= role :active) "true")
-                         :on {:click [[:ui/select id]]}}
+     ;; 用 div 而非 button：Firefox 不能從 button 開始拖曳
+     [:div.card-body {:role "button"
+                      :tabindex 0
+                      :data-id id
+                      :aria-current (when (= role :active) "true")
+                      :on {:click [[:ui/select id]]}}
       (case k
         (:table :figure)
         (list
@@ -252,7 +253,8 @@
         anc (set (tree/ancestor-ids nodes selected))
         desc (set (tree/descendant-ids nodes selected))
         roles (memoize #(card-role selected anc desc nodes %))
-        sel-depth (tree/depth nodes selected)]
+        sel-depth (tree/depth nodes selected)
+        drag-depth (when drag (tree/depth nodes drag))]
     [:section.tree-panel {:aria-label "卡片樹"}
      [:div.panel-head
       [:h2 "卡片樹"]
@@ -263,18 +265,34 @@
       [:span [:i.swatch.swatch-path] "上層與下層"]
       [:span {:style {:opacity 0.7}} [:i.swatch] "同一層的兄弟"]
       [:span {:style {:opacity 0.35}} [:i.swatch] "其他內容"]]
-     (toast-view toast)
+     (if drag
+       [:div.drag-hint {:role "status"} "放到同一欄（藍色）調整順序，或放到左邊一欄（虛線）的卡片上移入；按 Esc 取消"]
+       (toast-view toast))
      [:div.tree-scroll {:class (when drag "is-dragging")
                         :replicant/on-mount [[:dom/observe-viewport]]
                         :replicant/on-render [[:dom/reveal-columns sel-depth selected (count cols)]]}
       [:div.tree-columns {:style {:column-gap (str column-gap "px")}}
        (for [[i col] (map-indexed vector cols)
-             :let [[lo hi] (scroll-range (nth offs i) (layout/column-height col) viewport-h)]]
-         [:div.tree-col {:replicant/key i}
-          [:span.col-label.muted.small (case i 0 "章" 1 "節" (str "第 " (inc i) " 層"))]
+             :let [[lo hi] (scroll-range (nth offs i) (layout/column-height col) viewport-h)
+                   translate (+ (nth offs i) (get bias i 0))]]
+         [:div.tree-col {:replicant/key i
+                         :class (when drag
+                                  (condp = (inc i)
+                                    drag-depth "col-drop-sibling"
+                                    (dec drag-depth) "col-drop-into"
+                                    "col-drop-none"))}
+          [:span.col-label.muted.small
+           (case i 0 "章" 1 "節" (str "第 " (inc i) " 層"))
+           (when drag
+             (condp = (inc i)
+               drag-depth " · 調整順序"
+               (dec drag-depth) " · 移入"
+               nil))]
           [:div.col-viewport {:on {:wheel [[:ui/wheel-column i [:event/wheel-delta] lo hi]]
-                                   :dragover [[:ui/edge-scroll i [:event/edge-delta] lo hi]]}}
-           [:div.tree-inner {:style {:transform (str "translateY(" (+ (nth offs i) (get bias i 0)) "px)")}}
+                                   :dragover [[:drag/over i [:event/viewport-y] translate]
+                                              [:ui/edge-scroll i [:event/edge-delta] lo hi]]
+                                   :drop [[:drag/drop]]}}
+           [:div.tree-inner {:style {:transform (str "translateY(" translate "px)")}}
             (relation-chips state col roles)
             (for [c col]
               (tree-card {:nodes nodes :title title :role (roles (:id c)) :drag drag :over over} c))

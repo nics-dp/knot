@@ -82,3 +82,40 @@
                             [y y]))))]
           (span-offset t b viewport-h)))
       cols))))
+
+(defn drop-target
+  "拖曳時指標在第 column 欄（0 起算）、欄內內容座標 y 的位置，換算成放置方式
+  {:id :pos}（SPEC 5.3 拖曳只在同一層）：
+  - 同一欄：取距離 y 最近、且合法的卡片間隙，插在前或後；
+  - 左邊一欄：移入 y 所在（或最近）的卡片；
+  - 其他欄：nil。"
+  [nodes cols moving-id column y]
+  (let [dm (tree/depth nodes moving-id)
+        d (inc column)
+        col (get cols column)]
+    (cond
+      (= d dm)
+      (let [cards (vec col)
+            gaps (for [[i {:keys [id top height gap-before]}] (map-indexed vector cards)
+                       :let [nxt (get cards (inc i))]
+                       ;; 組與組之間的間隙較寬：靠近上方卡片底緣是「接在它後面」，
+                       ;; 靠近下方卡片頂緣是「插在它前面」，兩者 parent 不同
+                       [pos gy] [[:before (- top (min 6 (/ gap-before 2)))]
+                                 [:after (+ top height (min 6 (/ (or (:gap-before nxt) gap-in-group) 2)))]]]
+                   {:id id :pos pos :dist (abs (- y gy))})]
+        (some->> gaps
+                 (filter #(tree/placement nodes moving-id (:id %) (:pos %)))
+                 seq
+                 (apply min-key :dist)
+                 (#(select-keys % [:id :pos]))))
+
+      (= d (dec dm))
+      (let [dist (fn [{:keys [top height]}]
+                   (cond (< y top) (- top y)
+                         (> y (+ top height)) (- y top height)
+                         :else 0))
+            card (when (seq col) (apply min-key dist col))]
+        (when (and card (tree/placement nodes moving-id (:id card) :into))
+          {:id (:id card) :pos :into}))
+
+      :else nil)))
