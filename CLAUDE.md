@@ -22,6 +22,7 @@
   `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --window-size=1440,1000 --virtual-time-budget=4000 --screenshot=out.png "http://localhost:3000/?select=p312"`
 - 改了 `knot.server` 的路由要 `(user/reset)` 才會生效；reset 失敗時 `(require 'user :reload)` 再 `(user/go)`。
 - **真實參考資料：** 使用者提供的 PDF 放在 repo 根目錄、轉換結果在 `local/sources/*.md`，兩者都在 `.gitignore`。`/api/sample-report` 會把 `local/sources/*.md` 切成候選區塊併入素材庫，用來模擬操作。**commit 時一律指定路徑，不要 `git add -A`。**
+- **本機測試報告：** `local/sample-report.edn` 存在時，`/api/sample-report` 只回傳它（不含虛構資料）。它由 `local/make_sample.py` 產生（節錄自參考報告），重新產生：`python3 -I local/make_sample.py local/sample-report.edn`。刪掉這個檔案就回到虛構的路燈範例。自動測試一律使用 `test-resources/` 的虛構資料。
 - 轉換：`node_modules/.bin/anydoc <檔案.pdf> > local/sources/<檔名>.md`；評估記錄在 `docs/ingest-evaluation.md`。
 - 原則上由使用者啟動兩個 nREPL；沒在執行時可在背景啟動，但不要關閉使用者已啟動的行程。
 

@@ -26,13 +26,25 @@
                      :id-prefix (str "ref" (inc i))}))
                  (range) files))))
 
+(def local-sample-report
+  "使用者在本機準備的測試報告（節錄自真實參考資料），不進 git。存在時優先使用。"
+  "local/sample-report.edn")
+
 (defn- sample-report
-  "M1 之前的介面開發用：讀取 classpath 上的虛構範例報告（只在 :dev 加入 test-resources 時存在），
-  再加上本機參考資料切出的區塊。"
+  "M1 之前的介面開發用。優先讀取本機測試報告；沒有時讀取 classpath 上的虛構範例報告
+  （只在 :dev 加入 test-resources 時存在），再加上本機參考資料切出的區塊。"
   [_]
-  (if-let [res (io/resource "fixtures/reports/streetlight.edn")]
-    {:status 200 :body (update (edn/read-string (slurp res)) :blocks into (local-blocks))}
-    {:status 404 :body {:error "找不到範例報告；請以 :dev alias 啟動"}}))
+  (let [local (io/file local-sample-report)]
+    (cond
+      (.exists local)
+      {:status 200 :body (edn/read-string (slurp local))}
+
+      (io/resource "fixtures/reports/streetlight.edn")
+      {:status 200 :body (update (edn/read-string (slurp (io/resource "fixtures/reports/streetlight.edn")))
+                                 :blocks into (local-blocks))}
+
+      :else
+      {:status 404 :body {:error "找不到範例報告；請以 :dev alias 啟動"}})))
 
 (defn routes []
   [["/api"
