@@ -1,6 +1,8 @@
 (ns knot.ui
   "主編輯畫面的狀態轉換。每個函式都是 (state & args) → state 的純函式。"
-  (:require [knot.layout :as layout]
+  (:require [clojure.string :as str]
+            [knot.context :as context]
+            [knot.layout :as layout]
             [knot.tree :as tree]))
 
 (def initial-ui
@@ -54,6 +56,16 @@
     (if (contains? (:nodes state) (get-in state [:ui :selected]))
       state
       (assoc-in state [:ui :selected] (default-selection (:nodes state))))))
+
+(defn apply-versions
+  "存檔成功後，把後端回傳的版本（{卡片 id 版本}）寫回狀態；下次送出時附上，供衝突檢查（SPEC 5.13）。
+  送出期間已被刪除的卡片略過。"
+  [state versions]
+  (reduce-kv (fn [s id v]
+               (if (contains? (:nodes s) id)
+                 (assoc-in s [:nodes id :node/version] v)
+                 s))
+             state versions))
 
 (defn- titles [{:keys [nodes]}]
   (let [numbers (tree/numbering nodes)]
@@ -117,6 +129,58 @@
 
 (defn dismiss-toast [state]
   (assoc-in state [:ui :toast] nil))
+
+;; ---------------------------------------------------------------------------
+;; 其他來源的修改（SPEC 5.13）
+
+(def ^:private text-fields
+  [[:node/name "名稱"] [:node/title "名稱"] [:node/draft "意圖"] [:node/prose "本文"]])
+
+(defn lost-input
+  "衝突時沒有存入的文字：與已存檔的資料（sync/data 的形式）不同的名稱、意圖與本文，
+  依文件順序 [{:id :title :field :text}]；本文轉成純文字，空白的不列。"
+  [state saved]
+  (let [nodes (:nodes state)
+        numbers (tree/numbering nodes)]
+    (vec (for [id (tree/document-order nodes)
+               :let [node (get nodes id)]
+               [k field] text-fields
+               :let [v (get node k)]
+               :when (and (some? v) (not= v (get-in saved [:nodes id k])))
+               :let [text (if (= k :node/prose) (context/prose-text (:facts state) v) v)]
+               :when (not (str/blank? text))]
+           {:id id :title (tree/display-title nodes numbers id) :field field :text text}))))
+
+(defn show-conflict
+  "衝突後（已重新載入）說明哪些卡片被其他來源改過，並保留沒有存入的文字供複製。"
+  [state names lost]
+  (update state :ui assoc :conflict {:names names :lost lost} :toast nil))
+
+(defn dismiss-conflict [state]
+  (update state :ui dissoc :conflict))
+
+(defn agent-changed
+  "收到 agent 的修改組：頂部列顯示它的名稱，涉及的卡片短暫標示。
+  :n 每次遞增，畫面據此交替動畫名稱，同一張卡片再次被修改時也會重新標示。"
+  [state {:keys [label nodes]}]
+  (update-in state [:ui :agent-change]
+             (fn [prev] {:label label :ids (vec nodes) :n (inc (:n prev 0))})))
+
+(defn set-recent-cards
+  "最近修改的卡片（後端 /api/report/recent-changes）：[{:node/id :label :at :by}]，新到舊。"
+  [state cards]
+  (assoc-in state [:ui :recent] (vec cards)))
+
+(defn toggle-recent [state]
+  (update-in state [:ui :recent-open] not))
+
+(defn close-recent [state]
+  (update state :ui dissoc :recent-open))
+
+(defn open-recent-card
+  "從最近修改的清單選一張卡片：選取並關閉清單。"
+  [state id]
+  (-> state (select id) close-recent))
 
 ;; ---------------------------------------------------------------------------
 ;; 移動
@@ -218,7 +282,7 @@
         (update state :ui assoc :selected id :bias {} :focus-title (when-not (= kind :intro) id)
                 :editor-collapsed false
                 :toast (if (= kind :intro)
-                         "新增引言：寫下意圖（可留空），本文由 AI 依下層內容生成"
+                         "新增引言：寫下意圖（可留空），本文由 agent 依下層內容撰寫"
                          label))))))
 
 (defn wrap-paragraphs
@@ -264,27 +328,6 @@
                                                             (= para-id (:relation/to %)))
                                                        rels))))
             (update :ui assoc :selected para-id :toast label))))))
-
-(defn toggle-lock
-  "鎖定只由使用者設定或解除；解除後回到人工改過或 AI 生成。"
-  [state id]
-  (let [node (get-in state [:nodes id])]
-    (if-not (= :paragraph (:node/kind node))
-      state
-      (let [locked? (= :locked (:node/status node))
-            label (if locked? "解除鎖定" "鎖定段落")]
-        (-> state
-            (remember label)
-            (update-in [:nodes id]
-                       (fn [n]
-                         (if locked?
-                           (-> n
-                               (assoc :node/status (or (:node/unlocked-status n)
-                                                       (if (:node/prose n) :human :none)))
-                               (dissoc :node/unlocked-status))
-                           (assoc n :node/status :locked
-                                  :node/unlocked-status (:node/status n)))))
-            (assoc-in [:ui :toast] label))))))
 
 ;; ---------------------------------------------------------------------------
 ;; 復原
@@ -378,10 +421,10 @@
 
 (defn set-prose
   "在本文編輯器修改本文（逐字輸入，不進復原紀錄；編輯器有自己的復原）。
-  段落改了本文就轉為 :human（SPEC 4 狀態轉換）；鎖定的段落不能修改。"
+  段落改了本文就轉為 :human（SPEC 4 狀態轉換）。"
   [state id doc]
   (let [{:node/keys [kind status] :as node} (get-in state [:nodes id])]
-    (if (or (nil? node) (= :locked status) (= doc (:node/prose node)))
+    (if (or (nil? node) (= doc (:node/prose node)))
       state
       (cond-> (assoc-in state [:nodes id :node/prose] doc)
         (and (= :paragraph kind) (not= :human status))

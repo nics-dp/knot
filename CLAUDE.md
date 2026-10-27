@@ -18,9 +18,9 @@
 
 - `bb dev` 同時啟動兩者；頁面在 http://localhost:3000。
 - **報告目錄：** 一個目錄一份報告，資料庫在 `<報告目錄>/.knot/db`。REPL 開發使用 `local/report`（不進 git）；`clojure -M:run [目錄]` 預設為目前目錄。空白報告的畫面提供「匯入範例內容」（`POST /api/dev/sample`，本機測試報告優先）。
-- **API：** `GET /api/report`、`POST /api/report/changes`（malli 驗證）、`POST /api/report/undo`、`GET /api/report/nodes/:id/previous`（卡片的前一版）。
-- URL 參數 `?select=<卡片 id 或名稱>`、`?page=library|tree|fulltext`、`?drag=<卡片 id>`（拖曳中的樣子）、`?editor=1`（展開編輯區，預設收合）、`?previous=1`（本文區與前一版比較）指定初始畫面，方便截圖對照設計稿；截圖可用 headless Chrome：
-  `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --window-size=1440,1000 --virtual-time-budget=4000 --screenshot=out.png "http://localhost:3000/?select=p312&editor=1"`
+- **API：** `GET /api/report`、`POST /api/report/changes`（malli 驗證）、`POST /api/report/undo`、`GET /api/report/nodes/:id/previous`（卡片的前一版）、`GET /api/report/recent-changes`（最近修改的卡片）、`GET /api/events`（SSE）。
+- URL 參數 `?select=<卡片 id 或名稱>`、`?page=library|tree|fulltext`、`?drag=<卡片 id>`（拖曳中的樣子）、`?editor=1`（展開編輯區，預設收合）、`?previous=1`（本文區與前一版比較）、`?flash=<卡片 id 或名稱>`（模擬 agent 剛修改的綠色框，約 4 秒）指定初始畫面，方便截圖對照設計稿；截圖可用 headless Chrome：
+  `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --window-size=1440,1000 --timeout=4000 --screenshot=out.png "http://localhost:3000/?select=p312&editor=1"`（頁面一直開著事件通知的連線，`--virtual-time-budget` 會等不到結束，要用 `--timeout`）
 - 改了 `knot.server` 的路由要 `(user/reset)` 才會生效；reset 失敗時 `(require 'user :reload)` 再 `(user/go)`。
 - **真實參考資料：** 使用者提供的 PDF 放在 repo 根目錄、轉換結果在 `local/sources/*.md`，兩者都在 `.gitignore`。`knot.ingest/markdown->blocks` 可把它們切成候選區塊（M5 的匯入會用到）。**commit 時一律指定路徑，不要 `git add -A`。**
 - **本機測試報告：** `local/sample-report.edn` 存在時，「匯入範例內容」與 `(seed! "local/sample-report.edn")` 使用它。它由 `local/make_sample.py` 產生（節錄自參考報告），重新產生：`python3 -I local/make_sample.py local/sample-report.edn`。刪掉這個檔案就改用虛構的路燈範例。自動測試一律使用 `test-resources/` 的虛構資料。
@@ -65,6 +65,15 @@
 - **不擴大範圍。** SPEC 第 1 節的範圍外項目不實作。
 - **遇到待定事項就停下**，列出選項請使用者決定；疑問記在 `docs/QUESTIONS.md`。
 - 每個里程碑開一個分支，測試通過且使用者確認畫面後再合併。
+
+## REPL 與開發的坑
+
+- **不要用 `(require 'x :reload-all)`。** 它會重新載入 Datalevin 的類別，之後出現 ClassCastException，只能重啟 nREPL。改用 `(require 'knot.xxx :reload)` 逐一重新載入，或 `(user/reset)`。
+- **別名失效**（例如 `No such namespace: db`，常在改了被 require 的 ns 之後）：`(require 'user :reload)` 再 `(user/go)`；仍不行時對受影響的 ns 執行 `(remove-ns 'knot.xxx)` 再重新 require。
+- **dev 報告是真實資料。** `local/report` 的資料庫可能是由參考報告節錄而來；在 REPL 試寫入後用 `curl -X POST localhost:3000/api/report/undo` 復原，測試一律用暫存目錄與 `test-resources/` 的虛構資料。
+- **共用的 nREPL 與 port。** 後端 nREPL 7888、HTTP 3000、shadow 7889 只有一套，同時只能有一個人在改程式與重新載入；不要另外啟動或關閉這些行程。
+- **前端的 JS 物件：** ProseMirror 的 attrs 是沒有原型的物件，`js->clj` 不會轉換，要先經過 JSON（見 `knot.prose-editor/json->edn`）。
+- **commit：** 只 stage 指定的路徑；先看 `git status`，根目錄的 PDF 與 `local/` 絕不能進 commit。由使用者確認後才 commit。
 
 ## 環境備忘
 

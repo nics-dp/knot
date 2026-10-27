@@ -42,7 +42,6 @@
    :node/draft (assoc string :db/fulltext true)
    :node/prose string
    :node/status kw
-   :node/unlocked-status kw
    :node/version long*
    :node/label (assoc string :db/unique :db.unique/value)
    :node/facts refs
@@ -108,6 +107,7 @@
    ;; 修改組與修訂
    :changeset/id (id-attr)
    :changeset/origin kw
+   :changeset/by kw
    :changeset/at {:db/valueType :db.type/instant}
    :changeset/label string
    :changeset/undoes ref-one
@@ -208,7 +208,7 @@
 ;; 讀取：資料庫 → 前端形式
 
 (def ^:private node-scalars
-  [:node/kind :node/order-key :node/name :node/title :node/draft :node/status :node/unlocked-status
+  [:node/kind :node/order-key :node/name :node/title :node/draft :node/status
    :node/label :node/figure-file :node/caption :node/table-view])
 
 (defn- read-json [s]
@@ -335,10 +335,6 @@
 ;; ---------------------------------------------------------------------------
 ;; 寫入：前端形式 → 交易
 
-(def ^:private content-keys
-  "這些欄位變動時，卡片的 :node/version 加一。"
-  [:node/kind :node/name :node/title :node/draft :node/prose])
-
 (defn- exists? [db attr v]
   (some? (d/entid db [attr v])))
 
@@ -350,10 +346,13 @@
 (defn- node-tx
   "卡片的交易資料。ref 把 [類型 識別鍵] 轉成這次交易可用的參照（同一交易新增的實體用 tempid）。"
   [db ref before node]
-  (let [id (:node/id node)
+  (let [;; 鎖定功能已移除；復原到舊快照時，鎖定的段落視為人工改過
+        node (cond-> node (= :locked (:node/status node)) (assoc :node/status :human))
+        id (:node/id node)
         eid [:node/id id]
         existed? (some? before)
-        version (if (= (select-keys before content-keys) (select-keys node content-keys))
+        ;; 任何欄位（含位置、狀態、依據）變動都加一，版本檢查才能擋下覆蓋移動的寫入
+        version (if (= (dissoc before :node/version) (dissoc node :node/version))
                   (:node/version before 1)
                   (inc (or (:node/version before) 0)))
         removed (for [a (concat node-scalars [:node/prose :node/parent])
@@ -480,64 +479,95 @@
 (def ^:private key-fns
   {:nodes :node/id :relations tree/relation-key :blocks :block/id :facts :fact/key})
 
+(defn- version-conflicts
+  "[:nodes :upsert] 中已存在的卡片，送來的 :node/version 與資料庫目前的不同者。"
+  [db changes]
+  (vec (for [n (get-in changes [:nodes :upsert])
+             :let [actual (:node/version (d/pull db [:node/version] [:node/id (:node/id n)]))]
+             :when (and actual (not= actual (:node/version n)))]
+         {:node/id (:node/id n) :expected (:node/version n) :actual actual})))
+
+(defn- write-changes!
+  "apply-changes! 的主體；呼叫端須持有 conn 的鎖。"
+  [conn {:keys [origin by label changes undoes]}]
+  (let [db (d/db conn)
+        upserted {:node (set (map :node/id (get-in changes [:nodes :upsert])))
+                  :block (set (map :block/id (get-in changes [:blocks :upsert])))
+                  :fact (set (map :fact/key (get-in changes [:facts :upsert])))}
+        attr {:node :node/id :block :block/id :fact :fact/key}
+        ;; 同一交易新增或更新的實體用 tempid；其他用 lookup ref（不存在時為 nil）
+        ref (fn [kind k]
+              (when (some? k)
+                (cond
+                  (contains? (upserted kind) k) (str (name kind) "-" k)
+                  (exists? db (attr kind) k) [(attr kind) k])))
+        cs-id (random-uuid)
+        revisions (atom [])
+        revise! (fn [coll k before after]
+                  (swap! revisions conj
+                         (cond-> {:revision/changeset "changeset"
+                                  :revision/collection coll
+                                  :revision/target (str (name coll) "/" k)
+                                  :revision/after (pr-str after)}
+                           before (assoc :revision/before (pr-str before))
+                           (and (= coll :nodes) after) (assoc :revision/node (ref :node k)))))
+        tx (vec
+            (mapcat
+             (fn [coll]
+               (let [{:keys [upsert delete]} (get changes coll)
+                     key-fn (key-fns coll)]
+                 (concat
+                  (mapcat (fn [e]
+                            (let [k (key-fn e)
+                                  before (entity-before db coll k)]
+                              (when (not= before e)
+                                (revise! coll k before e)
+                                (case coll
+                                  :nodes (node-tx db ref before e)
+                                  :relations (relation-tx ref before e)
+                                  :blocks (block-tx db ref before e)
+                                  :facts (fact-tx ref before e)))))
+                          upsert)
+                  (mapcat (fn [k]
+                            (when-let [before (entity-before db coll k)]
+                              (revise! coll k before nil)
+                              (delete-tx db coll k)))
+                          delete))))
+             collection-order))
+        written? (seq @revisions)
+        db-after (if written?
+                   (:db-after (d/transact! conn (concat tx
+                                                        [(cond-> {:db/id "changeset"
+                                                                  :changeset/id cs-id
+                                                                  :changeset/origin (or origin :manual)
+                                                                  :changeset/by (or by :user)
+                                                                  :changeset/at (java.util.Date.)
+                                                                  :changeset/label (or label "")}
+                                                           undoes (assoc :changeset/undoes [:changeset/id undoes]))]
+                                                        @revisions)))
+                   db)]
+    (cond-> {:versions (into {}
+                             (keep (fn [n]
+                                     (let [id (:node/id n)]
+                                       (when-let [v (:node/version (d/pull db-after [:node/version] [:node/id id]))]
+                                         [id v]))))
+                             (get-in changes [:nodes :upsert]))}
+      written? (assoc :changeset/id cs-id))))
+
 (defn apply-changes!
-  "把前端的變動（knot.sync/diff 的格式）寫成一個修改組。回傳 changeset id；沒有變動時為 nil。"
-  [conn {:keys [origin label changes undoes]}]
+  "把前端的變動（knot.sync/diff 的格式）寫成一個修改組。
+  選項：:by（:user 預設或 :agent）、:check-versions?（見下）、:undoes（復原用）。
+  回傳 {:changeset/id uuid :versions {卡片 id 寫入後的版本}}；沒有實際變動時沒有 :changeset/id。
+  :check-versions? 為 true 時，已存在的卡片若送來的 :node/version 與資料庫目前的不同，
+  就不寫入任何東西，回傳 {:conflicts [{:node/id .. :expected 送來的 :actual 目前的}]}。
+  檢查與寫入在同一把鎖內，兩個請求不會同時通過檢查。changes 為空時回傳 nil。"
+  [conn {:keys [changes check-versions?] :as opts}]
   (when (seq changes)
-    (let [db (d/db conn)
-          upserted {:node (set (map :node/id (get-in changes [:nodes :upsert])))
-                    :block (set (map :block/id (get-in changes [:blocks :upsert])))
-                    :fact (set (map :fact/key (get-in changes [:facts :upsert])))}
-          attr {:node :node/id :block :block/id :fact :fact/key}
-          ;; 同一交易新增或更新的實體用 tempid；其他用 lookup ref（不存在時為 nil）
-          ref (fn [kind k]
-                (when (some? k)
-                  (cond
-                    (contains? (upserted kind) k) (str (name kind) "-" k)
-                    (exists? db (attr kind) k) [(attr kind) k])))
-          cs-id (random-uuid)
-          revisions (atom [])
-          revise! (fn [coll k before after]
-                    (swap! revisions conj
-                           (cond-> {:revision/changeset "changeset"
-                                    :revision/collection coll
-                                    :revision/target (str (name coll) "/" k)
-                                    :revision/after (pr-str after)}
-                             before (assoc :revision/before (pr-str before))
-                             (and (= coll :nodes) after) (assoc :revision/node (ref :node k)))))
-          tx (vec
-              (mapcat
-               (fn [coll]
-                 (let [{:keys [upsert delete]} (get changes coll)
-                       key-fn (key-fns coll)]
-                   (concat
-                    (mapcat (fn [e]
-                              (let [k (key-fn e)
-                                    before (entity-before db coll k)]
-                                (when (not= before e)
-                                  (revise! coll k before e)
-                                  (case coll
-                                    :nodes (node-tx db ref before e)
-                                    :relations (relation-tx ref before e)
-                                    :blocks (block-tx db ref before e)
-                                    :facts (fact-tx ref before e)))))
-                            upsert)
-                    (mapcat (fn [k]
-                              (when-let [before (entity-before db coll k)]
-                                (revise! coll k before nil)
-                                (delete-tx db coll k)))
-                            delete))))
-               collection-order))]
-      (when (seq @revisions)
-        (d/transact! conn (concat tx
-                                  [(cond-> {:db/id "changeset"
-                                            :changeset/id cs-id
-                                            :changeset/origin (or origin :manual)
-                                            :changeset/at (java.util.Date.)
-                                            :changeset/label (or label "")}
-                                     undoes (assoc :changeset/undoes [:changeset/id undoes]))]
-                                  @revisions))
-        cs-id))))
+    (locking conn
+      (let [conflicts (when check-versions? (seq (version-conflicts (d/db conn) changes)))]
+        (if conflicts
+          {:conflicts (vec conflicts)}
+          (write-changes! conn opts))))))
 
 ;; ---------------------------------------------------------------------------
 ;; 復原
@@ -558,9 +588,10 @@
 (defn undo!
   "復原最近一個修改組：新增一個把各實體還原為修改前快照的修改組。回傳被復原的 label；沒有可復原的時為 nil。"
   [conn]
-  (let [db (d/db conn)]
-    (when-let [[cs-id _ label] (undoable-changeset db)]
-      (let [revs (d/q '[:find ?coll ?target ?before
+  (locking conn
+    (when-let [[cs-id _ label] (undoable-changeset (d/db conn))]
+      (let [db (d/db conn)
+            revs (d/q '[:find ?coll ?target ?before
                         :in $ ?cid
                         :where [?c :changeset/id ?cid] [?r :revision/changeset ?c]
                         [?r :revision/collection ?coll] [?r :revision/target ?target]
@@ -625,3 +656,30 @@
   [db node-id]
   (let [revs (node-revisions db node-id)]
     (into {} (keep (fn [f] (some->> (field-previous revs f) (vector f)))) previous-fields)))
+
+;; ---------------------------------------------------------------------------
+;; 最近修改的卡片（SPEC 5.13）
+
+(defn recent-cards
+  "最近修改的卡片（不分 agent 或使用者），新到舊、每張卡片只列最近一次：
+  [{:node/id :label :at :by}]，最多 n 張。匯入與復原本身不算修改；
+  已刪除的卡片與已復原的修改組不列。"
+  [db n]
+  (let [exists? (set (d/q '[:find [?id ...] :where [_ :node/id ?id]] db))
+        undone (set (d/q '[:find [?t ...] :where [_ :changeset/undoes ?u] [?u :changeset/id ?t]] db))]
+    (->> (d/q '[:find ?target ?at ?label ?by ?cid
+                :where [?c :changeset/id ?cid] [?c :changeset/at ?at] [?c :changeset/origin ?o]
+                [(not= ?o :undo)] [(not= ?o :import)]
+                [(get-else $ ?c :changeset/by :user) ?by]
+                [(get-else $ ?c :changeset/label "") ?label]
+                [?r :revision/changeset ?c] [?r :revision/collection :nodes]
+                [?r :revision/target ?target]]
+              db)
+         (remove #(undone (nth % 4)))
+         (keep (fn [[target at label by]]
+                 (when-let [id (parse-uuid (subs target (count "nodes/")))]
+                   (when (exists? id) {:node/id id :label label :at at :by by}))))
+         (sort-by :at #(compare %2 %1))
+         (reduce (fn [acc {id :node/id :as e}]
+                   (if (or (some #(= id (:node/id %)) acc) (>= (count acc) n)) acc (conj acc e)))
+                 []))))

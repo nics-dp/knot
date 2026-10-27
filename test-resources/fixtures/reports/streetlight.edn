@@ -103,7 +103,7 @@
          :node/draft "由素材表「各場域量測結果」產生，欄位：場域、節電率"}
         {:node/id "f1" :node/kind :figure :node/title "各場域節電率比較" :node/label "fig:saving"
          :node/figure-file "figures/fig-saving.png" :node/draft "圖檔由使用者提供"}]}
-      {:node/id "p313" :node/kind :paragraph :node/title "異常狀況說明" :node/status :locked
+      {:node/id "p313" :node/kind :paragraph :node/title "異常狀況說明" :node/status :human
        :node/draft "場域 C 測試期間多次異常斷線；原因：控制器韌體版本"
        :node/citations [{:block "b3"} {:block "b4"}]
        :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "場域 C 於測試期間發生多次異常斷線，經工作會議討論，研判與控制器韌體版本有關。"}]}]}

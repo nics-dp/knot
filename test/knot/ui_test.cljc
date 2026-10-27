@@ -71,16 +71,11 @@
     (is (= ["a1" "a2"] (tree/child-ids (:nodes s) "A")))
     (is (empty? (:relations s)) "引言不再有段落關係")))
 
-(deftest toggle-lock-test
-  (let [s (ui/toggle-lock state "a2")]
-    (is (= :locked (get-in s [:nodes "a2" :node/status])))
-    (is (= :human (get-in (ui/toggle-lock s "a2") [:nodes "a2" :node/status])))))
-
 (deftest edit-intent-test
   (let [s (ui/set-node-field state "a1" :node/draft "新的意圖")]
     (is (= "新的意圖" (get-in s [:nodes "a1" :node/draft])))
     (is (empty? (:history s)) "逐字輸入不進復原紀錄"))
-  (is (= state (ui/set-node-field state "a1" :node/status :locked)) "只能編輯名稱與意圖"))
+  (is (= state (ui/set-node-field state "a1" :node/status :human)) "只能編輯名稱與意圖"))
 
 (deftest citation-test
   (let [s (ui/add-citation state "a1" "b9")]
@@ -186,9 +181,6 @@
         (is (= (:history state) (:history s)) "逐字輸入不進復原紀錄")))
     (testing "尚未生成的段落直接撰寫也算人工"
       (is (= :human (get-in (ui/set-prose state "b1" doc) [:nodes "b1" :node/status]))))
-    (testing "鎖定的段落不能修改"
-      (let [locked (assoc-in state [:nodes "a1" :node/status] :locked)]
-        (is (identical? locked (ui/set-prose locked "a1" doc)))))
     (testing "引言不套用段落狀態"
       (let [s (ui/add-child state "A" :intro)
             intro (get-in s [:ui :selected])]
@@ -212,3 +204,47 @@
       (let [both (ui/add-remote-relation s "b1" "a1" :basis)]
         (is (= #{:basis} (remote (ui/set-remote-relation-type both "b1" "a1" :echo :basis))))))
     (is (identical? s (ui/set-remote-relation-type s "b1" "a1" :echo :echo)))))
+
+(deftest apply-versions-test
+  (let [a (random-uuid) b (random-uuid)
+        state {:nodes {a {:node/id a :node/version 1}}}]
+    (is (= {:nodes {a {:node/id a :node/version 3}}}
+           (ui/apply-versions state {a 3 b 2}))
+        "送出期間已刪除的卡片略過")))
+
+(deftest lost-input-test
+  (let [saved {:nodes (:nodes state)}
+        prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "新本文"}]}]}
+        local (-> state
+                  (ui/set-node-field "a1" :node/draft "新意圖")
+                  (ui/set-node-field "a2" :node/title "改名")
+                  (ui/set-prose "b1" prose))]
+    (is (= [{:id "a1" :field "意圖" :text "新意圖"}
+            {:id "a2" :field "名稱" :text "改名"}
+            {:id "b1" :field "本文" :text "新本文"}]
+           (mapv #(dissoc % :title) (ui/lost-input local saved))))
+    (is (= [] (ui/lost-input state saved)) "沒有改動時為空")
+    (is (= [] (ui/lost-input (ui/set-node-field state "a1" :node/draft "  ") saved)) "空白不列")))
+
+(deftest conflict-test
+  (let [s (ui/show-conflict (assoc-in state [:ui :toast] "舊訊息") "「一」" [{:id "a1" :text "x"}])]
+    (is (= {:names "「一」" :lost [{:id "a1" :text "x"}]} (get-in s [:ui :conflict])))
+    (is (nil? (get-in s [:ui :toast])))
+    (is (nil? (get-in (ui/dismiss-conflict s) [:ui :conflict])))))
+
+(deftest agent-change-test
+  (let [s (ui/agent-changed state {:label "建立大綱" :nodes ["a2" "b1"]})]
+    (is (= {:label "建立大綱" :ids ["a2" "b1"] :n 1} (get-in s [:ui :agent-change])))
+    (is (= 2 (get-in (ui/agent-changed s {:label "y" :nodes []}) [:ui :agent-change :n])))))
+
+(deftest recent-test
+  (let [s (-> state
+              (ui/set-recent-cards [{:node/id "b1" :label "x" :by :user}])
+              ui/toggle-recent)]
+    (is (true? (get-in s [:ui :recent-open])))
+    (is (= [{:node/id "b1" :label "x" :by :user}] (get-in s [:ui :recent])))
+    (is (not (get-in (ui/toggle-recent s) [:ui :recent-open])))
+    (testing "選一張卡片：選取並關閉清單"
+      (let [s (ui/open-recent-card s "b1")]
+        (is (= "b1" (get-in s [:ui :selected])))
+        (is (nil? (get-in s [:ui :recent-open])))))))

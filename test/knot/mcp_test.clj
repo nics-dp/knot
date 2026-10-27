@@ -1,0 +1,415 @@
+(ns knot.mcp-test
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.test :refer [deftest is testing use-fixtures]]
+            [datalevin.core :as d]
+            [jsonista.core :as json]
+            [knot.db :as db]
+            [knot.seed :as seed]
+            [knot.server :as server]
+            [knot.tree :as tree]
+            [knot.ui :as ui]))
+
+(def ^:dynamic *handler* nil)
+(def ^:dynamic *conn* nil)
+
+(use-fixtures :each
+  (fn [t]
+    (let [dir (str (java.nio.file.Files/createTempDirectory "knot-mcp" (make-array java.nio.file.attribute.FileAttribute 0)))
+          conn (db/open-report dir)]
+      (try
+        (seed/seed! conn (edn/read-string (slurp (io/resource "fixtures/reports/streetlight.edn"))))
+        (binding [*handler* (server/handler conn) *conn* conn] (t))
+        (finally (db/close-report conn))))))
+
+(defn- post
+  "送出原始字串（或資料）到 /mcp，回傳 {:status :body}，body 已解析為 JSON（無 body 為 nil）。"
+  [body & [headers]]
+  (let [res (*handler* {:request-method :post :uri "/mcp"
+                        :headers (merge {"content-type" "application/json"} headers)
+                        :body (java.io.ByteArrayInputStream.
+                               (.getBytes ^String (if (string? body) body (json/write-value-as-string body)) "UTF-8"))})]
+    (assoc res :body (let [b (some-> (:body res) str not-empty)] (try (some-> b json/read-value) (catch Exception _ b))))))
+
+(defn- rpc [method & [params]]
+  (post {"jsonrpc" "2.0" "id" 1 "method" method "params" params}))
+
+(defn- call [tool args]
+  (:body (rpc "tools/call" {"name" tool "arguments" args})))
+
+(defn- outline [] (get-in (call "get_outline" {}) ["result" "structuredContent"]))
+
+(defn- card-id [title]
+  (some #(when (= title (get % "title")) (get % "id")) (get (outline) "cards")))
+
+(defn- structured [res] (get-in res ["result" "structuredContent"]))
+
+(deftest initialize-test
+  (let [res (rpc "initialize" {"protocolVersion" "2025-03-26"})
+        r (get-in res [:body "result"])]
+    (is (= 200 (:status res)))
+    (is (= "application/json" (get-in res [:headers "Content-Type"])))
+    (is (= "2025-03-26" (get r "protocolVersion")))
+    (is (= {"tools" {}} (get r "capabilities")))
+    (is (= "knot" (get-in r ["serverInfo" "name"])))
+    (is (string? (get r "instructions"))))
+  (is (= "2025-06-18" (get-in (rpc "initialize" {"protocolVersion" "1999-01-01"}) [:body "result" "protocolVersion"]))))
+
+(deftest notification-and-ping-test
+  (let [res (post {"jsonrpc" "2.0" "method" "notifications/initialized"})]
+    (is (= 202 (:status res)))
+    (is (nil? (:body res))))
+  (is (= {} (get-in (rpc "ping") [:body "result"]))))
+
+(deftest tools-list-test
+  (let [tools (get-in (rpc "tools/list") [:body "result" "tools"])]
+    (is (= ["add_card" "add_remote_relation" "build_outline" "delete_card" "get_card" "get_outline"
+            "get_writing_context" "move_card" "remove_relation" "set_relation" "update_card"]
+           (sort (map #(get % "name") tools))))
+    (is (every? #(= "object" (get-in % ["inputSchema" "type"])) tools))
+    (is (every? #(seq (get % "description")) tools))))
+
+(deftest get-outline-test
+  (let [{:strs [report cards]} (outline)
+        by-title (into {} (map (juxt #(get % "title") identity)) cards)]
+    (is (= "OO 市智慧路燈示範計畫" (get report "title")))
+    (is (= 47 (count cards)))
+    (testing "標題的編號與深度"
+      (is (= {"kind" "heading" "depth" 1 "number" "第一章" "parent_id" nil}
+             (select-keys (by-title "第一章 計畫概述") ["kind" "depth" "number" "parent_id"])))
+      (is (= {"depth" 2 "number" "1.1"} (select-keys (by-title "1.1 計畫緣起") ["depth" "number"]))))
+    (testing "段落"
+      (let [p (by-title "政策背景")]
+        (is (= "paragraph" (get p "kind")))
+        (is (= "ai" (get p "status")))
+        (is (true? (get p "has_prose")))
+        (is (nil? (get p "number")))
+        (is (= (get (by-title "1.1 計畫緣起") "id") (get p "parent_id")))))
+    (testing "引言"
+      (is (= "intro" (get (by-title "引言") "kind"))))
+    (testing "依文件順序：章在其下卡片之前"
+      (is (< (.indexOf (mapv #(get % "title") cards) "第一章 計畫概述")
+             (.indexOf (mapv #(get % "title") cards) "政策背景"))))))
+
+(deftest get-card-test
+  (let [id (card-id "主要成果")
+        c (structured (call "get_card" {"id" id}))]
+    (is (= id (get c "id")))
+    (is (= "paragraph" (get c "kind")))
+    (is (= "主要成果" (get c "title")))
+    (is (vector? (get c "path")))
+    (is (every? string? (get c "path")))
+    (is (string? (get c "intent")))
+    (is (= 1 (get c "version")))
+    (is (contains? (get c "relations") "prev"))
+    (is (vector? (get-in c ["relations" "outgoing"]))))
+  (testing "段落的前後相鄰關係與不相鄰關係"
+    (let [c (structured (call "get_card" {"id" (card-id "各場域結果比較")}))
+          rel #(select-keys % ["type" "title" "pending"])]
+      (is (= {"type" "遞進" "title" "測試方法概述" "pending" false} (rel (get-in c ["relations" "prev"]))))
+      (is (= {"type" "因果" "title" "異常狀況說明" "pending" false} (rel (get-in c ["relations" "next"]))))
+      (is (= #{"節能效益估算" "主要成果"} (set (map #(get % "title") (get-in c ["relations" "incoming"])))) "摘要本段的段落")
+      (is (= ["摘要" "摘要"] (map #(get % "type") (get-in c ["relations" "incoming"]))))
+      (is (= ["3.2" "4.1"] (sort (map #(get % "position") (get-in c ["relations" "incoming"])))))
+      (is (= [] (get-in c ["relations" "outgoing"])))))
+  (testing "有本文與依據的段落"
+    (let [c (structured (call "get_card" {"id" (card-id "政策背景")}))]
+      (is (= ["第一章 計畫概述" "1.1 計畫緣起"] (get c "path")))
+      (is (re-find #"節能減碳" (get c "prose")))
+      (is (= 1 (count (get c "citations"))))
+      (is (= {"type" "因果" "pending" false}
+             (select-keys (get-in c ["relations" "next"]) ["type" "pending"])))
+      (is (= "現況問題" (get-in c ["relations" "next" "title"])))
+      (is (nil? (get-in c ["relations" "prev"])))))
+  (testing "標題：下層卡片"
+    (let [c (structured (call "get_card" {"id" (card-id "1.1 計畫緣起")}))]
+      (is (= ["政策背景" "現況問題"] (map #(get % "title") (get c "children"))))
+      (is (nil? (get c "prose")))))
+  (testing "找不到或格式錯誤"
+    (doseq [args [{"id" (str (random-uuid))} {"id" "xyz"} {}]]
+      (let [r (get (call "get_card" args) "result")]
+        (is (true? (get r "isError")))
+        (is (string? (get-in r ["content" 0 "text"])))))))
+
+(deftest get-writing-context-test
+  (let [id (card-id "政策背景")
+        res (call "get_writing_context" {"id" id})
+        r (get res "result")
+        ctx (get r "structuredContent")]
+    (is (= id (get ctx "card_id")))
+    (is (pos? (get ctx "chars")))
+    (is (= (get ctx "chars")
+           (reduce + (for [s (get ctx "sections") e (get s "entries")]
+                       (+ (count (get e "label")) (count (get e "text")))))))
+    (is (every? #{"upper" "self" "neighbors" "children" "relations" "sources" "style"}
+                (map #(get % "group") (get ctx "sections"))))
+    (is (some #(= "self" (get % "group")) (get ctx "sections")))
+    (is (some #(= "intent" (get-in % ["entries" 0 "source"])) (get ctx "sections")))
+    (is (= ctx (json/read-value (get-in r ["content" 0 "text"])))
+        "text 與 structuredContent 為同一份結果"))
+  (testing "標題不會撰寫本文"
+    (let [r (get (call "get_writing_context" {"id" (card-id "第一章 計畫概述")}) "result")]
+      (is (true? (get r "isError")))
+      (is (= "只有段落與引言會撰寫本文" (get-in r ["content" 0 "text"]))))))
+
+(deftest errors-test
+  (is (= -32602 (get-in (call "no_such_tool" {}) ["error" "code"])))
+  (is (= -32601 (get-in (rpc "no/such") [:body "error" "code"])))
+  (is (= -32700 (get-in (post "{壞掉") [:body "error" "code"])))
+  (is (= -32600 (get-in (post "[]") [:body "error" "code"])))
+  (is (= -32600 (get-in (post {"id" 1 "method" "ping"}) [:body "error" "code"]))))
+
+(deftest origin-test
+  (let [ping {"jsonrpc" "2.0" "id" 1 "method" "ping"}]
+    (is (= 403 (:status (post ping {"origin" "http://evil.example"}))))
+    (is (= 403 (:status (post ping {"origin" "null"}))))
+    (is (= 200 (:status (post ping {"origin" "http://localhost:3000"}))))
+    (is (= 200 (:status (post ping {"origin" "http://127.0.0.1:3000"}))))
+    (is (= 200 (:status (post ping {"origin" "http://[::1]:3000"}))))
+    (is (= 200 (:status (post ping))))))
+
+(deftest get-not-allowed-test
+  (is (= 405 (:status (*handler* {:request-method :get :uri "/mcp"})))))
+
+;; ---------------------------------------------------------------------------
+;; 寫入工具
+
+(defn- state [] (ui/from-server (db/load-state (d/db *conn*))))
+
+(defn- changesets
+  "所有修改組，舊到新：[{:changeset/by :changeset/label :changeset/origin}]。"
+  []
+  (let [db (d/db *conn*)]
+    (->> (d/q '[:find ?id ?at :where [?c :changeset/id ?id] [?c :changeset/at ?at]] db)
+         (sort-by second)
+         (mapv #(d/pull db [:changeset/id :changeset/by :changeset/label :changeset/origin]
+                        [:changeset/id (first %)])))))
+
+(defn- node-by [pred] (some #(when (pred %) %) (vals (:nodes (state)))))
+(defn- node-id [title] (:node/id (node-by #(or (= title (:node/title %)) (= title (:node/name %))))))
+(defn- by-name [name] (node-by #(= name (:node/name %))))
+
+(defn- error-text [res]
+  (let [r (get res "result")]
+    (is (true? (get r "isError")))
+    (get-in r ["content" 0 "text"])))
+
+(deftest add-card-tool-test
+  (let [before (count (changesets))
+        parent (card-id "1.2 計畫目標")
+        res (call "add_card" {"kind" "paragraph" "parent_id" parent "after_id" (card-id "計畫目標")
+                              "title" "補充說明" "intent" "說明預期效益" "summary" "規劃：補充段落"})
+        out (structured res)
+        card (first (get out "cards"))
+        n (get (:nodes (state)) (parse-uuid (get card "id")))]
+    (testing "回傳"
+      (is (string? (get out "changeset_id")))
+      (is (= 1 (count (get out "cards"))))
+      (is (= {"kind" "paragraph" "number" nil "title" "補充說明"} (dissoc card "id")))
+      (is (string? (get out "message"))))
+    (testing "資料庫"
+      (is (= {:node/title "補充說明" :node/draft "說明預期效益" :node/status :none :node/parent (parse-uuid parent)}
+             (select-keys n [:node/title :node/draft :node/status :node/parent])))
+      (is (= ["計畫目標" "補充說明"] (map #(:node/title (get (:nodes (state)) %))
+                                         (tree/child-ids (:nodes (state)) (parse-uuid parent))))))
+    (testing "修改組：agent、label 為 summary"
+      (is (= (inc before) (count (changesets))))
+      (is (= {:changeset/by :agent :changeset/label "規劃：補充段落" :changeset/origin :manual}
+             (dissoc (peek (changesets)) :changeset/id))))
+    (testing "復原整組"
+      (is (= "規劃：補充段落" (db/undo! *conn*)))
+      (is (nil? (node-id "補充說明"))))))
+
+(deftest add-card-tool-default-label-and-chapter-test
+  (let [out (structured (call "add_card" {"kind" "heading" "parent_id" nil "title" "附錄"}))]
+    (is (= {"kind" "heading" "number" "第五章" "title" "第五章 附錄"} (dissoc (first (get out "cards")) "id")))
+    (is (= "新增標題「附錄」" (:changeset/label (peek (changesets)))))
+    (is (= :agent (:changeset/by (peek (changesets)))))))
+
+(deftest add-card-tool-errors-test
+  (let [before (count (changesets))]
+    (testing "規則：下層已有段落時不能放標題"
+      (is (re-find #"底下已有段落，不能再放下層標題"
+                   (error-text (call "add_card" {"kind" "heading" "parent_id" (card-id "1.1 計畫緣起") "title" "x"})))))
+    (testing "after_id 不在同層"
+      (is (re-find #"after_id 不是 parent_id 的子卡片"
+                   (error-text (call "add_card" {"kind" "paragraph" "parent_id" (card-id "1.1 計畫緣起")
+                                                 "after_id" (card-id "計畫目標") "title" "x"})))))
+    (testing "參數"
+      (is (re-find #"kind 只接受" (error-text (call "add_card" {"kind" "table" "parent_id" nil "title" "x"}))))
+      (is (re-find #"parent_id" (error-text (call "add_card" {"kind" "heading" "title" "x"}))))
+      (is (re-find #"UUID" (error-text (call "add_card" {"kind" "heading" "parent_id" "zzz" "title" "x"})))))
+    (is (= before (count (changesets))) "失敗都不寫入")))
+
+(deftest build-outline-tool-test
+  (let [before (count (changesets))
+        n-before (count (:nodes (state)))
+        res (call "build_outline"
+                  {"parent_id" nil
+                   "summary" "規劃第五章"
+                   "items" [{"kind" "heading" "title" "後續規劃" "intent" "說明後續工作"
+                             "children" [{"kind" "intro"}
+                                         {"kind" "heading" "title" "短期"
+                                          "children" [{"kind" "paragraph" "title" "第一年工作" "intent" "…"}]}
+                                         {"kind" "heading" "title" "長期"}]}]})
+        out (structured res)]
+    (testing "依文件順序回傳所有新卡片與編號"
+      (is (= [["heading" "第五章"] ["intro" nil] ["heading" "5.1"] ["paragraph" nil] ["heading" "5.2"]]
+             (mapv #(vec (map % ["kind" "number"])) (get out "cards"))))
+      (is (= "第五章 後續規劃" (get-in out ["cards" 0 "title"]))))
+    (testing "整批一個修改組"
+      (is (= (inc before) (count (changesets))))
+      (is (= {:changeset/by :agent :changeset/label "規劃第五章" :changeset/origin :manual}
+             (dissoc (peek (changesets)) :changeset/id)))
+      (is (= (+ n-before 5) (count (:nodes (state))))))
+    (testing "一次復原整批"
+      (db/undo! *conn*)
+      (is (= n-before (count (:nodes (state))))))))
+
+(deftest build-outline-tool-error-test
+  (let [before (count (changesets))
+        n-before (count (:nodes (state)))
+        text (error-text (call "build_outline"
+                               {"parent_id" nil
+                                "items" [{"kind" "heading" "title" "好的"}
+                                         {"kind" "heading" "title" "壞的"
+                                          "children" [{"kind" "paragraph" "title" "p"}
+                                                      {"kind" "heading" "title" "混用"}]}]}))]
+    (is (re-find #"^items\[1\]\.children\[1\]：" text))
+    (is (= before (count (changesets))))
+    (is (= n-before (count (:nodes (state)))) "整批都沒寫"))
+  (is (re-find #"items" (error-text (call "build_outline" {"parent_id" nil "items" []})))))
+
+(deftest update-card-tool-test
+  (let [id (card-id "選定原則")
+        before (count (changesets))]
+    (testing "版本不符：拒絕，不寫入"
+      (is (= "卡片已被修改（目前版本 1），請先 get_card 重新讀取"
+             (error-text (call "update_card" {"id" id "title" "新標題" "version" 7}))))
+      (is (= before (count (changesets)))))
+    (testing "版本相符：寫入，回傳寫入後的卡片"
+      (let [out (structured (call "update_card" {"id" id "title" "新原則" "intent" "新意圖" "version" 1
+                                                  "summary" "改段落名稱"}))]
+        (is (= [{"id" id "kind" "paragraph" "number" nil "title" "新原則"}] (get out "cards")))
+        (is (= {:node/title "新原則" :node/draft "新意圖" :node/version 2}
+               (select-keys (get (:nodes (state)) (parse-uuid id)) [:node/title :node/draft :node/version])))
+        (is (= {:changeset/by :agent :changeset/label "改段落名稱"}
+               (select-keys (peek (changesets)) [:changeset/by :changeset/label])))))
+    (testing "標題寫名稱"
+      (let [hid (card-id "2.1 場域選定")
+            out (structured (call "update_card" {"id" hid "title" "場域評估"}))]
+        (is (= "2.1 場域評估" (get-in out ["cards" 0 "title"])))
+        (is (= "場域評估" (:node/name (by-name "場域評估"))))))
+    (testing "沒有變動"
+      (let [n (count (changesets))
+            out (structured (call "update_card" {"id" id "title" "新原則"}))]
+        (is (nil? (get out "changeset_id")))
+        (is (= [] (get out "cards")))
+        (is (= n (count (changesets))))))
+    (testing "引言不能設定 title"
+      (is (re-find #"引言沒有名稱" (error-text (call "update_card" {"id" (card-id "引言") "title" "x"})))))))
+
+(deftest move-card-tool-test
+  (let [id (card-id "政策背景")
+        res (call "move_card" {"id" id "target_id" (card-id "現況問題") "position" "after"})
+        out (structured res)
+        s (state)]
+    (is (= ["現況問題" "政策背景"]
+           (map #(:node/title (get (:nodes s) %))
+                (tree/child-ids (:nodes s) (tree/parent (:nodes s) (parse-uuid id))))))
+    (is (re-find #"待確認" (get out "message")))
+    (is (= {:changeset/by :agent :changeset/origin :move :changeset/label "移動「政策背景」"}
+           (dissoc (peek (changesets)) :changeset/id)))
+    (is (some :relation/pending (:relations s)) "相鄰關係標為待確認")
+    (testing "不合法"
+      (let [n (count (changesets))]
+        (is (re-find #"底下已有下層標題"
+                     (error-text (call "move_card" {"id" id "target_id" (card-id "第一章 計畫概述") "position" "into"}))))
+        (is (re-find #"position" (error-text (call "move_card" {"id" id "target_id" id "position" "x"}))))
+        (is (= n (count (changesets))))))
+    (db/undo! *conn*)
+    (is (= ["政策背景" "現況問題"]
+           (map #(:node/title (get (:nodes (state)) %))
+                (tree/child-ids (:nodes (state)) (parse-uuid (card-id "1.1 計畫緣起"))))))))
+
+(defn- relation [from to]
+  (some #(when (and (= (parse-uuid from) (:relation/from %)) (= (parse-uuid to) (:relation/to %))) %)
+        (:relations (state))))
+
+(deftest set-relation-tool-test
+  (let [a (card-id "選定原則") b (card-id "三處場域簡介")]
+    (let [out (structured (call "set_relation" {"from_id" a "to_id" b "type" "causal" "summary" "確認關係"}))]
+      (is (= ["選定原則" "三處場域簡介"] (map #(get % "title") (get out "cards"))))
+      (is (= {:relation/type :causal :relation/pending false}
+             (select-keys (relation a b) [:relation/type :relation/pending])))
+      (is (= {:changeset/by :agent :changeset/label "確認關係"}
+             (select-keys (peek (changesets)) [:changeset/by :changeset/label]))))
+    (testing "不相鄰"
+      (let [n (count (changesets))]
+        (is (re-find #"不相鄰" (error-text (call "set_relation" {"from_id" a "to_id" (card-id "判定方式") "type" "causal"}))))
+        (is (re-find #"type" (error-text (call "set_relation" {"from_id" a "to_id" b "type" "basis"}))))
+        (is (= n (count (changesets))))))))
+
+(deftest add-remote-relation-tool-test
+  (let [from (card-id "待改進事項") to (card-id "異常斷線處理")
+        args {"from_id" from "to_id" to "type" "basis"}
+        out (structured (call "add_remote_relation" args))]
+    (is (= 2 (count (get out "cards"))))
+    (is (= {:relation/type :basis :relation/remote true}
+           (select-keys (relation from to) [:relation/type :relation/remote])))
+    (is (= :agent (:changeset/by (peek (changesets)))))
+    (testing "已存在：不寫入，說明原因"
+      (let [n (count (changesets))
+            again (structured (call "add_remote_relation" args))]
+        (is (nil? (get again "changeset_id")))
+        (is (re-find #"已經存在" (get again "message")))
+        (is (= n (count (changesets))))))
+    (testing "錯誤"
+      (is (re-find #"同一張" (error-text (call "add_remote_relation" (assoc args "to_id" from)))))
+      (is (re-find #"兩個段落" (error-text (call "add_remote_relation" (assoc args "to_id" (card-id "1.1 計畫緣起"))))))
+      (is (re-find #"type" (error-text (call "add_remote_relation" (assoc args "type" "causal"))))))))
+
+(deftest remove-relation-tool-test
+  (let [a (card-id "測試方法概述") b (card-id "各場域結果比較")]
+    (is (some? (relation a b)))
+    (testing "類型不符：不寫入"
+      (let [n (count (changesets))]
+        (is (re-find #"沒有類型為 causal 的關係"
+                     (error-text (call "remove_relation" {"from_id" a "to_id" b "type" "causal"}))))
+        (is (= n (count (changesets))))))
+    (structured (call "remove_relation" {"from_id" a "to_id" b}))
+    (is (nil? (relation a b)))
+    (is (= :agent (:changeset/by (peek (changesets)))))
+    (testing "不相鄰的關係也能移除"
+      (let [from (card-id "節能效益估算") ; 摘要：p321 → p312
+            _ (is (= :summarizes (:relation/type (relation from b))))]
+        (structured (call "remove_relation" {"from_id" from "to_id" b "type" "summarizes"}))
+        (is (nil? (relation from b)))))))
+
+(deftest delete-card-tool-test
+  (let [id (card-id "各場域結果比較")
+        prev (card-id "測試方法概述")
+        next (card-id "異常狀況說明")
+        n (count (:nodes (state)))]
+    (testing "版本不同：不刪除"
+      (is (re-find #"已被修改" (error-text (call "delete_card" {"id" id "version" 999}))))
+      (is (= n (count (:nodes (state))))))
+    (let [out (structured (call "delete_card" {"id" id "summary" "刪掉比較段"}))]
+      (is (re-find #"待確認" (get out "message")))
+      (is (= ["異常狀況說明"] (map #(get % "title") (get out "cards")))))
+    (is (nil? (get (:nodes (state)) (parse-uuid id))))
+    (is (not-any? #(#{(parse-uuid id)} ((juxt :relation/from :relation/to) %)) (:relations (state))))
+    (is (:relation/pending (relation prev next)) "後一段改為承接前一段，待確認")
+    (is (= {:changeset/by :agent :changeset/label "刪掉比較段"}
+           (select-keys (peek (changesets)) [:changeset/by :changeset/label])))
+    (testing "刪除標題連同下層"
+      (let [h (card-id "1.1 計畫緣起")
+            before (count (:nodes (state)))
+            out (structured (call "delete_card" {"id" h}))]
+        (is (re-find #"張下層卡片" (get out "message")))
+        (is (< (count (:nodes (state))) (dec before)))))))
+
+(deftest write-conflict-test
+  (with-redefs [db/apply-changes! (fn [_ _] {:conflicts [{:expected 1 :actual 2}]})]
+    (is (= "卡片剛被修改，請重新讀取後再試"
+           (error-text (call "update_card" {"id" (card-id "選定原則") "title" "x"}))))))

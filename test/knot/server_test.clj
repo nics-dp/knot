@@ -49,12 +49,19 @@
             res (request :post "/api/report/changes" {:label "編輯意圖" :changes changes})]
         (is (= 200 (:status res)))
         (is (uuid? (get-in res [:body :changeset/id])))
+        (is (= {para 2} (get-in res [:body :versions])) "回傳寫入後的版本")
         (is (= "改過的意圖" (some #(when (= para (:node/id %)) (:node/draft %))
                               (:nodes (:body (request :get "/api/report"))))))))
     (testing "卡片的前一版"
       (is (= {} (:body (request :get (str "/api/report/nodes/" para "/previous"))))
           "只改了意圖，本文沒有前一版")
       (is (= 400 (:status (request :get "/api/report/nodes/not-a-uuid/previous")))))
+    (testing "版本已過期：409 並列出衝突"
+      (let [stale (sync/diff state (ui/set-node-field state para :node/draft "過期的修改"))
+            res (request :post "/api/report/changes" {:label "過期" :changes stale})]
+        (is (= 409 (:status res)))
+        (is (= "卡片已被其他來源修改" (get-in res [:body :error])))
+        (is (= [{:node/id para :expected 1 :actual 2}] (get-in res [:body :conflicts])))))
     (testing "格式不正確的修改組被拒絕"
       (is (= 400 (:status (request :post "/api/report/changes" {:changes {:nodes {:upsert [{:node/id "x"}]}}})))))
     (testing "復原"

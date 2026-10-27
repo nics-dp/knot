@@ -15,6 +15,9 @@
   {:ui/select ui/select
    :ui/navigate ui/navigate
    :ui/dismiss-toast ui/dismiss-toast
+   :ui/dismiss-conflict ui/dismiss-conflict
+   :ui/close-recent ui/close-recent
+   :ui/open-recent-card ui/open-recent-card
    :ui/toggle-editor ui/toggle-editor
    :ui/open-editor ui/open-editor
    :ui/close-editor ui/close-editor
@@ -30,7 +33,6 @@
    :ui/add-child ui/add-child
    :ui/wrap-paragraphs ui/wrap-paragraphs
    :ui/paragraph->intro ui/paragraph->intro
-   :ui/toggle-lock ui/toggle-lock
    :ui/set-source-filter ui/set-source-filter
    :ui/set-source-query ui/set-source-query
    :ui/set-page ui/set-page
@@ -97,7 +99,7 @@
           (.scrollTo el #js {:left target
                              :behavior (if (or first-time? (reduced-motion?)) "auto" "smooth")}))))))
 
-(declare dispatch! import-sample! undo! load-previous!)
+(declare dispatch! import-sample! undo! load-previous! load-recent!)
 
 (def nexus
   {:nexus/system->state deref
@@ -122,6 +124,13 @@
        [[:event/prevent-default]
         [:store/reset (ui/drop-dragged state)]])
 
+     ;; 打開「最近修改」時才讀取清單
+     :recent/toggle
+     (fn [state]
+       (let [state' (ui/toggle-recent state)]
+         (cond-> [[:store/reset state']]
+           (get-in state' [:ui :recent-open]) (conj [:server/load-recent]))))
+
      ;; 滾輪在卡片欄位上只捲動該欄，不捲動整頁
      :ui/wheel-column
      (fn [_ column delta lo hi]
@@ -144,6 +153,15 @@
 
     :server/import-sample
     (fn [_ _] (import-sample!))
+
+    :server/load-recent
+    (fn [_ _] (load-recent!))
+
+    :clipboard/copy
+    (fn [_ _ text]
+      (-> (js/navigator.clipboard.writeText text)
+          (.then #(swap! store assoc-in [:ui :toast] "已複製"))
+          (.catch #(swap! store assoc-in [:ui :toast] "無法複製，請直接選取文字"))))
 
     :dom/focus
     (fn [{:keys [dispatch-data]} _]
@@ -269,7 +287,7 @@
           tree? (= :tree (get-in @store [:ui :page]))]
       (cond
         undo? (do (.preventDefault e) (undo!))
-        (= "Escape" k) (dispatch! {} [[:ui/close-editor]])
+        (= "Escape" k) (dispatch! {} [[(if (get-in @store [:ui :recent-open]) :ui/close-recent :ui/close-editor)]])
         ;; Alt+↑／↓：上移、下移（拖曳的鍵盤替代）
         (and tree? (.-altKey e) (#{:up :down} dir))
         (do (.preventDefault e) (dispatch! {} [[:ui/move-selected (if (= dir :up) -1 1)]]))
@@ -284,7 +302,10 @@
   ;; 後端已有的資料（sync/data 的形式）
   (atom nil))
 
-(defonce sync-state (atom {:history-count 0 :timer nil :in-flight nil}))
+(defonce sync-state
+  ;; :own 是自己送出的修改組 id，收到它們的事件時不必重新載入；
+  ;; :reload-pending 表示有其他來源的修改，等沒有未送出的輸入時再重新載入
+  (atom {:history-count 0 :timer nil :in-flight nil :own #{} :reload-pending false}))
 
 (defn- loaded? [] (some? (:report @store)))
 
@@ -313,6 +334,23 @@
        :origin (if (some #(= :move (:origin %)) entries) :move :manual)}
       {:label "編輯文字" :origin :manual})))
 
+(declare reload-if-idle!)
+
+(defn- node-names [state ids]
+  (let [title (let [numbers (tree/numbering (:nodes state))]
+                #(tree/display-title (:nodes state) numbers %))]
+    (->> ids (filter (:nodes state)) (map #(str "「" (title %) "」")) (apply str))))
+
+(defn- on-conflict!
+  "版本衝突：這次的修改沒有寫入。重新載入後端的資料，說明哪些卡片被其他來源改過，
+  並保留沒有存入的文字供複製（SPEC 5.13）。"
+  [conflicts]
+  (let [names (node-names @store (map :node/id conflicts))
+        lost (ui/lost-input @store @saved)]
+    (swap! sync-state assoc :reload-pending true)
+    (-> (reload-if-idle! {:force? true})
+        (.then #(swap! store ui/show-conflict names lost)))))
+
 (defn flush!
   "把尚未送出的變動送到後端；回傳 Promise。同一時間只送一個修改組。"
   []
@@ -328,16 +366,23 @@
             (let [{:keys [label origin]} (changeset-meta state (:history-count @sync-state))
                   p (-> (api "POST" "/api/report/changes"
                              {:label label :origin origin :changes changes})
-                        (.then (fn [_]
-                                 (reset! saved data)
-                                 (swap! sync-state assoc :in-flight nil
-                                        :history-count (count (:history state)))
+                        (.then (fn [{:keys [versions] :as res}]
+                                 ;; 後端寫入後的版本同時寫回已存檔的資料與目前狀態，下次送出才不會與自己衝突
+                                 (reset! saved (ui/apply-versions data versions))
+                                 (swap! store ui/apply-versions versions)
+                                 (swap! sync-state #(cond-> (assoc % :in-flight nil
+                                                                   :history-count (count (:history state)))
+                                                      (:changeset/id res) (update :own conj (:changeset/id res))))
                                  (when (get-in @store [:ui :show-previous]) (load-previous!))
                                  ;; 送出期間又有新的修改
-                                 (when (sync/diff @saved (sync/data @store)) (flush!))))
+                                 (if (sync/diff @saved (sync/data @store))
+                                   (flush!)
+                                   (reload-if-idle!))))
                         (.catch (fn [err]
                                   (swap! sync-state assoc :in-flight nil)
-                                  (show-toast! (str "無法儲存：" (ex-message err)))
+                                  (if-let [conflicts (:conflicts (ex-data err))]
+                                    (on-conflict! conflicts)
+                                    (show-toast! (str "無法儲存：" (ex-message err))))
                                   (js/console.error err))))]
               (swap! sync-state assoc :in-flight p)
               p))))))
@@ -382,6 +427,60 @@
         (.catch (fn [err] (show-toast! (str "無法復原：" (ex-message err))))))))
 
 ;; ---------------------------------------------------------------------------
+;; 其他來源的修改（SPEC 5.13）：後端以 Server-Sent Events 通知；沒有未送出的輸入時重新載入
+
+(defn- dirty? []
+  (let [{:keys [timer in-flight]} @sync-state]
+    (or timer in-flight (some? (sync/diff @saved (sync/data @store))))))
+
+(defn reload-if-idle!
+  "有待重新載入的修改、且沒有未送出的輸入時，讀回整份報告並保留畫面狀態。
+  :force? 用於衝突：捨棄未送出的變動。回傳 Promise。"
+  ([] (reload-if-idle! {}))
+  ([{:keys [force?]}]
+   (if-not (and (loaded?) (:reload-pending @sync-state) (or force? (not (dirty?))))
+     (js/Promise.resolve nil)
+     (-> (api "GET" "/api/report")
+         (.then (fn [loaded]
+                  ;; 讀取期間使用者又有輸入時先不取代，等送出後再試
+                  (when (or force? (not (dirty?)))
+                    (swap! store ui/replace-data loaded)
+                    (reset! saved (sync/data @store))
+                    (swap! sync-state assoc :reload-pending false
+                           :history-count (count (:history @store))))))
+         (.catch (fn [err] (js/console.error err)))))))
+
+(defn- load-recent!
+  "讀回最近修改的卡片，供卡片工具列的「最近修改」；先送出尚未儲存的輸入。"
+  []
+  (-> (flush!)
+      (.then #(api "GET" "/api/report/recent-changes"))
+      (.then (fn [{:keys [cards]}] (swap! store ui/set-recent-cards cards)))
+      (.catch (fn [err] (show-toast! (str "無法讀取最近修改：" (ex-message err)))))))
+
+(defn- on-change-event [e]
+  (let [{:keys [type] :as event} (reader/read-string (.-data e))]
+    ;; 自己的修改組的事件可能比 POST 的回應先到，等送出完成、記下 id 後再判斷
+    (-> (or (:in-flight @sync-state) (js/Promise.resolve nil))
+        (.then (fn [_]
+                 (when (and (= :change type) (= :agent (:by event)))
+                   (swap! store ui/agent-changed event))
+                 (when (get-in @store [:ui :recent-open]) (load-recent!))
+                 (when-not (and (= :change type) (contains? (:own @sync-state) (:changeset/id event)))
+                   (swap! sync-state assoc :reload-pending true)
+                   (reload-if-idle!)))))))
+
+(defonce events
+  ;; EventSource 斷線後會自動重連
+  (atom nil))
+
+(defn- listen-events! []
+  (when-not @events
+    (let [es (js/EventSource. "/api/events")]
+      (.addEventListener es "change" on-change-event)
+      (reset! events es))))
+
+;; ---------------------------------------------------------------------------
 ;; 載入
 
 (defn- find-node
@@ -392,7 +491,8 @@
             (map nodes (tree/document-order nodes)))))
 
 (defn- show-report! [loaded]
-  ;; ?select=、?page=library|tree|fulltext、?drag=、?editor=1（展開編輯區）、?previous=1（與前一版比較）
+  ;; ?select=、?page=library|tree|fulltext、?drag=、?editor=1（展開編輯區）、?previous=1（與前一版比較）、
+  ;; ?flash=（模擬 agent 剛修改的標示）
   ;; 指定初始畫面，方便截圖
   (let [params (js/URLSearchParams. js/location.search)
         nodes (:nodes (ui/from-server loaded))
@@ -401,12 +501,15 @@
         drag (some->> (.get params "drag") (find-node nodes))
         editor (.get params "editor")
         previous (.get params "previous")
+        flash (some->> (.get params "flash") (find-node nodes))
         state (cond-> (ui/from-server loaded)
                 select (ui/select select)
                 page (ui/set-page (keyword page))
                 drag (ui/drag-start drag)
                 editor (ui/open-editor)
-                previous (ui/toggle-previous))]
+                previous (ui/toggle-previous)
+                ;; 模擬 agent 剛修改這張卡片，看標示效果
+                flash (ui/agent-changed {:label "（模擬）" :nodes [flash]}))]
     (reset! saved (sync/data state))
     (reset! store state)
     (when previous (load-previous!))))
@@ -434,4 +537,5 @@
   ;; 離開頁面前送出尚未儲存的文字
   (js/window.addEventListener "beforeunload" (fn [_] (flush!)))
   (render! @store)
+  (listen-events!)
   (load!))

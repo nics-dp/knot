@@ -23,9 +23,12 @@
     (is (str/includes? (render state) "editor-rail"))
     (is (not (str/includes? (render state) "生成依據"))))
   (let [html (render (ui/open-editor state))]
-    (testing "段落編輯區依序是生成依據、AI 會參考的內容、本文"
+    (testing "段落編輯區依序是生成依據、撰寫時參考的內容、本文"
       (let [idx #(str/index-of html %)]
-        (is (< (idx "生成依據") (idx "AI 會參考的內容") (idx "與前一版比較")))))
+        (is (< (idx "生成依據") (idx "撰寫時參考的內容") (idx "與前一版比較")))))
+    (testing "Knot 不生成本文：按鈕是請 agent 撰寫"
+      (is (str/includes? html "請 agent 撰寫"))
+      (is (not (str/includes? html "AI"))))
     (testing "不再有上移、下移按鈕"
       (is (not (str/includes? html "上移"))))
     (testing "改為引言在「⋯」選單"
@@ -56,3 +59,35 @@
       (is (str/includes? html "editor-docked"))
       (is (not (str/includes? html "editor-rail")))
       (is (not (str/includes? html "收合編輯區"))))))
+
+(deftest agent-change-test
+  (let [s (ui/agent-changed state {:label "建立大綱：3 張卡片" :nodes ["a2"]})
+        html (render s)]
+    (testing "agent 修改的卡片標示，再次修改時換成另一個動畫"
+      (is (str/includes? html "card-agent-b"))
+      (is (str/includes? (render (ui/agent-changed s {:label "x" :nodes ["a2"]})) "card-agent-a")))
+    (is (not (str/includes? (render state) "card-agent")) "沒有 agent 修改時不標示")))
+
+(deftest recent-menu-test
+  (testing "卡片工具列有「最近修改」，清單預設關閉"
+    (let [html (render state)]
+      (is (str/includes? html "最近修改 ▾"))
+      (is (not (str/includes? html "recent-menu")))))
+  (let [html (render (-> state
+                         (ui/set-recent-cards [{:node/id "a2" :label "修改「二」" :by :agent}
+                                               {:node/id "a1" :label "編輯文字" :by :user}
+                                               {:node/id "gone" :label "已刪除" :by :user}])
+                         ui/toggle-recent))]
+    (testing "列出仍存在的卡片與修改者，點選跳到卡片"
+      (is (str/includes? html "[:ui/open-recent-card \"a2\"]"))
+      (is (str/includes? html "修改「二」"))
+      (is (str/includes? html "by-agent"))
+      (is (str/includes? html "by-user"))
+      (is (not (str/includes? html "gone")))))
+  (is (str/includes? (render (ui/toggle-recent state)) "還沒有修改過的卡片")))
+
+(deftest conflict-view-test
+  (let [html (render (ui/show-conflict state "「一」" [{:id "a1" :title "一" :field "意圖" :text "沒存到的意圖"}]))]
+    (is (str/includes? html "剛被其他來源"))
+    (is (str/includes? html "沒存到的意圖"))
+    (is (str/includes? html ":clipboard/copy"))))

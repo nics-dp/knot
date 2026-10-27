@@ -1,5 +1,6 @@
 (ns knot.system
   (:require [integrant.core :as ig]
+            [knot.events]
             [knot.server]))
 
 (def defaults
@@ -14,5 +15,7 @@
   ([overrides]
    {:knot/config (merge defaults overrides)
     :knot/db {:config (ig/ref :knot/config)}
+    :knot/events {:db (ig/ref :knot/db)}
     :knot/http {:config (ig/ref :knot/config)
-                :db (ig/ref :knot/db)}}))
+                :db (ig/ref :knot/db)
+                :events (ig/ref :knot/events)}}))

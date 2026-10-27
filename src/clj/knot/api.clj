@@ -39,12 +39,17 @@
              (let [body (:body-params req)]
                (if-not (m/validate ChangeSet body)
                  (bad-request "修改內容格式不正確" (me/humanize (m/explain ChangeSet body)))
-                 {:status 200 :body {:changeset/id (db/apply-changes! conn body)}})))}]
+                 (let [res (db/apply-changes! conn (assoc body :by :user :check-versions? true))]
+                   (if-let [conflicts (:conflicts res)]
+                     {:status 409 :body {:error "卡片已被其他來源修改" :conflicts conflicts}}
+                     {:status 200 :body (or res {:versions {}})})))))}]
    ["/report/nodes/:id/previous"
     {:get (fn [req]
             (if-let [id (parse-uuid (get-in req [:path-params :id]))]
               {:status 200 :body (db/node-previous (d/db conn) id)}
               (bad-request "卡片 id 格式不正確")))}]
+   ["/report/recent-changes"
+    {:get (fn [_] {:status 200 :body {:cards (db/recent-cards (d/db conn) 10)}})}]
    ["/report/undo"
     {:post (fn [_]
              (let [label (db/undo! conn)]

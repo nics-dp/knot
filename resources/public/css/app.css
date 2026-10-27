@@ -113,7 +113,6 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 .pill { margin-left: auto; flex: none; font-size: 11px; padding: 1px 7px; border-radius: 10px; }
 .pill-ai { background: var(--navy-tint); color: var(--navy); }
 .pill-human { background: var(--teal-bg); color: var(--teal); }
-.pill-locked { background: var(--line-soft); color: var(--ink-2); }
 .pill-none { background: var(--ground); color: var(--muted); border: 1px dashed var(--line-faint); }
 
 .notice-amber {
@@ -242,12 +241,46 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 
 .board { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 10px; }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* 最近修改的卡片（不分 agent 或使用者） */
+.recent-wrap { position: relative; display: flex; }
+.menu-backdrop { position: fixed; inset: 0; z-index: 40; }
+.recent-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 41; width: 380px; max-width: calc(100vw - 32px);
+  display: flex; flex-direction: column; padding: 6px; border-radius: 10px;
+  background: var(--surface); border: 1px solid var(--line); box-shadow: 0 8px 24px rgba(28, 32, 38, 0.14);
+}
+.recent-menu-head { font-size: 12px; color: var(--muted); padding: 4px 8px 6px; }
+.recent-menu > p { margin: 4px 8px 8px; }
+.recent-item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: var(--hit);
+  border: 0; background: transparent; border-radius: 6px; padding: 6px 8px; text-align: left; font: inherit; cursor: pointer;
+}
+.recent-item:hover, .recent-item:focus-visible { background: var(--navy-tint); }
+.recent-title { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--ink); }
+.by-tag { flex: none; border-radius: 6px; padding: 0 6px; font-size: 11px; }
+.by-agent { background: var(--teal); color: var(--surface); }
+.by-user { background: var(--ground); color: var(--muted); border: 1px solid var(--line); }
 .toast {
   align-self: flex-start; background-clip: padding-box; display: inline-flex; align-items: center; gap: 8px;
   font-size: 13px; color: var(--amber); background: var(--amber-bg);
   border: 1px solid var(--amber-line); padding: 4px 4px 4px 12px; border-radius: 8px;
 }
 .toast-close { border: 0; background: transparent; color: var(--amber); font-size: 16px; min-width: 32px; min-height: 32px; cursor: pointer; }
+
+/* 版本衝突：保留沒有存入的文字供複製（SPEC 5.13） */
+.conflict {
+  align-self: stretch; max-width: 640px; display: flex; flex-direction: column; gap: 8px;
+  font-size: 13px; color: var(--amber); background: var(--amber-bg);
+  border: 1px solid var(--amber-line); padding: 8px 4px 10px 12px; border-radius: 8px;
+}
+.conflict-head { display: flex; align-items: flex-start; gap: 8px; }
+.conflict-head > span { flex: 1; padding-top: 6px; }
+.conflict-item { display: flex; flex-direction: column; gap: 4px; margin-right: 8px; }
+.conflict-item-head { display: flex; align-items: center; justify-content: space-between; color: var(--ink-2); }
+.conflict-text {
+  width: 100%; box-sizing: border-box; resize: vertical; font: inherit; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--amber-line); border-radius: 6px; padding: 6px 8px;
+}
 
 /* 欄寬依可用寬度均分（最窄見 views/min-column-width），放不下時水平捲動 */
 .tree-scroll { flex: 1; min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 8px; container-type: inline-size; }
@@ -671,7 +704,6 @@ h4.ft-heading, h5.ft-heading { font-size: 16px; }
 .prose-editable p:last-child { margin-bottom: 0; }
 .prose-editable .chip { cursor: default; }
 .prose-editable .ProseMirror-selectednode { outline: 2px solid var(--navy); outline-offset: 1px; }
-.zone-output .prose-locked { background: var(--surface-soft); cursor: default; }
 
 /* 瀏覽與編輯狀態：意圖、本文平常是閱讀樣式；點進去才是編輯中 */
 .edit-box { position: relative; }
@@ -696,7 +728,6 @@ h4.ft-heading, h5.ft-heading { font-size: 16px; }
   background: var(--surface); border-color: var(--navy);
   box-shadow: 0 0 0 1px var(--navy), 0 0 0 5px var(--navy-tint);
 }
-.zone-output .edit-box-locked:hover .prose-box { border-color: var(--line-soft); background: var(--surface-soft); }
 
 /* 關係等清單：按「編輯」後整個欄位進入編輯狀態 */
 .field-editing {
@@ -748,6 +779,24 @@ h4.ft-heading, h5.ft-heading { font-size: 16px; }
   .tree-scroll { flex: none; height: 70vh; }
   .drawer-open .tree-columns { padding-right: 0; }
 }
+
+/* agent 剛修改的卡片：綠色框（與選取的深藍框同寬，蓋在邊框上），約 3 秒後用 1.5 秒漸漸淡回原本的邊框；
+   標題卡片左側的色條一起變綠再漸變回來，淡化的卡片暫時完全顯示。
+   終點不寫，即卡片原本的樣式。a、b 內容相同，交替使用才能重新播放。 */
+@keyframes agent-a {
+  0%, 66% { outline: 2px solid var(--teal); outline-offset: -2px; opacity: 1; }
+  100% { outline: 2px solid transparent; outline-offset: -2px; }
+}
+@keyframes agent-b {
+  0%, 66% { outline: 2px solid var(--teal); outline-offset: -2px; opacity: 1; }
+  100% { outline: 2px solid transparent; outline-offset: -2px; }
+}
+@keyframes agent-bar-a { 0%, 66% { background: var(--teal); } }
+@keyframes agent-bar-b { 0%, 66% { background: var(--teal); } }
+.card-agent-a { animation: agent-a 4.5s ease-in-out; }
+.card-agent-b { animation: agent-b 4.5s ease-in-out; }
+.card-agent-a::before { animation: agent-bar-a 4.5s ease-in-out; }
+.card-agent-b::before { animation: agent-bar-b 4.5s ease-in-out; }
 
 @media (prefers-reduced-motion: reduce) {
   .tree-inner, .card, .relation { transition: none !important; }
