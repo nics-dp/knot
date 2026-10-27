@@ -30,7 +30,6 @@
    :ui/add-child ui/add-child
    :ui/wrap-paragraphs ui/wrap-paragraphs
    :ui/paragraph->intro ui/paragraph->intro
-   :ui/toggle-lock ui/toggle-lock
    :ui/set-source-filter ui/set-source-filter
    :ui/set-source-query ui/set-source-query
    :ui/set-page ui/set-page

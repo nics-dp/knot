@@ -42,7 +42,6 @@
    :node/draft (assoc string :db/fulltext true)
    :node/prose string
    :node/status kw
-   :node/unlocked-status kw
    :node/version long*
    :node/label (assoc string :db/unique :db.unique/value)
    :node/facts refs
@@ -209,7 +208,7 @@
 ;; 讀取：資料庫 → 前端形式
 
 (def ^:private node-scalars
-  [:node/kind :node/order-key :node/name :node/title :node/draft :node/status :node/unlocked-status
+  [:node/kind :node/order-key :node/name :node/title :node/draft :node/status
    :node/label :node/figure-file :node/caption :node/table-view])
 
 (defn- read-json [s]
@@ -347,10 +346,12 @@
 (defn- node-tx
   "卡片的交易資料。ref 把 [類型 識別鍵] 轉成這次交易可用的參照（同一交易新增的實體用 tempid）。"
   [db ref before node]
-  (let [id (:node/id node)
+  (let [;; 鎖定功能已移除；復原到舊快照時，鎖定的段落視為人工改過
+        node (cond-> node (= :locked (:node/status node)) (assoc :node/status :human))
+        id (:node/id node)
         eid [:node/id id]
         existed? (some? before)
-        ;; 任何欄位（含位置、狀態、依據）變動都加一，版本檢查才能擋下覆蓋移動或鎖定的寫入
+        ;; 任何欄位（含位置、狀態、依據）變動都加一，版本檢查才能擋下覆蓋移動的寫入
         version (if (= (dissoc before :node/version) (dissoc node :node/version))
                   (:node/version before 1)
                   (inc (or (:node/version before) 0)))

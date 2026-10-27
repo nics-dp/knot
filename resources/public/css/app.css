@@ -113,7 +113,6 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 .pill { margin-left: auto; flex: none; font-size: 11px; padding: 1px 7px; border-radius: 10px; }
 .pill-ai { background: var(--navy-tint); color: var(--navy); }
 .pill-human { background: var(--teal-bg); color: var(--teal); }
-.pill-locked { background: var(--line-soft); color: var(--ink-2); }
 .pill-none { background: var(--ground); color: var(--muted); border: 1px dashed var(--line-faint); }
 
 .notice-amber {
@@ -671,7 +670,6 @@ h4.ft-heading, h5.ft-heading { font-size: 16px; }
 .prose-editable p:last-child { margin-bottom: 0; }
 .prose-editable .chip { cursor: default; }
 .prose-editable .ProseMirror-selectednode { outline: 2px solid var(--navy); outline-offset: 1px; }
-.zone-output .prose-locked { background: var(--surface-soft); cursor: default; }
 
 /* 瀏覽與編輯狀態：意圖、本文平常是閱讀樣式；點進去才是編輯中 */
 .edit-box { position: relative; }
@@ -696,7 +694,6 @@ h4.ft-heading, h5.ft-heading { font-size: 16px; }
   background: var(--surface); border-color: var(--navy);
   box-shadow: 0 0 0 1px var(--navy), 0 0 0 5px var(--navy-tint);
 }
-.zone-output .edit-box-locked:hover .prose-box { border-color: var(--line-soft); background: var(--surface-soft); }
 
 /* 關係等清單：按「編輯」後整個欄位進入編輯狀態 */
 .field-editing {

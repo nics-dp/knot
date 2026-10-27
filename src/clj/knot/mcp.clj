@@ -3,10 +3,13 @@
   工具以資料登記：{:name :description :inputSchema :handler}，handler 收 (conn args)，
   回傳結果 map（key 為英文 snake_case 的 keyword）；工具層面的錯誤丟 (tool-error! 中文說明)。
   keyword 與 JSON 字串的轉換集中在 `write-json` 與 `read-json`。"
-  (:require [datalevin.core :as d]
+  (:require [clojure.string :as str]
+            [datalevin.core :as d]
             [jsonista.core :as json]
             [knot.context :as context]
             [knot.db :as db]
+            [knot.ops :as ops]
+            [knot.sync :as sync]
             [knot.tree :as tree]
             [knot.ui :as ui]))
 
@@ -51,15 +54,6 @@
   (let [s (or s "")]
     (if (> (count s) n) (str (subs s 0 n) "…") s)))
 
-(defn- heading-number
-  "標題編號：章為「第一章」，其餘為「1.2」；非標題為 nil。"
-  [nodes numbers id]
-  (when (tree/heading? nodes id)
-    (let [num (get numbers id)]
-      (if (= 1 (tree/depth nodes id))
-        (str "第" (tree/chinese-numeral (parse-long num)) "章")
-        num))))
-
 (defn- has-prose? [node]
   (boolean (some-> (:node/prose node) :content seq)))
 
@@ -76,7 +70,7 @@
                     :kind (name (:node/kind n))
                     :depth (tree/depth nodes id)
                     :parent_id (some-> (:node/parent n) str)
-                    :number (heading-number nodes numbers id)
+                    :number (ops/heading-number nodes numbers id)
                     :title (card-title nodes numbers id)
                     :intent (truncate (:node/draft n) 80)
                     :status (status-name n)
@@ -118,7 +112,7 @@
     (cond->
      {:id (str id)
       :kind (name (:node/kind n))
-      :number (heading-number nodes numbers id)
+      :number (ops/heading-number nodes numbers id)
       :title (card-title nodes numbers id)
       :path (vec (for [a (reverse (tree/ancestor-ids nodes id))
                        :when (tree/heading? nodes a)]
@@ -164,6 +158,117 @@
      :chars (:chars ctx)}))
 
 ;; ---------------------------------------------------------------------------
+;; 寫入工具：讀目前狀態 → knot.ops（與畫面相同的規則）→ 一個修改組
+
+(defn- uuid-arg
+  "取出 UUID 參數；required? 為 true 時缺少就是錯誤，否則缺少或 null 為 nil。"
+  [args k required?]
+  (let [raw (get args k)]
+    (cond
+      (nil? raw) (when required? (tool-error! (str "缺少參數 " k)))
+      (not (string? raw)) (tool-error! (str k " 格式不正確（應為 UUID 字串）"))
+      :else (or (parse-uuid raw) (tool-error! (str k " 格式不正確（應為 UUID）：" raw))))))
+
+(defn- enum-arg
+  "取出列舉參數並轉成 keyword；不在 allowed 內為錯誤。"
+  [args k allowed]
+  (let [raw (get args k)
+        v (when (string? raw) (keyword raw))]
+    (cond
+      (nil? raw) (tool-error! (str "缺少參數 " k))
+      (some #{v} allowed) v
+      :else (tool-error! (str k " 只接受 " (str/join "、" (map name allowed)) "，收到：" raw)))))
+
+(defn- card-summary [nodes numbers id]
+  {:id (str id)
+   :kind (name (:node/kind (get nodes id)))
+   :number (ops/heading-number nodes numbers id)
+   :title (card-title nodes numbers id)})
+
+(defn- write!
+  "執行寫入工具：op 收目前狀態、回傳 knot.ops 的結果。
+  錯誤與衝突以 isError 回報；成功時回傳修改組 id 與這次新增或修改的卡片（編號與名稱為寫入後的）。"
+  [conn args op]
+  (let [old (current-state conn)
+        {:keys [error state label message note touched origin]} (op old)
+        _ (when error (tool-error! error))
+        changes (sync/diff (sync/data old) (sync/data state))]
+    (if-not changes
+      {:changeset_id nil :cards [] :message (or note "沒有任何變動：內容與目前相同")}
+      (let [summary (let [s (get args "summary")] (when-not (str/blank? (when (string? s) s)) s))
+            res (db/apply-changes! conn {:changes changes :by :agent :check-versions? true
+                                         :origin origin :label (or summary label)})
+            nodes (:nodes state)
+            numbers (tree/numbering nodes)]
+        (when (:conflicts res) (tool-error! "卡片剛被修改，請重新讀取後再試"))
+        {:changeset_id (str (:changeset/id res))
+         :cards (vec (for [id (distinct touched) :when (contains? nodes id)]
+                       (card-summary nodes numbers id)))
+         :message (or message (str "已" label "；所有修改都記錄在 Knot，可在畫面上檢視與復原"))}))))
+
+(defn- add-card [conn args]
+  (let [kind (enum-arg args "kind" [:heading :paragraph :intro])]
+    (when-not (contains? args "parent_id") (tool-error! "缺少參數 parent_id（新增一章時為 null）"))
+    (write! conn args
+            #(ops/add-card % {:kind kind
+                              :parent-id (uuid-arg args "parent_id" false)
+                              :after-id (uuid-arg args "after_id" false)
+                              :title (get args "title")
+                              :intent (get args "intent")}))))
+
+(defn- parse-items
+  "build_outline 的 items 轉成 knot.ops 的格式（kind 轉 keyword，其餘原樣；格式問題交給 ops 回報）。"
+  [items]
+  (if (sequential? items)
+    (mapv (fn [item]
+            (if (map? item)
+              (cond-> {:kind (some-> (get item "kind") (as-> k (when (string? k) (keyword k))))
+                       :title (get item "title")
+                       :intent (get item "intent")}
+                (contains? item "children") (assoc :children (parse-items (get item "children"))))
+              item))
+          items)
+    items))
+
+(defn- build-outline [conn args]
+  (write! conn args
+          #(ops/build-outline % {:parent-id (do (when-not (contains? args "parent_id")
+                                                  (tool-error! "缺少參數 parent_id（新增章時為 null）"))
+                                                (uuid-arg args "parent_id" false))
+                                 :after-id (uuid-arg args "after_id" false)
+                                 :items (parse-items (get args "items"))})))
+
+(defn- update-card [conn args]
+  (let [version (get args "version")]
+    (when-not (or (nil? version) (integer? version)) (tool-error! "version 必須是整數"))
+    (write! conn args
+            #(ops/update-card % {:id (card-id % args)
+                                 :title (get args "title")
+                                 :intent (get args "intent")
+                                 :version version}))))
+
+(defn- move-card [conn args]
+  (let [position (enum-arg args "position" [:before :after :into])]
+    (write! conn args
+            #(ops/move-card % {:id (card-id % args)
+                               :target-id (uuid-arg args "target_id" true)
+                               :position position}))))
+
+(defn- set-relation [conn args]
+  (let [type (enum-arg args "type" tree/adjacent-relation-types)]
+    (write! conn args
+            #(ops/set-relation % {:from-id (uuid-arg args "from_id" true)
+                                  :to-id (uuid-arg args "to_id" true)
+                                  :type type}))))
+
+(defn- add-remote-relation [conn args]
+  (let [type (enum-arg args "type" tree/remote-relation-types)]
+    (write! conn args
+            #(ops/add-remote-relation % {:from-id (uuid-arg args "from_id" true)
+                                         :to-id (uuid-arg args "to_id" true)
+                                         :type type}))))
+
+;; ---------------------------------------------------------------------------
 ;; 工具登記
 
 (def id-schema
@@ -172,7 +277,7 @@
    :required ["id"]
    :additionalProperties false})
 
-(def tools
+(def read-tools
   [{:name "get_outline"
     :description "取得整份報告的卡片樹（依文件順序的扁平清單）與報告資訊：id、類型、深度、編號、名稱、意圖摘要、狀態、是否有本文。這是規劃與定位卡片的起點；意圖已截斷為前 80 字，完整內容請用 get_card。"
     :inputSchema {:type "object" :properties {} :additionalProperties false}
@@ -186,6 +291,91 @@
     :inputSchema id-schema
     :handler get-writing-context}])
 
+(def ^:private summary-property
+  {:type "string" :description "這次修改的名稱（選填），會顯示在 Knot 的復原提示；省略時由 Knot 依操作產生"})
+
+(def ^:private uuid-property {:type "string" :description "卡片 id（UUID）"})
+
+(def ^:private outline-item-schema
+  {:type "object"
+   :properties {:kind {:type "string" :enum ["heading" "paragraph" "intro"]}
+                :title {:type "string" :description "標題名稱或段落標題；引言不需要"}
+                :intent {:type "string" :description "意圖：這張卡片要寫什麼"}
+                :children {:type "array" :description "下層卡片（只有標題能有），格式同本項，可再巢狀"
+                           :items {:type "object"}}}
+   :required ["kind"]})
+
+(def write-tools
+  [{:name "add_card"
+    :description "新增一張卡片（標題、段落或引言）。規則同 Knot 畫面：引言每個標題最多一張且在最前面；引言之後的子卡片要嘛全是段落、要嘛全是下層標題，不能混用；標題最多四層。parent_id 為 null 表示新增一章。after_id 指定接在同一層的哪張卡片之後；省略時引言放最前面、其他放最後。新段落的狀態為 none，本文之後再寫。不合法時會回傳具體原因，不會寫入。一次要建立多張卡片請用 build_outline。"
+    :inputSchema {:type "object"
+                  :properties {:kind {:type "string" :enum ["heading" "paragraph" "intro"]
+                                      :description "heading＝標題、paragraph＝段落、intro＝引言"}
+                               :parent_id {:type ["string" "null"] :description "上層標題的 id；null 表示新增一章"}
+                               :after_id {:type "string" :description "同一層的某張卡片 id，新卡片接在它後面（選填）"}
+                               :title {:type "string" :description "標題名稱或段落標題；引言不需要"}
+                               :intent {:type "string" :description "意圖：這張卡片要寫什麼（選填）"}
+                               :summary summary-property}
+                  :required ["kind" "parent_id"]
+                  :additionalProperties false}
+    :handler add-card}
+   {:name "build_outline"
+    :description "一次建立巢狀的報告骨架（標題、段落、引言），整批寫成一個修改組，使用者可一次復原。規劃章節結構時使用。任何一處不合法就整批不寫，錯誤會指出是哪一項（例如 items[1].children[0]）與原因。規則與 add_card 相同；只有標題能有 children，同一個標題底下的子卡片要嘛全是段落、要嘛全是下層標題。回傳所有新卡片（依文件順序，含編號與 id），之後可用 id 繼續操作。"
+    :inputSchema {:type "object"
+                  :properties {:parent_id {:type ["string" "null"] :description "放在哪個標題底下；null 表示放在最上層（建立章）"}
+                               :after_id {:type "string" :description "同一層的某張卡片 id，第一項接在它後面（選填，省略時放最後）"}
+                               :items {:type "array" :description "要建立的卡片，依序排列" :items outline-item-schema}
+                               :summary summary-property}
+                  :required ["parent_id" "items"]
+                  :additionalProperties false}
+    :handler build-outline}
+   {:name "update_card"
+    :description "修改卡片的名稱或意圖（標題的名稱、段落的標題、卡片的意圖）；不修改本文。傳入 get_card 取得的 version 可避免覆蓋使用者剛做的修改：版本不同時不會寫入。引言沒有名稱。"
+    :inputSchema {:type "object"
+                  :properties {:id uuid-property
+                               :title {:type "string" :description "新的標題名稱（標題）或段落標題（段落）"}
+                               :intent {:type "string" :description "新的意圖，會取代原本的內容"}
+                               :version {:type "integer" :description "讀取時的卡片版本（選填）；與目前版本不同時拒絕寫入"}
+                               :summary summary-property}
+                  :required ["id"]
+                  :additionalProperties false}
+    :handler update-card}
+   {:name "move_card"
+    :description "移動卡片到另一張卡片的前面、後面或裡面，規則與使用者在畫面拖曳相同（層級、引言位置、最多四層）。移動段落後，受影響的相鄰段落關係會標為「待確認」，請使用者或之後用 set_relation 確認；標題移動後編號會重新計算。不合法時回傳原因。"
+    :inputSchema {:type "object"
+                  :properties {:id {:type "string" :description "要移動的卡片 id"}
+                               :target_id {:type "string" :description "放置位置參考的卡片 id"}
+                               :position {:type "string" :enum ["before" "after" "into"]
+                                          :description "before＝放在目標之前、after＝放在目標之後、into＝放進目標底下（標題的最後；引言放最前面）"}
+                               :summary summary-property}
+                  :required ["id" "target_id" "position"]
+                  :additionalProperties false}
+    :handler move-card}
+   {:name "set_relation"
+    :description "設定兩個相鄰段落（同一標題下前後相接，from 在前）的關係並確認（取消「待確認」）。不相鄰或不是段落時回錯誤；不相鄰的段落請用 add_remote_relation。"
+    :inputSchema {:type "object"
+                  :properties {:from_id {:type "string" :description "前一個段落的 id"}
+                               :to_id {:type "string" :description "緊接在後的段落 id"}
+                               :type {:type "string" :enum ["progression" "causal" "contrast" "example"]
+                                      :description "progression＝遞進、causal＝因果、contrast＝對比、example＝舉例"}
+                               :summary summary-property}
+                  :required ["from_id" "to_id" "type"]
+                  :additionalProperties false}
+    :handler set-relation}
+   {:name "add_remote_relation"
+    :description "新增兩個段落之間不相鄰的關係（任意距離）：from 為本段、to 為目標段落。撰寫本段時，目標段落的內容會成為參考。已存在相同關係時不會重複新增。"
+    :inputSchema {:type "object"
+                  :properties {:from_id {:type "string" :description "本段的 id"}
+                               :to_id {:type "string" :description "目標段落的 id"}
+                               :type {:type "string" :enum ["summarizes" "basis" "echo" "contrast"]
+                                      :description "summarizes＝摘要（本段彙整目標的結果）、basis＝依據（本段論點建立在目標的結果上）、echo＝呼應、contrast＝對比"}
+                               :summary summary-property}
+                  :required ["from_id" "to_id" "type"]
+                  :additionalProperties false}
+    :handler add-remote-relation}])
+
+(def tools (into read-tools write-tools))
+
 (def ^:private tools-by-name (into {} (map (juxt :name identity)) tools))
 
 ;; ---------------------------------------------------------------------------
@@ -194,7 +384,7 @@
 (def supported-versions ["2025-11-25" "2025-06-18" "2025-03-26"])
 
 (def instructions
-  "Knot 是撰寫結構化報告的本機工具。報告是一棵卡片樹：標題（heading，最多四層，編號由位置決定）、引言（intro，每個標題至多一張）、段落（paragraph，要撰寫本文的單位）、表格（table）與圖（figure）。每張卡片有意圖（要寫什麼）、狀態（none、ai、human、locked）與選填的本文。卡片 id 都是 UUID 字串。請先呼叫 get_outline 了解整體結構，再用 get_card 看單張卡片，撰寫某段前用 get_writing_context 取得應參考的內容。")
+  "Knot 是撰寫結構化報告的本機工具。報告是一棵卡片樹：標題（heading，最多四層，編號由位置決定）、引言（intro，每個標題至多一張）、段落（paragraph，要撰寫本文的單位）、表格（table）與圖（figure）。每張卡片有意圖（要寫什麼）、狀態（none：尚無本文、ai：agent 撰寫、human：使用者改過）與選填的本文。卡片 id 都是 UUID 字串。請先呼叫 get_outline 了解整體結構，再用 get_card 看單張卡片，撰寫某段前用 get_writing_context 取得應參考的內容。規劃結構與整理關係可用 add_card、build_outline、update_card、move_card、set_relation、add_remote_relation。所有修改都會記錄，使用者可以在 Knot 畫面上檢視與復原。")
 
 (defn- result [id res] {:jsonrpc "2.0" :id id :result res})
 (defn- rpc-error [id code msg] {:jsonrpc "2.0" :id id :error {:code code :message msg}})

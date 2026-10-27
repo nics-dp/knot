@@ -71,16 +71,11 @@
     (is (= ["a1" "a2"] (tree/child-ids (:nodes s) "A")))
     (is (empty? (:relations s)) "引言不再有段落關係")))
 
-(deftest toggle-lock-test
-  (let [s (ui/toggle-lock state "a2")]
-    (is (= :locked (get-in s [:nodes "a2" :node/status])))
-    (is (= :human (get-in (ui/toggle-lock s "a2") [:nodes "a2" :node/status])))))
-
 (deftest edit-intent-test
   (let [s (ui/set-node-field state "a1" :node/draft "新的意圖")]
     (is (= "新的意圖" (get-in s [:nodes "a1" :node/draft])))
     (is (empty? (:history s)) "逐字輸入不進復原紀錄"))
-  (is (= state (ui/set-node-field state "a1" :node/status :locked)) "只能編輯名稱與意圖"))
+  (is (= state (ui/set-node-field state "a1" :node/status :human)) "只能編輯名稱與意圖"))
 
 (deftest citation-test
   (let [s (ui/add-citation state "a1" "b9")]
@@ -186,9 +181,6 @@
         (is (= (:history state) (:history s)) "逐字輸入不進復原紀錄")))
     (testing "尚未生成的段落直接撰寫也算人工"
       (is (= :human (get-in (ui/set-prose state "b1" doc) [:nodes "b1" :node/status]))))
-    (testing "鎖定的段落不能修改"
-      (let [locked (assoc-in state [:nodes "a1" :node/status] :locked)]
-        (is (identical? locked (ui/set-prose locked "a1" doc)))))
     (testing "引言不套用段落狀態"
       (let [s (ui/add-child state "A" :intro)
             intro (get-in s [:ui :selected])]

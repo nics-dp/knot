@@ -19,10 +19,6 @@
   AI 生成與人工改過仍記錄在 :node/status（重新生成時人工改過的段落要先顯示差異），但不標示。"
   {:none {:label "尚未生成" :class "pill-none"}})
 
-(def status-note
-  "本文下方的狀態說明：只在鎖定時顯示。"
-  {:locked "已鎖定：本文不能修改，重新生成與修改建議也不會改寫本段"})
-
 (def relation-label context/relation-label)
 
 (def relation-options [:progression :causal :contrast :example])
@@ -433,16 +429,15 @@
 
 (defn- edit-box
   "意圖與本文的編輯框：平常是閱讀樣式，滑過提示「點擊編輯」，點進去後顯示「編輯中」。"
-  [k locked? child]
+  [k child]
   [:div.edit-box {:replicant/key k
-                  :class (when locked? "edit-box-locked")
-                  :data-hint (if locked? "已鎖定" "點擊編輯")
+                  :data-hint "點擊編輯"
                   :data-editing "編輯中 · Esc 結束"}
    child])
 
 (defn- intent-field [id value placeholder]
   (field "intent" "意圖" nil
-         (edit-box "intent-box" false
+         (edit-box "intent-box"
           [:textarea.intent {:replicant/key (str id "-intent")
                             :rows 3
                             :aria-label "意圖"
@@ -700,16 +695,14 @@
                              :on {:click (when-not diff? [[:ui/toggle-previous]])}} "與前一版比較"]]}
           (if diff?
             (previous-view state node)
-            (let [id (:node/id node)
-                  locked? (= :locked (:node/status node))]
+            (let [id (:node/id node)]
               (list
                (when (str/blank? (context/prose-text facts (:node/prose node)))
                  [:p.muted.small {:replicant/key "empty"} empty-note])
                ;; 編輯器的內容由 Tiptap 管理，Replicant 只負責建立與同步
-               (edit-box "prose-box" locked?
+               (edit-box "prose-box"
                          [:div.prose-box.prose-editor {:replicant/key (str id "-prose")
-                                                       :class (when locked? "prose-locked")
-                                                       :replicant/on-render [[:prose/render id (not locked?)]]
+                                                       :replicant/on-render [[:prose/render id true]]
                                                        :replicant/on-unmount [[:prose/destroy]]}]))))
           [:div.prose-actions actions])))
 
@@ -747,9 +740,6 @@
                                     :meta [:span.mono (get-in nodes [k :node/label])]}))])))
      (context-zone state id)
      (prose-zone state node "尚未有本文：可直接在下方撰寫，或寫好意圖並加入依據後按「生成本段」。"
-                 [:span.small.muted {:replicant/key "status"} (status-note status)]
-                 [:button.btn {:replicant/key "lock" :type "button" :on {:click [[:ui/toggle-lock id]]}}
-                  (if (= :locked status) "解除鎖定" "鎖定")]
                  [:button.btn.btn-dark {:replicant/key "gen" :type "button" :disabled true :title "M4 實作段落生成"}
                   (if (= :none status) "生成本段" "重新生成")]))))
 

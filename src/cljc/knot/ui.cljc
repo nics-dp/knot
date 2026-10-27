@@ -275,27 +275,6 @@
                                                        rels))))
             (update :ui assoc :selected para-id :toast label))))))
 
-(defn toggle-lock
-  "鎖定只由使用者設定或解除；解除後回到人工改過或 AI 生成。"
-  [state id]
-  (let [node (get-in state [:nodes id])]
-    (if-not (= :paragraph (:node/kind node))
-      state
-      (let [locked? (= :locked (:node/status node))
-            label (if locked? "解除鎖定" "鎖定段落")]
-        (-> state
-            (remember label)
-            (update-in [:nodes id]
-                       (fn [n]
-                         (if locked?
-                           (-> n
-                               (assoc :node/status (or (:node/unlocked-status n)
-                                                       (if (:node/prose n) :human :none)))
-                               (dissoc :node/unlocked-status))
-                           (assoc n :node/status :locked
-                                  :node/unlocked-status (:node/status n)))))
-            (assoc-in [:ui :toast] label))))))
-
 ;; ---------------------------------------------------------------------------
 ;; 復原
 
@@ -388,10 +367,10 @@
 
 (defn set-prose
   "在本文編輯器修改本文（逐字輸入，不進復原紀錄；編輯器有自己的復原）。
-  段落改了本文就轉為 :human（SPEC 4 狀態轉換）；鎖定的段落不能修改。"
+  段落改了本文就轉為 :human（SPEC 4 狀態轉換）。"
   [state id doc]
   (let [{:node/keys [kind status] :as node} (get-in state [:nodes id])]
-    (if (or (nil? node) (= :locked status) (= doc (:node/prose node)))
+    (if (or (nil? node) (= doc (:node/prose node)))
       state
       (cond-> (assoc-in state [:nodes id :node/prose] doc)
         (and (= :paragraph kind) (not= :human status))

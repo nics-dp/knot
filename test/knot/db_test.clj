@@ -236,3 +236,12 @@
       (is (= [{:node/id para :expected 1 :actual 2}]
              (:conflicts (db/apply-changes! c {:check-versions? true
                                                :changes (sync/diff state (ui/set-node-field state para :node/draft "x"))})))))))
+
+(deftest locked-status-migrates-test
+  (testing "鎖定功能已移除：寫入舊快照中的 :locked 時改為 :human"
+    (let [[_ c loaded] (seeded)
+          state (client-state loaded)
+          para (some #(when (= "節能效益估算" (:node/title %)) (:node/id %)) (:nodes loaded))
+          old (assoc-in state [:nodes para :node/status] :locked)]
+      (db/apply-changes! c {:changes (sync/diff state old)})
+      (is (= :human (:node/status (node-of (db/load-state (d/db c)) para)))))))

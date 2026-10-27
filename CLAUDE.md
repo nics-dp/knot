@@ -20,7 +20,7 @@
 - **報告目錄：** 一個目錄一份報告，資料庫在 `<報告目錄>/.knot/db`。REPL 開發使用 `local/report`（不進 git）；`clojure -M:run [目錄]` 預設為目前目錄。空白報告的畫面提供「匯入範例內容」（`POST /api/dev/sample`，本機測試報告優先）。
 - **API：** `GET /api/report`、`POST /api/report/changes`（malli 驗證）、`POST /api/report/undo`、`GET /api/report/nodes/:id/previous`（卡片的前一版）。
 - URL 參數 `?select=<卡片 id 或名稱>`、`?page=library|tree|fulltext`、`?drag=<卡片 id>`（拖曳中的樣子）、`?editor=1`（展開編輯區，預設收合）、`?previous=1`（本文區與前一版比較）指定初始畫面，方便截圖對照設計稿；截圖可用 headless Chrome：
-  `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --window-size=1440,1000 --virtual-time-budget=4000 --screenshot=out.png "http://localhost:3000/?select=p312&editor=1"`
+  `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --window-size=1440,1000 --timeout=4000 --screenshot=out.png "http://localhost:3000/?select=p312&editor=1"`（頁面一直開著事件通知的連線，`--virtual-time-budget` 會等不到結束，要用 `--timeout`）
 - 改了 `knot.server` 的路由要 `(user/reset)` 才會生效；reset 失敗時 `(require 'user :reload)` 再 `(user/go)`。
 - **真實參考資料：** 使用者提供的 PDF 放在 repo 根目錄、轉換結果在 `local/sources/*.md`，兩者都在 `.gitignore`。`knot.ingest/markdown->blocks` 可把它們切成候選區塊（M5 的匯入會用到）。**commit 時一律指定路徑，不要 `git add -A`。**
 - **本機測試報告：** `local/sample-report.edn` 存在時，「匯入範例內容」與 `(seed! "local/sample-report.edn")` 使用它。它由 `local/make_sample.py` 產生（節錄自參考報告），重新產生：`python3 -I local/make_sample.py local/sample-report.edn`。刪掉這個檔案就改用虛構的路燈範例。自動測試一律使用 `test-resources/` 的虛構資料。
