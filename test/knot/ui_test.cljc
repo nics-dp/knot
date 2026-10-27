@@ -212,3 +212,10 @@
       (let [both (ui/add-remote-relation s "b1" "a1" :basis)]
         (is (= #{:basis} (remote (ui/set-remote-relation-type both "b1" "a1" :echo :basis))))))
     (is (identical? s (ui/set-remote-relation-type s "b1" "a1" :echo :echo)))))
+
+(deftest apply-versions-test
+  (let [a (random-uuid) b (random-uuid)
+        state {:nodes {a {:node/id a :node/version 1}}}]
+    (is (= {:nodes {a {:node/id a :node/version 3}}}
+           (ui/apply-versions state {a 3 b 2}))
+        "送出期間已刪除的卡片略過")))

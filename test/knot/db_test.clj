@@ -96,7 +96,7 @@
 (deftest delete-and-version-test
   (let [[_ c loaded] (seeded)
         state (client-state loaded)
-        heading (some #(when (= "實證成果" (:node/name %)) (:node/id %)) (:nodes loaded))
+        heading (some #(when (= "問題與改善" (:node/name %)) (:node/id %)) (:nodes loaded))
         para (some #(when (= "節能效益估算" (:node/title %)) (:node/id %)) (:nodes loaded))]
     (testing "內容變更時版本加一"
       (db/apply-changes! c {:label "編輯意圖"
@@ -159,3 +159,80 @@
     (testing "其他修改組不合併"
       (save! "重新生成" #(ui/set-prose % para (prose "生成的本文")))
       (is (= (prose "新的本文") (get-in (db/node-previous (d/db c) para) [:node/prose :value]))))))
+
+(defn- node-of [loaded id] (some #(when (= id (:node/id %)) %) (:nodes loaded)))
+
+(deftest changeset-by-test
+  (let [[_ c loaded] (seeded)
+        state (client-state loaded)
+        para (some #(when (= "節能效益估算" (:node/title %)) (:node/id %)) (:nodes loaded))
+        edit (fn [text opts]
+               (let [state (client-state (db/load-state (d/db c)))]
+                 (db/apply-changes! c (merge {:label text
+                                              :changes (sync/diff state (ui/set-node-field state para :node/draft text))}
+                                             opts))))
+        by-of (fn [id] (:changeset/by (d/pull (d/db c) [:changeset/by] [:changeset/id id])))]
+    (is (= :user (by-of (:changeset/id (edit "a" {})))) "沒給 :by 時寫 :user")
+    (is (= :agent (by-of (:changeset/id (edit "b" {:by :agent})))))
+    (is (some? state))))
+
+(deftest version-check-test
+  (let [[_ c loaded] (seeded)
+        para (some #(when (= "節能效益估算" (:node/title %)) (:node/id %)) (:nodes loaded))
+        edit (fn [state text opts]
+               (db/apply-changes! c (merge {:label text
+                                            :changes (sync/diff state (ui/set-node-field state para :node/draft text))}
+                                           opts)))
+        state (client-state loaded)]
+    (testing "未衝突：寫入並回傳新版本"
+      (let [res (edit state "第一次" {:check-versions? true})]
+        (is (uuid? (:changeset/id res)))
+        (is (= {para 2} (:versions res)))
+        (is (= 2 (:node/version (node-of (db/load-state (d/db c)) para))))))
+    (testing "連續存檔：第二次帶第一次回傳的版本，不衝突"
+      (let [state2 (-> state
+                       (ui/set-node-field para :node/draft "第一次")
+                       (assoc-in [:nodes para :node/version] 2))
+            res (edit state2 "第二次" {:check-versions? true})]
+        (is (nil? (:conflicts res)))
+        (is (= {para 3} (:versions res)))))
+    (testing "版本過期：拒絕，資料庫完全沒變"
+      (let [before (db/load-state (d/db c))
+            n-changesets (count (d/q '[:find [?c ...] :where [?c :changeset/id]] (d/db c)))
+            res (edit state "過期的修改" {:check-versions? true})]
+        (is (= {:conflicts [{:node/id para :expected 1 :actual 3}]} res))
+        (is (= before (db/load-state (d/db c))))
+        (is (= n-changesets (count (d/q '[:find [?c ...] :where [?c :changeset/id]] (d/db c)))))))
+    (testing "沒開檢查時照寫"
+      (is (uuid? (:changeset/id (edit state "不檢查" {})))))
+    (testing "復原不受檢查影響"
+      (is (= "復原：不檢查" (str "復原：" (db/undo! c)))))))
+
+(deftest new-and-deleted-nodes-skip-check-test
+  (let [[_ c loaded] (seeded)
+        state (client-state loaded)
+        heading (some #(when (= "問題與改善" (:node/name %)) (:node/id %)) (:nodes loaded))
+        deleted (ui/delete-node state heading)]
+    (testing "刪除不檢查版本"
+      (let [res (db/apply-changes! c {:label "刪除" :check-versions? true
+                                      :changes (sync/diff state deleted)})]
+        (is (uuid? (:changeset/id res)))))
+    (testing "新卡片（資料庫沒有）不檢查"
+      (let [id (random-uuid)
+            node {:node/id id :node/kind :paragraph :node/parent nil :node/order-key "z" :node/version 99}
+            res (db/apply-changes! c {:label "新增" :check-versions? true
+                                      :changes {:nodes {:upsert [node]}}})]
+        (is (nil? (:conflicts res)))
+        (is (contains? (:versions res) id))))))
+
+(deftest version-bumps-on-any-field-test
+  (let [[_ c loaded] (seeded)
+        state (client-state loaded)
+        para (some #(when (= "節能效益估算" (:node/title %)) (:node/id %)) (:nodes loaded))
+        moved (assoc-in state [:nodes para :node/order-key] "zz")
+        res (db/apply-changes! c {:label "移動" :check-versions? true :changes (sync/diff state moved)})]
+    (testing "只改位置也加一，之後帶舊版本的寫入被擋下"
+      (is (= {para 2} (:versions res)))
+      (is (= [{:node/id para :expected 1 :actual 2}]
+             (:conflicts (db/apply-changes! c {:check-versions? true
+                                               :changes (sync/diff state (ui/set-node-field state para :node/draft "x"))})))))))

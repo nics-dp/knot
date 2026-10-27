@@ -66,6 +66,15 @@
 - **遇到待定事項就停下**，列出選項請使用者決定；疑問記在 `docs/QUESTIONS.md`。
 - 每個里程碑開一個分支，測試通過且使用者確認畫面後再合併。
 
+## REPL 與開發的坑
+
+- **不要用 `(require 'x :reload-all)`。** 它會重新載入 Datalevin 的類別，之後出現 ClassCastException，只能重啟 nREPL。改用 `(require 'knot.xxx :reload)` 逐一重新載入，或 `(user/reset)`。
+- **別名失效**（例如 `No such namespace: db`，常在改了被 require 的 ns 之後）：`(require 'user :reload)` 再 `(user/go)`；仍不行時對受影響的 ns 執行 `(remove-ns 'knot.xxx)` 再重新 require。
+- **dev 報告是真實資料。** `local/report` 的資料庫可能是由參考報告節錄而來；在 REPL 試寫入後用 `curl -X POST localhost:3000/api/report/undo` 復原，測試一律用暫存目錄與 `test-resources/` 的虛構資料。
+- **共用的 nREPL 與 port。** 後端 nREPL 7888、HTTP 3000、shadow 7889 只有一套，同時只能有一個人在改程式與重新載入；不要另外啟動或關閉這些行程。
+- **前端的 JS 物件：** ProseMirror 的 attrs 是沒有原型的物件，`js->clj` 不會轉換，要先經過 JSON（見 `knot.prose-editor/json->edn`）。
+- **commit：** 只 stage 指定的路徑；先看 `git status`，根目錄的 PDF 與 `local/` 絕不能進 commit。由使用者確認後才 commit。
+
 ## 環境備忘
 
 - **JDK 25。** Datalevin 需要 `--add-opens` 與 `--enable-native-access`，已寫在 deps.edn 的 `:dev`、`:test`、`:run` alias。

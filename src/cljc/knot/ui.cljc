@@ -55,6 +55,16 @@
       state
       (assoc-in state [:ui :selected] (default-selection (:nodes state))))))
 
+(defn apply-versions
+  "存檔成功後，把後端回傳的版本（{卡片 id 版本}）寫回狀態；下次送出時附上，供衝突檢查（SPEC 5.13）。
+  送出期間已被刪除的卡片略過。"
+  [state versions]
+  (reduce-kv (fn [s id v]
+               (if (contains? (:nodes s) id)
+                 (assoc-in s [:nodes id :node/version] v)
+                 s))
+             state versions))
+
 (defn- titles [{:keys [nodes]}]
   (let [numbers (tree/numbering nodes)]
     #(tree/display-title nodes numbers %)))

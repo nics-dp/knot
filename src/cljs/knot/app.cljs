@@ -284,7 +284,10 @@
   ;; 後端已有的資料（sync/data 的形式）
   (atom nil))
 
-(defonce sync-state (atom {:history-count 0 :timer nil :in-flight nil}))
+(defonce sync-state
+  ;; :own 是自己送出的修改組 id，收到它們的事件時不必重新載入；
+  ;; :reload-pending 表示有其他來源的修改，等沒有未送出的輸入時再重新載入
+  (atom {:history-count 0 :timer nil :in-flight nil :own #{} :reload-pending false}))
 
 (defn- loaded? [] (some? (:report @store)))
 
@@ -313,6 +316,21 @@
        :origin (if (some #(= :move (:origin %)) entries) :move :manual)}
       {:label "編輯文字" :origin :manual})))
 
+(declare reload-if-idle!)
+
+(defn- node-names [state ids]
+  (let [title (let [numbers (tree/numbering (:nodes state))]
+                #(tree/display-title (:nodes state) numbers %))]
+    (->> ids (filter (:nodes state)) (map #(str "「" (title %) "」")) (apply str))))
+
+(defn- on-conflict!
+  "版本衝突：這次的修改沒有寫入。重新載入後端的資料，並說明哪些卡片被其他來源改過。"
+  [conflicts]
+  (let [names (node-names @store (map :node/id conflicts))]
+    (swap! sync-state assoc :reload-pending true)
+    (-> (reload-if-idle! {:force? true})
+        (.then #(show-toast! (str names "剛被其他來源（agent 或其他分頁）修改，已重新載入；剛才的修改沒有存入"))))))
+
 (defn flush!
   "把尚未送出的變動送到後端；回傳 Promise。同一時間只送一個修改組。"
   []
@@ -328,16 +346,23 @@
             (let [{:keys [label origin]} (changeset-meta state (:history-count @sync-state))
                   p (-> (api "POST" "/api/report/changes"
                              {:label label :origin origin :changes changes})
-                        (.then (fn [_]
-                                 (reset! saved data)
-                                 (swap! sync-state assoc :in-flight nil
-                                        :history-count (count (:history state)))
+                        (.then (fn [{:keys [versions] :as res}]
+                                 ;; 後端寫入後的版本同時寫回已存檔的資料與目前狀態，下次送出才不會與自己衝突
+                                 (reset! saved (ui/apply-versions data versions))
+                                 (swap! store ui/apply-versions versions)
+                                 (swap! sync-state #(cond-> (assoc % :in-flight nil
+                                                                   :history-count (count (:history state)))
+                                                      (:changeset/id res) (update :own conj (:changeset/id res))))
                                  (when (get-in @store [:ui :show-previous]) (load-previous!))
                                  ;; 送出期間又有新的修改
-                                 (when (sync/diff @saved (sync/data @store)) (flush!))))
+                                 (if (sync/diff @saved (sync/data @store))
+                                   (flush!)
+                                   (reload-if-idle!))))
                         (.catch (fn [err]
                                   (swap! sync-state assoc :in-flight nil)
-                                  (show-toast! (str "無法儲存：" (ex-message err)))
+                                  (if-let [conflicts (:conflicts (ex-data err))]
+                                    (on-conflict! conflicts)
+                                    (show-toast! (str "無法儲存：" (ex-message err))))
                                   (js/console.error err))))]
               (swap! sync-state assoc :in-flight p)
               p))))))
@@ -380,6 +405,49 @@
                        (swap! sync-state assoc :history-count (count (:history @store))))
                    (show-toast! "沒有可以復原的修改"))))
         (.catch (fn [err] (show-toast! (str "無法復原：" (ex-message err))))))))
+
+;; ---------------------------------------------------------------------------
+;; 其他來源的修改（SPEC 5.13）：後端以 Server-Sent Events 通知；沒有未送出的輸入時重新載入
+
+(defn- dirty? []
+  (let [{:keys [timer in-flight]} @sync-state]
+    (or timer in-flight (some? (sync/diff @saved (sync/data @store))))))
+
+(defn reload-if-idle!
+  "有待重新載入的修改、且沒有未送出的輸入時，讀回整份報告並保留畫面狀態。
+  :force? 用於衝突：捨棄未送出的變動。回傳 Promise。"
+  ([] (reload-if-idle! {}))
+  ([{:keys [force?]}]
+   (if-not (and (loaded?) (:reload-pending @sync-state) (or force? (not (dirty?))))
+     (js/Promise.resolve nil)
+     (-> (api "GET" "/api/report")
+         (.then (fn [loaded]
+                  ;; 讀取期間使用者又有輸入時先不取代，等送出後再試
+                  (when (or force? (not (dirty?)))
+                    (swap! store ui/replace-data loaded)
+                    (reset! saved (sync/data @store))
+                    (swap! sync-state assoc :reload-pending false
+                           :history-count (count (:history @store))))))
+         (.catch (fn [err] (js/console.error err)))))))
+
+(defn- on-change-event [e]
+  (let [{:keys [type] :as event} (reader/read-string (.-data e))]
+    ;; 自己的修改組的事件可能比 POST 的回應先到，等送出完成、記下 id 後再判斷
+    (-> (or (:in-flight @sync-state) (js/Promise.resolve nil))
+        (.then (fn [_]
+                 (when-not (and (= :change type) (contains? (:own @sync-state) (:changeset/id event)))
+                   (swap! sync-state assoc :reload-pending true)
+                   (reload-if-idle!)))))))
+
+(defonce events
+  ;; EventSource 斷線後會自動重連
+  (atom nil))
+
+(defn- listen-events! []
+  (when-not @events
+    (let [es (js/EventSource. "/api/events")]
+      (.addEventListener es "change" on-change-event)
+      (reset! events es))))
 
 ;; ---------------------------------------------------------------------------
 ;; 載入
@@ -434,4 +502,5 @@
   ;; 離開頁面前送出尚未儲存的文字
   (js/window.addEventListener "beforeunload" (fn [_] (flush!)))
   (render! @store)
+  (listen-events!)
   (load!))
