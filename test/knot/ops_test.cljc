@@ -246,3 +246,40 @@
       (is (str/includes? (:error (ops/add-remote-relation s {:from-id "a1" :to-id "a1" :type :echo})) "同一張"))
       (is (str/includes? (:error (ops/add-remote-relation s {:from-id "a1" :to-id "A1" :type :echo})) "兩個段落"))
       (is (str/includes? (:error (ops/add-remote-relation s {:from-id "a1" :to-id "b1" :type :causal})) "type 只接受")))))
+
+(deftest delete-card-test
+  (let [s (state)]
+    (testing "刪除段落：關係一併移除，後一段改為承接前一段、待確認"
+      (let [r (ops/delete-card s {:id "a2"})
+            rels (:relations (:state r))]
+        (is (not (contains? (:nodes (:state r)) "a2")))
+        (is (not-any? #(#{"a2"} (:relation/to %)) rels))
+        (is (:relation/pending (tree/relation-between rels "a1" "a3")))
+        (is (= ["a3"] (:touched r)))
+        (is (str/includes? (:message r) "待確認"))))
+    (testing "刪除標題連同下層"
+      (let [r (ops/delete-card s {:id "A2"})]
+        (is (not-any? #(contains? (:nodes (:state r)) %) ["A2" "A21" "A211" "x1"]))
+        (is (str/includes? (:message r) "3 張下層卡片"))
+        (is (= [] (:touched r)))))
+    (testing "錯誤"
+      (is (str/includes? (:error (ops/delete-card s {:id "nope"})) "找不到卡片"))
+      (is (str/includes? (:error (ops/delete-card s {:id "a1" :version 2})) "已被修改"))
+      (is (some? (:state (ops/delete-card s {:id "a1" :version 1}))))
+      (is (str/includes? (:error (ops/delete-card {:nodes (tree/from-nested [(h "A" "甲" (p "a1"))])} {:id "A"}))
+                         "至少要保留")))))
+
+(deftest remove-relation-test
+  (let [s (-> (state)
+              (update :relations conj {:relation/from "a3" :relation/to "b1" :relation/type :basis :relation/remote true}))]
+    (testing "相鄰關係"
+      (let [r (ops/remove-relation s {:from-id "a1" :to-id "a2"})]
+        (is (nil? (tree/relation-between (:relations (:state r)) "a1" "a2")))
+        (is (= 2 (count (:relations (:state r)))))))
+    (testing "不相鄰關係，指定類型"
+      (let [r (ops/remove-relation s {:from-id "a3" :to-id "b1" :type :basis})]
+        (is (not-any? #(= "b1" (:relation/to %)) (:relations (:state r))))))
+    (testing "沒有符合的關係"
+      (is (str/includes? (:error (ops/remove-relation s {:from-id "a1" :to-id "a2" :type :causal})) "沒有類型為 causal"))
+      (is (str/includes? (:error (ops/remove-relation s {:from-id "a2" :to-id "a1"})) "沒有任何關係"))
+      (is (str/includes? (:error (ops/remove-relation s {:from-id "a1" :to-id "nope"})) "找不到 to_id")))))

@@ -249,6 +249,33 @@
                            (if para? "；相鄰段落的關係標為「待確認」" "；編號已重新計算"))}))))))
 
 ;; ---------------------------------------------------------------------------
+;; 刪除
+
+(defn delete-card
+  "刪除卡片與所有下層卡片，規則同畫面的刪除（ui/delete-node）：相關的關係一併移除，
+  原本接在後面的段落改為承接前一段、關係標為待確認。給了 version 且不同時不寫入。"
+  [state {:keys [id version]}]
+  (let [{:keys [nodes]} state
+        node (get nodes id)]
+    (cond
+      (nil? node) {:error (str "找不到卡片：" id)}
+      (and (some? version) (not= version (:node/version node)))
+      {:error (str "卡片已被修改（目前版本 " (:node/version node) "），請先 get_card 重新讀取")}
+      (= (set (keys nodes)) (set (cons id (tree/descendant-ids nodes id))))
+      {:error "報告至少要保留一張卡片"}
+      :else
+      (let [title (card-ref nodes id)
+            n (count (tree/descendant-ids nodes id))
+            next-para (let [s (tree/next-sibling nodes id)] (when (tree/paragraph? nodes s) s))]
+        {:state (ui/delete-node state id)
+         :touched (if next-para [next-para] [])
+         :origin :manual
+         :label (str "刪除" title)
+         :message (str "已刪除" title (when (pos? n) (str "與 " n " 張下層卡片"))
+                       (when next-para (str "；" (card-ref nodes next-para) "與前一段的關係標為「待確認」"))
+                       "；使用者可在 Knot 畫面復原")}))))
+
+;; ---------------------------------------------------------------------------
 ;; 關係
 
 (defn set-relation
@@ -295,3 +322,21 @@
          :origin :manual
          :label (str "新增關係：" (card-ref nodes from-id) "→" (card-ref nodes to-id))
          :note (when dup? "這個關係已經存在，沒有變動")}))))
+
+(defn remove-relation
+  "移除 from → to 的關係（相鄰或不相鄰皆可）；給了 type 時只移除該類型。"
+  [state {:keys [from-id to-id type]}]
+  (let [{:keys [nodes relations]} state
+        hit? #(and (= from-id (:relation/from %)) (= to-id (:relation/to %))
+                   (or (nil? type) (= type (:relation/type %))))]
+    (cond
+      (not (contains? nodes from-id)) {:error (str "找不到 from_id：" from-id)}
+      (not (contains? nodes to-id)) {:error (str "找不到 to_id：" to-id)}
+      (not-any? hit? relations)
+      {:error (str (card-ref nodes from-id) "→" (card-ref nodes to-id) "沒有"
+                   (if type (str "類型為 " (name type) " 的") "任何") "關係；請用 get_card 查看現有的關係")}
+      :else
+      {:state (update state :relations #(vec (remove hit? %)))
+       :touched [from-id to-id]
+       :origin :manual
+       :label (str "移除關係：" (card-ref nodes from-id) "→" (card-ref nodes to-id))})))

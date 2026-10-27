@@ -469,11 +469,13 @@ M0 時建立，至少包含：兩個 nREPL 的 port 與啟動方式、`clj-nrepl
 | 類別 | 工具 |
 |---|---|
 | 讀取 | `get_outline`（卡片樹：id、類型、編號、名稱、意圖摘要、狀態、待辦數）、`get_card`、`get_writing_context`、`find_issues` |
-| 卡片 | `add_heading`、`add_paragraph`、`build_outline`（一次建立巢狀骨架）、`update_card`（名稱、意圖）、`move_card`、`delete_card`、關係與依據的新增與移除 |
+| 卡片 | `add_card`（標題、段落、引言）、`build_outline`（一次建立巢狀骨架）、`update_card`（名稱、意圖）、`move_card`、`delete_card`（連同下層卡片）、`set_relation`、`add_remote_relation`、`remove_relation`、依據的新增與移除 |
 | 本文 | `write_prose`（5.4） |
 | 留言 | `list_todos`、`add_note`（留言或回覆）、`complete_todo` |
 | 素材 | `search_sources`、`get_source_block`、`import_markdown`、`create_fact` |
 | 修改建議 | `list_requested_proposals`、`submit_proposal`、`dismiss_proposal`（5.6） |
+
+- **agent 可以刪除。** `delete_card`、`remove_relation` 與其他寫入一樣記成 agent 的修改組，使用者可以檢視與復原，因此不另外限制（2026-10-27 使用者決定）。`delete_card` 可附上版本，避免刪掉使用者剛改過的卡片。
 
 **skill**（放在 repo 的 `skills/`，隨 Knot 發佈，與工具一起改版）
 
@@ -591,7 +593,7 @@ agent 在背景寫入時，畫面要即時反映，也不能把 agent 的修改�
 - LaTeX 範例專案：目錄結構、章節與表格的寫法、表格環境（由使用者提供）
 - 逐字比對不通過的區塊：擋下、警告或由使用者逐一決定（5.2）
 - 是否支援 Claude Code 以外的 MCP 用戶端（5.12）
-- agent 可否直接確認素材、可否使用刪除類工具（刪卡片、移除依據）
+- agent 可否直接確認素材
 - label 的命名方式：自動產生短 id，或要求使用者輸入代稱
 - 可執行 jar 的打包細節（啟動方式已定：在報告目錄執行 jar）
 - 共用文風與範本的 EDN 檔案格式（由使用者提供範例）

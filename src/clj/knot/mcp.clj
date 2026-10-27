@@ -268,6 +268,19 @@
                                          :to-id (uuid-arg args "to_id" true)
                                          :type type}))))
 
+(defn- delete-card [conn args]
+  (let [version (get args "version")]
+    (when-not (or (nil? version) (integer? version)) (tool-error! "version 必須是整數"))
+    (write! conn args #(ops/delete-card % {:id (card-id % args) :version version}))))
+
+(defn- remove-relation [conn args]
+  (let [type (when (some? (get args "type"))
+               (enum-arg args "type" (distinct (concat tree/adjacent-relation-types tree/remote-relation-types))))]
+    (write! conn args
+            #(ops/remove-relation % {:from-id (uuid-arg args "from_id" true)
+                                     :to-id (uuid-arg args "to_id" true)
+                                     :type type}))))
+
 ;; ---------------------------------------------------------------------------
 ;; 工具登記
 
@@ -372,7 +385,28 @@
                                :summary summary-property}
                   :required ["from_id" "to_id" "type"]
                   :additionalProperties false}
-    :handler add-remote-relation}])
+    :handler add-remote-relation}
+   {:name "remove_relation"
+    :description "移除兩個段落之間的關係（相鄰或不相鄰皆可），from_id、to_id 的方向與建立時相同。給 type 時只移除該類型，省略時移除這兩段之間 from → to 的所有關係。沒有符合的關係時回錯誤。現有的關係可用 get_card 查看。"
+    :inputSchema {:type "object"
+                  :properties {:from_id {:type "string" :description "關係的起點段落 id"}
+                               :to_id {:type "string" :description "關係的目標段落 id"}
+                               :type {:type "string"
+                                      :enum ["progression" "causal" "contrast" "example" "summarizes" "basis" "echo"]
+                                      :description "只移除這個類型（選填）"}
+                               :summary summary-property}
+                  :required ["from_id" "to_id"]
+                  :additionalProperties false}
+    :handler remove-relation}
+   {:name "delete_card"
+    :description "刪除一張卡片與它所有的下層卡片（例如刪除標題會一併刪除底下的段落），相關的關係也一併移除；原本接在後面的段落改為承接前一段，關係標為「待確認」。刪除會記錄成一個修改組，使用者可在 Knot 畫面復原。刪除前請用 get_card 確認內容；傳入 version 可避免刪掉使用者剛修改的卡片。報告至少要保留一張卡片。"
+    :inputSchema {:type "object"
+                  :properties {:id uuid-property
+                               :version {:type "integer" :description "讀取時的卡片版本（選填）；與目前版本不同時拒絕刪除"}
+                               :summary summary-property}
+                  :required ["id"]
+                  :additionalProperties false}
+    :handler delete-card}])
 
 (def tools (into read-tools write-tools))
 
@@ -384,7 +418,7 @@
 (def supported-versions ["2025-11-25" "2025-06-18" "2025-03-26"])
 
 (def instructions
-  "Knot 是撰寫結構化報告的本機工具。報告是一棵卡片樹：標題（heading，最多四層，編號由位置決定）、引言（intro，每個標題至多一張）、段落（paragraph，要撰寫本文的單位）、表格（table）與圖（figure）。每張卡片有意圖（要寫什麼）、狀態（none：尚無本文、ai：agent 撰寫、human：使用者改過）與選填的本文。卡片 id 都是 UUID 字串。請先呼叫 get_outline 了解整體結構，再用 get_card 看單張卡片，撰寫某段前用 get_writing_context 取得應參考的內容。規劃結構與整理關係可用 add_card、build_outline、update_card、move_card、set_relation、add_remote_relation。所有修改都會記錄，使用者可以在 Knot 畫面上檢視與復原。")
+  "Knot 是撰寫結構化報告的本機工具。報告是一棵卡片樹：標題（heading，最多四層，編號由位置決定）、引言（intro，每個標題至多一張）、段落（paragraph，要撰寫本文的單位）、表格（table）與圖（figure）。每張卡片有意圖（要寫什麼）、狀態（none：尚無本文、ai：agent 撰寫、human：使用者改過）與選填的本文。卡片 id 都是 UUID 字串。請先呼叫 get_outline 了解整體結構，再用 get_card 看單張卡片，撰寫某段前用 get_writing_context 取得應參考的內容。規劃結構與整理關係可用 add_card、build_outline、update_card、move_card、delete_card、set_relation、add_remote_relation、remove_relation。所有修改都會記錄，使用者可以在 Knot 畫面上檢視與復原。")
 
 (defn- result [id res] {:jsonrpc "2.0" :id id :result res})
 (defn- rpc-error [id code msg] {:jsonrpc "2.0" :id id :error {:code code :message msg}})

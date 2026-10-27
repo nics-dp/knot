@@ -63,8 +63,8 @@
 
 (deftest tools-list-test
   (let [tools (get-in (rpc "tools/list") [:body "result" "tools"])]
-    (is (= ["add_card" "add_remote_relation" "build_outline" "get_card" "get_outline" "get_writing_context"
-            "move_card" "set_relation" "update_card"]
+    (is (= ["add_card" "add_remote_relation" "build_outline" "delete_card" "get_card" "get_outline"
+            "get_writing_context" "move_card" "remove_relation" "set_relation" "update_card"]
            (sort (map #(get % "name") tools))))
     (is (every? #(= "object" (get-in % ["inputSchema" "type"])) tools))
     (is (every? #(seq (get % "description")) tools))))
@@ -368,6 +368,46 @@
       (is (re-find #"同一張" (error-text (call "add_remote_relation" (assoc args "to_id" from)))))
       (is (re-find #"兩個段落" (error-text (call "add_remote_relation" (assoc args "to_id" (card-id "1.1 計畫緣起"))))))
       (is (re-find #"type" (error-text (call "add_remote_relation" (assoc args "type" "causal"))))))))
+
+(deftest remove-relation-tool-test
+  (let [a (card-id "測試方法概述") b (card-id "各場域結果比較")]
+    (is (some? (relation a b)))
+    (testing "類型不符：不寫入"
+      (let [n (count (changesets))]
+        (is (re-find #"沒有類型為 causal 的關係"
+                     (error-text (call "remove_relation" {"from_id" a "to_id" b "type" "causal"}))))
+        (is (= n (count (changesets))))))
+    (structured (call "remove_relation" {"from_id" a "to_id" b}))
+    (is (nil? (relation a b)))
+    (is (= :agent (:changeset/by (peek (changesets)))))
+    (testing "不相鄰的關係也能移除"
+      (let [from (card-id "節能效益估算") ; 摘要：p321 → p312
+            _ (is (= :summarizes (:relation/type (relation from b))))]
+        (structured (call "remove_relation" {"from_id" from "to_id" b "type" "summarizes"}))
+        (is (nil? (relation from b)))))))
+
+(deftest delete-card-tool-test
+  (let [id (card-id "各場域結果比較")
+        prev (card-id "測試方法概述")
+        next (card-id "異常狀況說明")
+        n (count (:nodes (state)))]
+    (testing "版本不同：不刪除"
+      (is (re-find #"已被修改" (error-text (call "delete_card" {"id" id "version" 999}))))
+      (is (= n (count (:nodes (state))))))
+    (let [out (structured (call "delete_card" {"id" id "summary" "刪掉比較段"}))]
+      (is (re-find #"待確認" (get out "message")))
+      (is (= ["異常狀況說明"] (map #(get % "title") (get out "cards")))))
+    (is (nil? (get (:nodes (state)) (parse-uuid id))))
+    (is (not-any? #(#{(parse-uuid id)} ((juxt :relation/from :relation/to) %)) (:relations (state))))
+    (is (:relation/pending (relation prev next)) "後一段改為承接前一段，待確認")
+    (is (= {:changeset/by :agent :changeset/label "刪掉比較段"}
+           (select-keys (peek (changesets)) [:changeset/by :changeset/label])))
+    (testing "刪除標題連同下層"
+      (let [h (card-id "1.1 計畫緣起")
+            before (count (:nodes (state)))
+            out (structured (call "delete_card" {"id" h}))]
+        (is (re-find #"張下層卡片" (get out "message")))
+        (is (< (count (:nodes (state))) (dec before)))))))
 
 (deftest write-conflict-test
   (with-redefs [db/apply-changes! (fn [_ _] {:conflicts [{:expected 1 :actual 2}]})]
