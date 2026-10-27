@@ -5,6 +5,7 @@
             [knot.context :as context]
             [knot.diff :as diff]
             [knot.layout :as layout]
+            [knot.note :as note]
             [knot.tree :as tree]
             [knot.ui :as ui]))
 
@@ -117,15 +118,80 @@
     #?(:cljs (.toLocaleString at "zh-TW" #js {:month "numeric" :day "numeric" :hour "2-digit" :minute "2-digit"})
        :clj (str at))))
 
-(defn- topbar [{:keys [report nodes ui]} title]
-  (let [{:keys [page selected]} ui
-        crumb (if (= page :library)
-                "素材庫"
-                (str/join " / " (conj (crumb-titles nodes title selected) (title selected))))]
+(declare author-tag note-threads note-compose)
+
+(defn- card-where
+  "清單裡的卡片名稱；段落名稱常會重複，前面加上所屬標題。"
+  [nodes title id]
+  (list (when-let [p (when-not (tree/heading? nodes id) (tree/parent nodes id))]
+          [:span.muted {:replicant/key "p"} (str (title p) " ›")])
+        [:span {:replicant/key "t"} (title id)]))
+
+(defn- menu-item
+  "頂部列清單的一項：作者、卡片名稱，下面是說明；有卡片時可以點選跳過去。"
+  [key on-click author where detail]
+  (let [body (list [:span.menu-item-title {:replicant/key "w"} (author-tag author) where]
+                   [:span.menu-item-detail {:replicant/key "d"} detail])]
+    (if on-click
+      [:button.menu-item {:replicant/key key :type "button" :on {:click on-click}} body]
+      [:div.menu-item {:replicant/key key} body])))
+
+(defn- menu-button [open? on-click label n title]
+  [:button.btn {:type "button" :aria-expanded (str (boolean open?)) :title title :on {:click on-click}}
+   label (when (pos? n) [:span.count-badge n]) " ▾"])
+
+(defn- recent-menu
+  "最近修改的卡片（不分 agent 或使用者），點選跳到卡片（SPEC 5.13）。"
+  [{:keys [nodes ui]} title]
+  (let [cards (filter #(contains? nodes (:node/id %)) (:recent ui))
+        open? (:recent-open ui)]
+    [:div.menu-wrap
+     (menu-button open? [[:recent/toggle]] "最近修改" 0 "列出最近修改的卡片")
+     (when open?
+       (list
+        [:div.menu-backdrop {:replicant/key "backdrop" :on {:click [[:ui/close-recent]]}}]
+        [:div.menu-panel.recent-menu {:replicant/key "menu"}
+         [:div.menu-head "最近修改的卡片"]
+         (if (seq cards)
+           (for [{id :node/id :keys [label at by]} cards]
+             (menu-item id [[:ui/open-recent-card id]] by (card-where nodes title id)
+                        (str/join " · " (remove str/blank? [label (time-text at)]))))
+           [:p.small.muted "還沒有修改過的卡片"])]))]))
+
+(defn- todos-menu
+  "頂部列的「待辦」：整份報告未完成的待辦、agent 的提問與整份報告的留言（SPEC 5.11）。"
+  [{:keys [nodes notes ui] :as state} title]
+  (let [todos (note/open-todos nodes notes)
+        questions (note/agent-questions nodes notes)
+        open? (:todos-open ui)
+        item (fn [{:note/keys [id node text author at]}]
+               (menu-item id (when node [[:ui/open-note-card node]]) author
+                          (if node (card-where nodes title node) "整份報告")
+                          (list [:span.menu-item-text {:replicant/key "x"} (gist text)]
+                                (when at [:span {:replicant/key "at"} (str " · " (time-text at))]))))]
+    [:div.menu-wrap
+     (menu-button open? [[:ui/toggle-todos]] "待辦" (+ (count todos) (count questions))
+                  "交代 agent 的待辦、agent 的提問與整份報告的留言")
+     (when open?
+       (list
+        [:div.menu-backdrop {:replicant/key "backdrop" :on {:click [[:ui/close-todos]]}}]
+        [:div.menu-panel.todos-panel {:replicant/key "panel"}
+         [:div.menu-head "未完成的待辦"]
+         (if (seq todos) (map item todos) [:p.small.muted "沒有未完成的待辦"])
+         [:div.menu-head "agent 的提問"]
+         (if (seq questions) (map item questions) [:p.small.muted "沒有待回覆的提問"])
+         [:div.menu-head "整份報告的留言"]
+         [:div.threads (note-threads state nil)]
+         (note-compose state :report nil "給整份報告的交代或備忘…")]))]))
+
+(defn- topbar [{:keys [report ui] :as state} title]
+  (let [{:keys [page]} ui
+        full (str/join " · " (remove str/blank? [(:report/title report) (:report/subtitle report)]))]
     [:header.topbar
-     [:div.topbar-title
-      [:span.muted.small (:report/title report) " · " (:report/subtitle report)]
-      [:span.crumb crumb]]
+     [:div.topbar-title {:title full}
+      [:span.report-name (:report/title report)]
+      (when-not (str/blank? (:report/subtitle report))
+        [:span.muted " · " (:report/subtitle report)])]
      [:nav.segmented.tabs {:aria-label "頁籤"}
       (for [[p label] tabs]
         [:button {:replicant/key p
@@ -134,6 +200,8 @@
                   :on {:click [[:ui/set-page p]]}}
          label])]
      [:div.topbar-actions
+      (recent-menu state title)
+      (todos-menu state title)
       [:button.btn.btn-primary {:type "button" :disabled true :title "M6 實作 LaTeX 匯出"} "匯出 LaTeX"]]]))
 
 (defn- conflict-view
@@ -171,7 +239,11 @@
 
 (def role-opacity {:active 1 :path 1 :related 1 :sibling 0.7 :other 0.35})
 
-(defn- tree-card [{:keys [nodes title role drag over agent]} {:keys [id top height]}]
+(defn- todo-badge [n]
+  (when (pos? (or n 0))
+    [:span.todo-count {:title (str n " 則未完成的待辦")} n]))
+
+(defn- tree-card [{:keys [nodes title role drag over agent todos]} {:keys [id top height]}]
   (let [node (get nodes id)
         k (:node/kind node)
         dragging? (= id drag)
@@ -200,14 +272,16 @@
         (list
          [:span.card-line {:replicant/key "t"}
           [:span.mono.text-navy (if (= k :table) "表" "圖")]
-          [:span.card-title (title id)]]
+          [:span.card-title (title id)]
+          (todo-badge (get todos id))]
          [:span.mono.muted.small {:replicant/key "l"} (:node/label node)])
 
         (list
          [:span.card-line {:replicant/key "t"}
           [:span.card-title (title id)]
           (when-let [{:keys [label class]} (status-pill (:node/status node))]
-            [:span.pill {:class class} label])]
+            [:span.pill {:class class} label])
+          (todo-badge (get todos id))]
          [:span.card-gist {:replicant/key "g"}
           (if (and (= k :intro) (str/blank? (:node/draft node)))
             "（由 agent 依下層內容撰寫）"
@@ -240,39 +314,18 @@
                   (+ top height (/ (max (or (:gap-before nxt) 0) 8) 2)))]
           [:span.insert-marker {:style {:top (str (- y 2) "px")}}])))))
 
-(defn- recent-menu
-  "最近修改的卡片（不分 agent 或使用者），點選跳到卡片（SPEC 5.13）。"
-  [{:keys [nodes ui]}]
-  (let [title (let [numbers (tree/numbering nodes)] #(tree/display-title nodes numbers %))
-        cards (filter #(contains? nodes (:node/id %)) (:recent ui))
-        open? (:recent-open ui)]
-    [:div.recent-wrap
-     [:button.btn {:type "button"
-                   :aria-expanded (str (boolean open?))
-                   :title "列出最近修改的卡片"
-                   :on {:click [[:recent/toggle]]}}
-      "最近修改 ▾"]
-     (when open?
-       (list
-        [:div.menu-backdrop {:replicant/key "backdrop" :on {:click [[:ui/close-recent]]}}]
-        [:div.recent-menu {:replicant/key "menu"}
-         [:div.recent-menu-head "最近修改的卡片"]
-         (if (seq cards)
-           (for [{id :node/id :keys [label at by]} cards]
-             [:button.recent-item {:replicant/key id :type "button"
-                                   :on {:click [[:ui/open-recent-card id]]}}
-              [:span.recent-title
-               [:span.by-tag {:class (if (= by :agent) "by-agent" "by-user")} (if (= by :agent) "agent" "使用者")]
-               ;; 段落名稱常會重複，前面加上所屬標題
-               (when-let [p (when-not (tree/heading? nodes id) (tree/parent nodes id))]
-                 [:span.muted (str (title p) " ›")])
-               (title id)]
-              [:span.small.muted (str/join " · " (remove str/blank? [label (time-text at)]))]])
-           [:p.small.muted "還沒有修改過的卡片"])]))]))
+(defn- selected-path
+  "選取卡片的位置：上層卡片接著卡片名稱；太長時省略上層、保留卡片名稱。"
+  [nodes title id]
+  (let [ancestors (crumb-titles nodes title id)]
+    [:div.selected-path {:title (str/join " › " (conj ancestors (title id)))}
+     (when (seq ancestors)
+       [:span.path-ancestors (str (str/join " › " ancestors) " ›")])
+     [:span.path-current (title id)]]))
 
 (defn- tree-toolbar
-  "在選取卡片的層級上新增或刪除；最近修改的卡片清單。"
-  [{:keys [nodes ui] :as state}]
+  "在選取卡片的層級上新增或刪除。"
+  [{:keys [nodes ui]}]
   (let [id (:selected ui)
         k (ui/sibling-kind nodes id)]
     [:div.toolbar {:role "toolbar" :aria-label "卡片操作"}
@@ -286,8 +339,7 @@
      [:button.btn.btn-danger {:type "button"
                                         :title "刪除選取的卡片與其下層卡片；可以復原"
                                         :on {:click [[:ui/delete-node id]]}}
-      "刪除"]
-     (recent-menu state)]))
+      "刪除"]]))
 
 (defn- column-name
   "欄位名稱依內容決定：標題用層級稱呼（章、節、項、款），另有段落、表與圖時一併列出。"
@@ -316,6 +368,7 @@
                   (set (concat (map :relation/to outgoing) (map :relation/from incoming))))
         roles (memoize #(card-role selected anc desc related nodes %))
         sel-depth (tree/depth nodes selected)
+        todos (note/todo-counts nodes (:notes state))
         ;; agent 剛修改的卡片：兩個相同的動畫交替使用，同一張卡片再被修改時才會重新播放
         agent (when-let [{:keys [ids n]} (:agent-change ui)]
                 {:ids (set ids) :class (if (even? n) "card-agent-a" "card-agent-b")})
@@ -323,13 +376,8 @@
     [:section.tree-panel {:aria-label "卡片"}
      [:header.board-head
       [:h2.area-title "卡片"]
-      (tree-toolbar state)
-      [:div.legend {:aria-label "圖例"}
-       [:span [:i.swatch.swatch-active] "目前選取"]
-       [:span [:i.swatch.swatch-path] "上層與下層"]
-       [:span [:i.swatch.swatch-related] "不相鄰的關係"]
-       [:span [:i.swatch.swatch-sibling] "同一層"]
-       [:span [:i.swatch.swatch-other] "其他"]]]
+      (selected-path nodes title selected)
+      (tree-toolbar state)]
      [:div.board
       (conflict-view (:conflict ui))
       (when-not drag (toast-view toast))
@@ -367,7 +415,7 @@
            [:div.tree-inner {:style {:transform (str "translateY(" translate "px)")}}
             (relation-chips state col roles)
             (for [c col]
-              (tree-card {:nodes nodes :title title :role (roles (:id c)) :drag drag :over over :agent agent} c))
+              (tree-card {:nodes nodes :title title :role (roles (:id c)) :drag drag :over over :agent agent :todos todos} c))
             (when (and over (some #(= (:id over) (:id %)) col))
               (insert-marker col over))]]])])]]]))
 
@@ -375,9 +423,11 @@
 ;; 全文視圖
 
 (defn- outline
-  "全文頁左側的大綱：所有標題依層級縮排；選取的卡片所在的章節標為目前位置。"
-  [{:keys [nodes ui]} title]
+  "全文頁左側的大綱：所有標題依層級縮排；選取的卡片所在的章節標為目前位置。
+  標題旁是這一章節（含下層）未完成的待辦數。"
+  [{:keys [nodes notes ui]} title]
   (let [selected (:selected ui)
+        todos (note/todo-counts nodes notes)
         here (set (cons selected (tree/ancestor-ids nodes selected)))]
     [:nav.outline {:aria-label "大綱"}
      [:div.outline-head "大綱"]
@@ -392,7 +442,8 @@
                                         (when (= id selected) "outline-selected")]
                                 :aria-current (when (= id selected) "true")
                                 :on {:click [[:ui/select id]]}}
-          (title id)]])]]))
+          (title id)
+          (todo-badge (note/subtree-todo-count nodes todos id))]])]]))
 
 (defn- fulltext
   "全文：依序呈現整份報告的標題與本文。點標題或段落選取，右側編輯區隨之切換；
@@ -736,7 +787,7 @@
        (diff-entry (text (get-in data [:node/prose :value])) (text (:node/prose node)))])))
 
 (defn- prose-zone
-  "本文與產出相關的操作。empty-note：尚未生成時的說明；actions：生成等按鈕。"
+  "本文區。empty-note：尚未有本文時的說明；actions：本文下方的說明或操作（可省略）。"
   [{:keys [facts ui] :as state} node empty-note & actions]
   (let [diff? (boolean (:show-previous ui))]
     (zone "prose" "本文"
@@ -757,7 +808,90 @@
                          [:div.prose-box.prose-editor {:replicant/key (str id "-prose")
                                                        :replicant/on-render [[:prose/render id true]]
                                                        :replicant/on-unmount [[:prose/destroy]]}]))))
-          [:div.prose-actions actions])))
+          (when (seq actions) [:div.prose-actions actions]))))
+
+;; 留言與待辦 -----------------------------------------------------------------
+
+(defn- author-tag [author]
+  [:span.by-tag {:class (if (= author :agent) "by-agent" "by-user")} (if (= author :agent) "agent" "使用者")])
+
+(defn- note-line
+  "一則留言：作者、待辦的勾選框、時間與操作，下面是內容。"
+  [{:keys [ui]} {:note/keys [id author text todo at changeset node] :as n} reply?]
+  (let [done? (= :done (:note/state n))]
+    [:div.note {:replicant/key id
+                :class [(when reply? "note-reply") (when todo "note-todo") (when done? "note-done")]}
+     [:div.note-head
+      (when todo
+        [:input.note-check {:type "checkbox" :checked done?
+                            :aria-label (if done? "重新打開待辦" "標為完成")
+                            :on {:change [[:notes/set-state id (if done? :open :done)]]}}])
+      (author-tag author)
+      (when todo [:span.note-kind (if done? "已完成" "待辦")])
+      [:span.small.muted (time-text at)]
+      [:span.note-actions
+       (when (and done? changeset node)
+         [:button.text-btn {:type "button" :on {:click [[:ui/open-change node]]}} "看修改"])
+       (when-not (or reply? (= id (:reply-to ui)))
+         [:button.text-btn {:type "button" :on {:click [[:ui/start-reply id]]}} "回覆"])
+       (when (and (= author :user) (not reply?))
+         [:button.text-btn {:type "button" :on {:click [[:notes/set-todo id (not todo)]]}}
+          (if todo "取消待辦" "標為待辦")])
+       (when (= author :user)
+         [:button.text-btn.text-danger {:type "button" :on {:click [[:notes/delete id]]}} "刪除"])]]
+     [:p.note-text text]]))
+
+(defn- reply-box [{:keys [ui]} {:note/keys [id]}]
+  (let [draft (:reply-draft ui "")]
+    [:div.note-compose.note-reply {:replicant/key (str "reply-" id)}
+     [:textarea.note-input {:rows 2
+                            :placeholder "回覆…"
+                            :value draft
+                            :replicant/on-mount [[:dom/focus]]
+                            :on {:input [[:ui/set-reply-draft [:event/target-value]]]
+                                 :compositionend [[:ui/set-reply-draft [:event/target-value]]]}}]
+     [:div.note-compose-actions
+      [:button.text-btn {:type "button" :on {:click [[:ui/cancel-reply]]}} "取消"]
+      [:button.btn {:type "button" :disabled (str/blank? draft)
+                    :on {:click [[:notes/reply id draft]]}} "回覆"]]]))
+
+(defn- note-threads [state node-id]
+  (for [{n :note replies :replies} (note/threads (:notes state) node-id)]
+    [:div.thread {:replicant/key (:note/id n)}
+     (note-line state n false)
+     (for [r replies] (note-line state r true))
+     (when (= (:note/id n) (get-in state [:ui :reply-to]))
+       (reply-box state n))]))
+
+(defn- note-compose
+  "新增留言；k 是卡片 id 或 :report。"
+  [state k node-id placeholder]
+  (let [draft (get-in state [:ui :note-drafts k] "")
+        todo? (ui/note-todo? state k)]
+    [:div.note-compose {:replicant/key (str "compose-" k)}
+     [:textarea.note-input {:rows 2
+                            :placeholder placeholder
+                            :value draft
+                            :on {:input [[:ui/set-note-draft k [:event/target-value]]]
+                                 :compositionend [[:ui/set-note-draft k [:event/target-value]]]}}]
+     [:div.note-compose-actions
+      [:label.note-todo-toggle
+       [:input {:type "checkbox" :checked todo?
+                :on {:change [[:ui/set-note-todo k [:event/target-checked]]]}}]
+       "交代 agent 處理（待辦）"]
+      [:button.btn {:type "button" :disabled (str/blank? draft)
+                    :on {:click [[:notes/add {:node node-id :text draft :todo todo?} k]]}}
+       "留言"]]]))
+
+(defn- notes-zone
+  "編輯區最後的「留言與待辦」：這張卡片的留言串（最新的在下方）與新增留言。"
+  [state id]
+  (let [n (get (note/todo-counts (:nodes state) (:notes state)) id 0)]
+    (zone "notes" "留言與待辦"
+          {:hint "給 agent 的交代與 agent 的提問；不會出現在報告中"
+           :aside (when (pos? n) [:span.tag.tag-warm (str n " 則待辦")])}
+          [:div.threads (note-threads state id)]
+          (note-compose state id id "交代 agent 的事、或給自己的備忘…"))))
 
 ;; 各類卡片 -------------------------------------------------------------------
 
@@ -791,11 +925,10 @@
                                     :title (title k) :on-title [[:ui/select k]]
                                     :meta [:span.mono (get-in nodes [k :node/label])]}))])))
      (context-zone state id)
-     (prose-zone state node "尚未有本文：可直接在下方撰寫，或寫好意圖並加入依據後請 agent 撰寫。"
-                 [:button.btn.btn-dark {:replicant/key "gen" :type "button" :disabled true :title "M4 實作：在卡片上新增給 agent 的待辦"}
-                  "請 agent 撰寫"]))))
+     (prose-zone state node "尚未有本文：可直接在下方撰寫，或寫好意圖並加入依據後在「留言與待辦」交代 agent 撰寫。")
+     (notes-zone state id))))
 
-(defn- heading-editor [{:keys [nodes]} title id]
+(defn- heading-editor [{:keys [nodes] :as state} title id]
   (let [node (get nodes id)
         kids (tree/child-ids nodes id)
         intro (tree/intro-id nodes id)
@@ -831,7 +964,8 @@
                        (for [k shown]
                          [:button.kid {:replicant/key k :type "button" :on {:click [[:ui/select k]]}}
                           (title k)])]
-                      [:span.muted.small "這一層還沒有內容。"])))))))
+                      [:span.muted.small "這一層還沒有內容。"]))))
+     (notes-zone state id))))
 
 (defn- intro-editor [{:keys [nodes] :as state} _title id]
   (let [node (get nodes id)]
@@ -839,18 +973,19 @@
      (zone "inputs" "生成依據" {:hint "可留空；agent 會依這一層的下層內容撰寫引言"}
            (intent-field id (:node/draft node) "想強調的重點或語氣寫在這裡，agent 會依下層內容撰寫引言。"))
      (context-zone state id)
-     (prose-zone state node "尚未有本文：可直接撰寫，或在下層內容大致完成後請 agent 撰寫。"
-                 [:span.small.muted {:replicant/key "note"} "引言適合在下層內容大致完成後才撰寫"]
-                 [:button.btn.btn-dark {:replicant/key "gen" :type "button" :disabled true :title "M4 實作：在卡片上新增給 agent 的待辦"}
-                  "請 agent 撰寫"]))))
+     (prose-zone state node "尚未有本文：可直接撰寫，或在下層內容大致完成後於「留言與待辦」交代 agent 撰寫。"
+                 [:span.small.muted {:replicant/key "note"} "引言適合在下層內容大致完成後才撰寫"])
+     (notes-zone state id))))
 
-(defn- float-editor [{:keys [nodes]} id]
+(defn- float-editor [{:keys [nodes] :as state} id]
   (let [node (get nodes id)]
-    (zone "inputs" "設定" {:hint "段落生成時會以 label 引用這張表／圖"}
-          (intent-field id (:node/draft node) "這張表／圖要呈現什麼、圖說的重點。")
-          (field "label" "LaTeX label" nil [:span.mono.boxed-muted (:node/label node)])
-          (when-let [f (:node/figure-file node)]
-            (field "file" "圖檔" nil [:span.mono.boxed-muted f])))))
+    (list
+     (zone "inputs" "設定" {:hint "段落撰寫時會以 label 引用這張表／圖"}
+           (intent-field id (:node/draft node) "這張表／圖要呈現什麼、圖說的重點。")
+           (field "label" "LaTeX label" nil [:span.mono.boxed-muted (:node/label node)])
+           (when-let [f (:node/figure-file node)]
+             (field "file" "圖檔" nil [:span.mono.boxed-muted f])))
+     (notes-zone state id))))
 
 ;; 抽屜 ----------------------------------------------------------------------
 

@@ -29,6 +29,7 @@
      :relations (vec (:relations report))
      :facts (into {} (map (juxt :fact/key identity)) (:facts report))
      :blocks (vec (:blocks report))
+     :notes (vec (:notes report))
      :history []
      :ui (assoc initial-ui :selected (or (:ui/selected report) (default-selection nodes)))}))
 
@@ -39,7 +40,8 @@
    :nodes (into {} (map (juxt :node/id identity)) (:nodes loaded))
    :relations (vec (:relations loaded))
    :facts (into {} (map (juxt :fact/key identity)) (:facts loaded))
-   :blocks (vec (:blocks loaded))})
+   :blocks (vec (:blocks loaded))
+   :notes (vec (:notes loaded))})
 
 (defn from-server
   "由後端讀回的報告建立狀態。"
@@ -177,10 +179,67 @@
 (defn close-recent [state]
   (update state :ui dissoc :recent-open))
 
+(declare set-page)
+
+(defn- show-card
+  "從頂部列的清單選一張卡片：選取；在素材庫時切到卡片頁。"
+  [state id]
+  (cond-> (select state id)
+    (= :library (get-in state [:ui :page])) (set-page :tree)))
+
 (defn open-recent-card
   "從最近修改的清單選一張卡片：選取並關閉清單。"
   [state id]
-  (-> state (select id) close-recent))
+  (-> state (show-card id) close-recent))
+
+;; ---------------------------------------------------------------------------
+;; 留言與待辦（SPEC 5.11）：寫入走 /api/notes，回應是整份留言清單
+
+(defn set-notes [state notes]
+  (assoc state :notes (vec notes)))
+
+(defn set-note-draft
+  "新增留言的輸入框；k 是卡片 id，整份報告的留言為 :report。"
+  [state k text]
+  (assoc-in state [:ui :note-drafts k] (or text "")))
+
+(defn set-note-todo
+  "新增的留言是否交代 agent 處理（待辦）；預設是。"
+  [state k todo?]
+  (assoc-in state [:ui :note-todo k] (boolean todo?)))
+
+(defn note-todo? [state k]
+  (get-in state [:ui :note-todo k] true))
+
+(defn clear-note-draft [state k]
+  (update-in state [:ui :note-drafts] dissoc k))
+
+(defn start-reply [state note-id]
+  (update state :ui assoc :reply-to note-id :reply-draft ""))
+
+(defn set-reply-draft [state text]
+  (assoc-in state [:ui :reply-draft] (or text "")))
+
+(defn cancel-reply [state]
+  (update state :ui dissoc :reply-to :reply-draft))
+
+(defn toggle-todos [state]
+  (update-in state [:ui :todos-open] not))
+
+(defn close-todos [state]
+  (update state :ui dissoc :todos-open))
+
+(defn open-note-card
+  "從待辦清單選一張卡片：選取並關閉清單。"
+  [state id]
+  (-> state (show-card id) close-todos))
+
+(defn open-change
+  "從完成的待辦看 agent 的修改：選取卡片、打開編輯區並切到「與前一版比較」。"
+  [state id]
+  (-> state
+      (open-note-card id)
+      (update :ui assoc :editor-collapsed false :show-previous true)))
 
 ;; ---------------------------------------------------------------------------
 ;; 移動

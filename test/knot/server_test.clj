@@ -3,6 +3,7 @@
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [knot.db :as db]
+            [knot.notes :as notes]
             [knot.seed :as seed]
             [knot.server :as server]
             [knot.sync :as sync]
@@ -71,3 +72,46 @@
                                   (get-in res [:body :state :nodes]))))))
     (testing "已有內容時不能匯入範例"
       (is (= 409 (:status (request :post "/api/dev/sample")))))))
+
+(deftest notes-api-test
+  (seed/seed! *conn* (edn/read-string (slurp (io/resource "fixtures/reports/streetlight.edn"))))
+  (let [card (some #(when (= "主要成果" (:node/title %)) (:node/id %)) (:nodes (:body (request :get "/api/report"))))
+        post-note (fn [body] (request :post "/api/notes" body))]
+    (is (= [] (:notes (:body (request :get "/api/report")))))
+    (testing "新增留言：回傳所有留言"
+      (let [res (post-note {:node card :text "請補充數據" :todo true})
+            note (first (get-in res [:body :notes]))]
+        (is (= 200 (:status res)))
+        (is (= {:note/node card :note/author :user :note/state :open :note/todo true}
+               (select-keys note [:note/node :note/author :note/state :note/todo])))
+        (is (= (:notes (:body (request :get "/api/report"))) (get-in res [:body :notes])))
+        (testing "完成與重開"
+          (let [r (request :post (str "/api/notes/" (:note/id note)) {:state :done})]
+            (is (= :done (get-in r [:body :notes 0 :note/state]))))
+          (is (= :open (get-in (request :post (str "/api/notes/" (:note/id note)) {:state :open})
+                               [:body :notes 0 :note/state]))))
+        (testing "取消待辦"
+          (is (not (contains? (get-in (request :post (str "/api/notes/" (:note/id note)) {:todo false})
+                                      [:body :notes 0])
+                              :note/todo))))
+        (testing "回覆"
+          (let [r (post-note {:node nil :text "好" :reply-to (:note/id note)})]
+            (is (= 200 (:status r)))
+            (is (= card (get-in r [:body :notes 1 :note/node])))))))
+    (testing "錯誤"
+      (is (= 400 (:status (post-note {:node card :text "  "}))))
+      (is (= 400 (:status (post-note {:text "缺少 node"}))))
+      (is (= 404 (:status (post-note {:node (random-uuid) :text "x"})))
+          "不存在的卡片")
+      (is (= 404 (:status (request :post (str "/api/notes/" (random-uuid)) {:todo true}))))
+      (is (= 400 (:status (request :post (str "/api/notes/" (random-uuid)) {:state :weird}))))
+      (is (= 404 (:status (request :delete (str "/api/notes/" (random-uuid)))))))
+    (testing "刪除：自己的連同回覆；別人的 403"
+      (let [theirs (:note/id (notes/add-note! *conn* {:node card :author :agent :text "agent 的問題"}))
+            mine (get-in (post-note {:node card :text "我的"}) [:body :notes])
+            my-id (:note/id (last (filter #(= :user (:note/author %)) mine)))]
+        (is (= 403 (:status (request :delete (str "/api/notes/" theirs)))))
+        (let [res (request :delete (str "/api/notes/" my-id))]
+          (is (= 200 (:status res)))
+          (is (not-any? #(= my-id (:note/id %)) (get-in res [:body :notes])))
+          (is (some #(= theirs (:note/id %)) (get-in res [:body :notes]))))))))
