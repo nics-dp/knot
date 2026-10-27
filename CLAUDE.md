@@ -5,7 +5,7 @@
 ## 文件
 
 - `docs/SPEC.md`：開發規格
-- `docs/ideas.md`：設計緣由與尚未納入規格的構想（例如 agent 透過 MCP 使用 Knot），不是需求清單
+- `docs/ideas.md`：設計緣由與尚未納入規格的構想（例如重新定位為 agent 的白板的理由），不是需求清單
 - `docs/design/README.md`：設計稿索引；圖檔在 `docs/design/screens/`
 - `docs/QUESTIONS.md`：待使用者決定的問題
 
@@ -22,7 +22,7 @@
 - URL 參數 `?select=<卡片 id 或名稱>`、`?page=library|tree|fulltext`、`?drag=<卡片 id>`（拖曳中的樣子）、`?editor=1`（展開編輯區，預設收合）、`?previous=1`（本文區與前一版比較）指定初始畫面，方便截圖對照設計稿；截圖可用 headless Chrome：
   `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --window-size=1440,1000 --virtual-time-budget=4000 --screenshot=out.png "http://localhost:3000/?select=p312&editor=1"`
 - 改了 `knot.server` 的路由要 `(user/reset)` 才會生效；reset 失敗時 `(require 'user :reload)` 再 `(user/go)`。
-- **真實參考資料：** 使用者提供的 PDF 放在 repo 根目錄、轉換結果在 `local/sources/*.md`，兩者都在 `.gitignore`。`knot.ingest/markdown->blocks` 可把它們切成候選區塊（M3 的匯入會用到）。**commit 時一律指定路徑，不要 `git add -A`。**
+- **真實參考資料：** 使用者提供的 PDF 放在 repo 根目錄、轉換結果在 `local/sources/*.md`，兩者都在 `.gitignore`。`knot.ingest/markdown->blocks` 可把它們切成候選區塊（M5 的匯入會用到）。**commit 時一律指定路徑，不要 `git add -A`。**
 - **本機測試報告：** `local/sample-report.edn` 存在時，「匯入範例內容」與 `(seed! "local/sample-report.edn")` 使用它。它由 `local/make_sample.py` 產生（節錄自參考報告），重新產生：`python3 -I local/make_sample.py local/sample-report.edn`。刪掉這個檔案就改用虛構的路燈範例。自動測試一律使用 `test-resources/` 的虛構資料。
 - 轉換：`node_modules/.bin/anydoc <檔案.pdf> > local/sources/<檔名>.md`；評估記錄在 `docs/ingest-evaluation.md`。
 - 原則上由使用者啟動兩個 nREPL；沒在執行時可在背景啟動，但不要關閉使用者已啟動的行程。
@@ -41,7 +41,7 @@
 - `(seed!)`：把虛構範例匯入目前的空白報告；`(seed! "local/sample-report.edn")`：匯入本機測試報告
 - `(wipe!)`：刪除 `local/report` 的資料庫並重新啟動（得到空白報告）
 - `(db)`：目前報告的 Datalevin 連線
-- `(import-file! "path")`：M3 加入
+- `(import-file! "path")`：M5 加入；`(mcp! "tool" {...})`：M3 加入
 
 ### 測試與 lint
 
@@ -58,7 +58,7 @@
 
 ## 開發守則
 
-- **測試不呼叫真實 API。** 以 `with-redefs` 替換 `llm/call`，回傳 `test-resources/fixtures/llm/` 的固定回應。
+- **Knot 不呼叫 LLM，測試也不呼叫模型。** 需要模型的工作由 agent 透過 MCP 完成（SPEC 第 1 節、5.12）；測試直接呼叫 MCP 工具模擬 agent，交回的內容放在 `test-resources/fixtures/agent/`。
 - **只用虛構資料。** repo 內不放真實政府專案素材。
 - **純函式優先放 `.cljc`。** 編號、label、樹運算、合法性判斷、文風合併。
 - **新增相依套件要說明**名稱、版本與理由；版本一律固定（npm 有 `.npmrc` 的 `save-exact`）。
@@ -71,7 +71,7 @@
 - **JDK 25。** Datalevin 需要 `--add-opens` 與 `--enable-native-access`，已寫在 deps.edn 的 `:dev`、`:test`、`:run` alias。
 - **anydoc 的 npm 套件是 `@firecrawl/anydoc`。** npm 上名為 `anydoc` 的是無關的套件。執行方式仍是 `node_modules/.bin/anydoc <檔案>`。
 - **integrant 1.0。** 每個 key 都要有 `ig/init-key` 方法，否則會嘗試 require 同名 namespace 而失敗。
-- **Datalevin 中文全文搜尋。** 預設分詞器查不到中文（M0 已實測），M3 須自訂 bigram 分析器。
+- **Datalevin 中文全文搜尋。** 預設分詞器查不到中文（M0 已實測），M5 須自訂 bigram 分析器。
 
 ## 固定版本（M0，2026-10-26）
 

@@ -8,6 +8,6 @@
 |---|---|---|
 | `templates/closing-report.edn` | 結案報告範本骨架：四層以內的章節樹與契約項目 | 5.1、M1 `(seed!)` |
 | `sources/streetlight-final.md` | 含標題、段落、GFM 表格與 `<!-- page: N -->` 頁碼標記的素材 | 5.2 |
-| `llm/` | 各 LLM 任務的固定回應，檔名為 `<任務>/<情境>.json` | M4 起 |
+| `agent/` | 模擬 agent 交回的內容（本文、修改建議、整理過的 Markdown），檔名為 `<工具>/<情境>.edn` | M3 起 |
 
-之後依里程碑補上：anydoc 轉換用的 docx、xlsx、pdf（M3），以及埋好各類問題的交接檢查報告（M7）。
+之後依里程碑補上：anydoc 轉換用的 docx、xlsx、pdf（M5），以及埋好各類問題的交接檢查報告（M9）。
