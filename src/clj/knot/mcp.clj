@@ -8,6 +8,7 @@
             [jsonista.core :as json]
             [knot.context :as context]
             [knot.db :as db]
+            [knot.notes :as notes]
             [knot.ops :as ops]
             [knot.sync :as sync]
             [knot.tree :as tree]
@@ -50,6 +51,8 @@
   [nodes numbers id]
   (tree/display-title nodes numbers id))
 
+(defn- inst-str [d] (some-> d .toInstant str))
+
 (defn- truncate [s n]
   (let [s (or s "")]
     (if (> (count s) n) (str (subs s 0 n) "…") s)))
@@ -62,11 +65,12 @@
 
 (defn- get-outline [conn _args]
   (let [{:keys [nodes report]} (current-state conn)
-        numbers (tree/numbering nodes)]
+        numbers (tree/numbering nodes)
+        todo-counts (notes/todo-counts (d/db conn))]
     {:report {:title (:report/title report) :subtitle (:report/subtitle report)}
      :cards (vec (for [id (tree/document-order nodes)
                        :let [n (get nodes id)]]
-                   {:id (str id)
+                   (cond-> {:id (str id)
                     :kind (name (:node/kind n))
                     :depth (tree/depth nodes id)
                     :parent_id (some-> (:node/parent n) str)
@@ -75,7 +79,8 @@
                     :intent (truncate (:node/draft n) 80)
                     :status (status-name n)
                     :has_prose (has-prose? n)
-                    :version (:node/version n)}))}))
+                    :version (:node/version n)}
+                     (pos? (get todo-counts id 0)) (assoc :open_todos (get todo-counts id)))))}))
 
 ;; ---------------------------------------------------------------------------
 ;; get_card
@@ -133,7 +138,15 @@
       :children (vec (for [k (tree/child-ids nodes id)]
                        {:id (str k)
                         :kind (name (tree/kind nodes k))
-                        :title (card-title nodes numbers k)}))}
+                        :title (card-title nodes numbers k)}))
+      :notes (vec (for [note (notes/list-notes (d/db conn))
+                        :when (= id (:note/node note))]
+                    (cond-> {:id (str (:note/id note))
+                             :author (name (:note/author note))
+                             :text (:note/text note)
+                             :at (inst-str (:note/at note))}
+                      (:note/todo note) (assoc :todo true :state (name (:note/state note)))
+                      (:note/reply-to note) (assoc :reply_to (str (:note/reply-to note))))))}
       (:node/label n) (assoc :label (:node/label n)))))
 
 ;; ---------------------------------------------------------------------------
@@ -282,6 +295,70 @@
                                      :type type}))))
 
 ;; ---------------------------------------------------------------------------
+;; 留言與待辦：不是內容修改，不產生修改組
+
+(defn- reply-entries [replies]
+  (vec (for [r replies]
+         {:author (name (:note/author r)) :text (:note/text r) :at (inst-str (:note/at r))})))
+
+(defn- note-card
+  "留言所屬卡片的摘要；整份報告的留言為 nil。"
+  [nodes numbers note]
+  (when-let [id (:note/node note)]
+    (when (contains? nodes id) (card-summary nodes numbers id))))
+
+(defn- list-todos [conn args]
+  (let [{:keys [nodes] :as state} (current-state conn)
+        numbers (tree/numbering nodes)
+        db (d/db conn)
+        only (when (some? (get args "node_id"))
+               (card-id state {"id" (get args "node_id")}))
+        wanted? #(or (nil? only) (= only (:note/node %)))]
+    {:todos (vec (for [t (notes/open-todos db) :when (wanted? t)]
+                   {:id (str (:note/id t))
+                    :card (note-card nodes numbers t)
+                    :text (:note/text t)
+                    :at (inst-str (:note/at t))
+                    :replies (reply-entries (notes/thread db (:note/id t)))}))
+     :questions_answered
+     (vec (for [q (notes/agent-threads db) :when (wanted? q)
+                :let [replies (notes/thread db (:note/id q))]
+                :when (= :user (:note/author (last replies)))]
+            {:id (str (:note/id q))
+             :card (note-card nodes numbers q)
+             :question (:note/text q)
+             :replies (reply-entries replies)}))}))
+
+(defn- add-note [conn args]
+  (when-not (contains? args "node_id") (tool-error! "缺少參數 node_id（整份報告的留言為 null）"))
+  (let [node (uuid-arg args "node_id" false)
+        reply-to (uuid-arg args "reply_to" false)
+        res (notes/add-note! conn {:node node :author :agent :text (get args "text") :reply-to reply-to})]
+    (when-let [msg (:error res)] (tool-error! msg))
+    {:note_id (str (:note/id res))
+     :message (if reply-to "已回覆；使用者會在 Knot 畫面上看到" "已留言；使用者會在 Knot 畫面上看到")}))
+
+(defn- complete-todo [conn args]
+  (let [id (uuid-arg args "id" true)
+        db (d/db conn)
+        todo (some #(when (= id (:note/id %)) %) (notes/list-notes db))
+        _ (cond
+            (nil? todo) (tool-error! (str "找不到留言：" id))
+            (not (:note/todo todo)) (tool-error! "這則留言不是待辦")
+            (= :done (:note/state todo)) (tool-error! "這個待辦已經完成"))
+        reply (get args "reply")
+        _ (when (and (some? reply) (or (not (string? reply)) (str/blank? reply)))
+            (tool-error! "reply 不能是空白"))
+        cs-id (or (uuid-arg args "changeset_id" false)
+                  (notes/latest-agent-changeset db (:note/node todo) (:note/at todo)))
+        res (notes/set-state! conn id :done {:changeset cs-id})]
+    (when-let [msg (:error res)] (tool-error! msg))
+    (when reply
+      (let [r (notes/add-note! conn {:author :agent :text reply :reply-to id})]
+        (when-let [msg (:error r)] (tool-error! msg))))
+    {:message "待辦已標為完成" :changeset_id (some-> cs-id str)}))
+
+;; ---------------------------------------------------------------------------
 ;; 工具登記
 
 (def id-schema
@@ -292,17 +369,23 @@
 
 (def read-tools
   [{:name "get_outline"
-    :description "取得整份報告的卡片樹（依文件順序的扁平清單）與報告資訊：id、類型、深度、編號、名稱、意圖摘要、狀態、是否有本文。這是規劃與定位卡片的起點；意圖已截斷為前 80 字，完整內容請用 get_card。"
+    :description "取得整份報告的卡片樹（依文件順序的扁平清單）與報告資訊：id、類型、深度、編號、名稱、意圖摘要、狀態、是否有本文，以及未完成待辦數 open_todos（沒有待辦時省略）。這是規劃與定位卡片的起點；意圖已截斷為前 80 字，完整內容請用 get_card。"
     :inputSchema {:type "object" :properties {} :additionalProperties false}
     :handler get-outline}
    {:name "get_card"
-    :description "取得單張卡片的完整資料：完整意圖、本文純文字、所在章節路徑、依據的素材、前後段與其他段落的關係、下層卡片。要看某張卡片的細節或確認它的關係時使用；id 由 get_outline 取得。"
+    :description "取得單張卡片的完整資料：完整意圖、本文純文字、所在章節路徑、依據的素材、前後段與其他段落的關係、下層卡片、這張卡片上的留言與待辦（notes）。要看某張卡片的細節或確認它的關係時使用；id 由 get_outline 取得。"
     :inputSchema id-schema
     :handler get-card}
    {:name "get_writing_context"
     :description "取得撰寫某段本文時應參考的內容（章節路徑、本段意圖、依據的素材與事實、前後段、有關係的段落、文風），與 Knot 編輯區的「撰寫時參考的內容」相同。撰寫本文時以它為依據；只有段落與引言適用。"
     :inputSchema id-schema
-    :handler get-writing-context}])
+    :handler get-writing-context}
+   {:name "list_todos"
+    :description "列出使用者交代的待辦與使用者的回覆。todos＝尚未完成的待辦（含所屬卡片，整份報告的待辦 card 為 null，以及討論串中的回覆）；questions_answered＝你先前用 add_note 提問、使用者已回答但你尚未接話的討論串。開始工作時先呼叫；處理完待辦用 complete_todo。node_id 選填，只列出某張卡片的。"
+    :inputSchema {:type "object"
+                  :properties {:node_id {:type "string" :description "只列出這張卡片的（選填，UUID）"}}
+                  :additionalProperties false}
+    :handler list-todos}])
 
 (def ^:private summary-property
   {:type "string" :description "這次修改的名稱（選填），會顯示在 Knot 的復原提示；省略時由 Knot 依操作產生"})
@@ -406,7 +489,25 @@
                                :summary summary-property}
                   :required ["id"]
                   :additionalProperties false}
-    :handler delete-card}])
+    :handler delete-card}
+   {:name "add_note"
+    :description "在卡片上留言給使用者，或回覆討論串。意圖不清楚、素材互相矛盾、需要使用者決定時用它提問，而不是自己猜；也用於回覆使用者的留言。reply_to 給被回覆的留言 id 時，留言會接在該討論串且沿用它的卡片（node_id 可省略但若給了必須相同）；node_id 為 null 表示整份報告的留言。留言不是內容修改，不會產生修改組，也不能建立待辦。之後可用 list_todos 的 questions_answered 看使用者的回答。"
+    :inputSchema {:type "object"
+                  :properties {:node_id {:type ["string" "null"] :description "留言所屬卡片的 id；null 表示整份報告"}
+                               :text {:type "string" :description "留言內容"}
+                               :reply_to {:type "string" :description "被回覆的留言 id（選填）"}}
+                  :required ["node_id" "text"]
+                  :additionalProperties false}
+    :handler add-note}
+   {:name "complete_todo"
+    :description "把使用者的待辦標為完成。changeset_id 選填：省略時 Knot 會連結待辦建立之後、你對該卡片所做的最近一個修改組（沒有則不連結）。reply 選填，會以你的身分回覆在該待辦底下，用來說明做了什麼。不是待辦或已完成時回錯誤。完成待辦本身不是內容修改，不會產生修改組。"
+    :inputSchema {:type "object"
+                  :properties {:id {:type "string" :description "待辦的留言 id（由 list_todos 取得）"}
+                               :reply {:type "string" :description "完成後的說明（選填）"}
+                               :changeset_id {:type "string" :description "完成待辦所做的修改組 id（選填，寫入工具回傳的 changeset_id）"}}
+                  :required ["id"]
+                  :additionalProperties false}
+    :handler complete-todo}])
 
 (def tools (into read-tools write-tools))
 
@@ -418,7 +519,7 @@
 (def supported-versions ["2025-11-25" "2025-06-18" "2025-03-26"])
 
 (def instructions
-  "Knot 是撰寫結構化報告的本機工具。報告是一棵卡片樹：標題（heading，最多四層，編號由位置決定）、引言（intro，每個標題至多一張）、段落（paragraph，要撰寫本文的單位）、表格（table）與圖（figure）。每張卡片有意圖（要寫什麼）、狀態（none：尚無本文、ai：agent 撰寫、human：使用者改過）與選填的本文。卡片 id 都是 UUID 字串。請先呼叫 get_outline 了解整體結構，再用 get_card 看單張卡片，撰寫某段前用 get_writing_context 取得應參考的內容。規劃結構與整理關係可用 add_card、build_outline、update_card、move_card、delete_card、set_relation、add_remote_relation、remove_relation。所有修改都會記錄，使用者可以在 Knot 畫面上檢視與復原。")
+  "Knot 是撰寫結構化報告的本機工具。報告是一棵卡片樹：標題（heading，最多四層，編號由位置決定）、引言（intro，每個標題至多一張）、段落（paragraph，要撰寫本文的單位）、表格（table）與圖（figure）。每張卡片有意圖（要寫什麼）、狀態（none：尚無本文、ai：agent 撰寫、human：使用者改過）與選填的本文。卡片 id 都是 UUID 字串。請先呼叫 get_outline 了解整體結構，再用 get_card 看單張卡片，撰寫某段前用 get_writing_context 取得應參考的內容。規劃結構與整理關係可用 add_card、build_outline、update_card、move_card、delete_card、set_relation、add_remote_relation、remove_relation。使用者會在卡片上留言與交代待辦：開始工作時先用 list_todos 查看，做完用 complete_todo 完成；不確定使用者的意圖時用 add_note 留言詢問，而不是自行猜測。所有修改都會記錄，使用者可以在 Knot 畫面上檢視與復原。")
 
 (defn- result [id res] {:jsonrpc "2.0" :id id :result res})
 (defn- rpc-error [id code msg] {:jsonrpc "2.0" :id id :error {:code code :message msg}})

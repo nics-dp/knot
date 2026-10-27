@@ -56,7 +56,8 @@
     {:conn db :subscribers subscribers :listen-key listen-key :scheduler scheduler}))
 
 (defmethod ig/halt-key! :knot/events [_ {:keys [conn subscribers listen-key ^ScheduledExecutorService scheduler]}]
-  (d/unlisten! conn listen-key)
+  ;; 前一次停止只做了一半時，資料庫可能已經關閉；略過才不會讓 (user/reset) 卡住
+  (when-not (d/closed? conn) (d/unlisten! conn listen-key))
   (.shutdownNow scheduler)
   (doseq [ch @subscribers] (http/close ch))
   (reset! subscribers #{}))

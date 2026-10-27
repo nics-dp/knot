@@ -248,3 +248,23 @@
       (let [s (ui/open-recent-card s "b1")]
         (is (= "b1" (get-in s [:ui :selected])))
         (is (nil? (get-in s [:ui :recent-open])))))))
+
+(deftest notes-ui-test
+  (testing "新增留言的輸入框與待辦預設"
+    (let [s (ui/set-note-draft state "a1" "寫短一點")]
+      (is (= "寫短一點" (get-in s [:ui :note-drafts "a1"])))
+      (is (true? (ui/note-todo? s "a1")) "預設交代 agent 處理")
+      (is (false? (ui/note-todo? (ui/set-note-todo s "a1" false) "a1")))
+      (is (nil? (get-in (ui/clear-note-draft s "a1") [:ui :note-drafts "a1"])))))
+  (testing "回覆"
+    (let [s (-> state (ui/start-reply "n1") (ui/set-reply-draft "好"))]
+      (is (= ["n1" "好"] [(get-in s [:ui :reply-to]) (get-in s [:ui :reply-draft])]))
+      (is (nil? (get-in (ui/cancel-reply s) [:ui :reply-to])))))
+  (testing "從完成的待辦看修改：選取、打開編輯區、切到與前一版比較"
+    (let [s (-> state ui/toggle-todos (ui/open-change "b1"))]
+      (is (= "b1" (get-in s [:ui :selected])))
+      (is (false? (get-in s [:ui :editor-collapsed])))
+      (is (true? (get-in s [:ui :show-previous])))
+      (is (nil? (get-in s [:ui :todos-open])))))
+  (testing "重新載入時以後端的留言取代"
+    (is (= [{:note/id "n"}] (:notes (ui/replace-data state {:nodes (vals (:nodes state)) :notes [{:note/id "n"}]}))))))

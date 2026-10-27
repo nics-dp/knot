@@ -5,6 +5,7 @@
             [datalevin.core :as d]
             [jsonista.core :as json]
             [knot.db :as db]
+            [knot.notes :as notes]
             [knot.seed :as seed]
             [knot.server :as server]
             [knot.tree :as tree]
@@ -63,8 +64,9 @@
 
 (deftest tools-list-test
   (let [tools (get-in (rpc "tools/list") [:body "result" "tools"])]
-    (is (= ["add_card" "add_remote_relation" "build_outline" "delete_card" "get_card" "get_outline"
-            "get_writing_context" "move_card" "remove_relation" "set_relation" "update_card"]
+    (is (= ["add_card" "add_note" "add_remote_relation" "build_outline" "complete_todo" "delete_card" "get_card"
+            "get_outline" "get_writing_context" "list_todos" "move_card" "remove_relation" "set_relation"
+            "update_card"]
            (sort (map #(get % "name") tools))))
     (is (every? #(= "object" (get-in % ["inputSchema" "type"])) tools))
     (is (every? #(seq (get % "description")) tools))))
@@ -413,3 +415,115 @@
   (with-redefs [db/apply-changes! (fn [_ _] {:conflicts [{:expected 1 :actual 2}]})]
     (is (= "卡片剛被修改，請重新讀取後再試"
            (error-text (call "update_card" {"id" (card-id "選定原則") "title" "x"}))))))
+
+;; ---------------------------------------------------------------------------
+;; 留言與待辦
+
+(defn- user-note! [m] (notes/add-note! *conn* (merge {:author :user} m)))
+(defn- cs-count [] (count (changesets)))
+
+(deftest add-note-tool-test
+  (let [c (card-id "計畫目標")
+        before (cs-count)
+        out (structured (call "add_note" {"node_id" c "text" "目標的數字來源是？"}))
+        note (first (notes/list-notes (d/db *conn*)))]
+    (is (= (str (:note/id note)) (get out "note_id")))
+    (is (string? (get out "message")))
+    (is (= {:note/author :agent :note/node (parse-uuid c) :note/text "目標的數字來源是？"}
+           (select-keys note [:note/author :note/node :note/text])))
+    (is (= before (cs-count)) "不產生修改組")
+    (testing "回覆沿用卡片；node_id 可為 null"
+      (let [r (structured (call "add_note" {"node_id" nil "text" "補充" "reply_to" (get out "note_id")}))
+            reply (last (notes/list-notes (d/db *conn*)))]
+        (is (= (str (:note/id reply)) (get r "note_id")))
+        (is (= (parse-uuid c) (:note/node reply)))))
+    (testing "整份報告"
+      (is (nil? (:note/node (notes/add-note! *conn* {:author :agent :text "x"})))))
+    (testing "錯誤"
+      (is (re-find #"node_id" (error-text (call "add_note" {"text" "x"}))))
+      (is (re-find #"空白" (error-text (call "add_note" {"node_id" c "text" " "}))))
+      (is (re-find #"找不到卡片" (error-text (call "add_note" {"node_id" (str (random-uuid)) "text" "x"}))))
+      (is (re-find #"找不到要回覆" (error-text (call "add_note" {"node_id" c "text" "x" "reply_to" (str (random-uuid))})))))))
+
+(deftest list-todos-tool-test
+  (let [c (card-id "計畫目標")
+        t (user-note! {:node (parse-uuid c) :text "請寫得更具體" :todo true})
+        _ (user-note! {:node nil :text "整份報告的待辦" :todo true})
+        _ (user-note! {:node (parse-uuid c) :text "只是留言"})
+        _ (notes/add-note! *conn* {:author :agent :node (parse-uuid c) :text "你要我寫幾年？" :reply-to (:note/id t)})
+        q (notes/add-note! *conn* {:author :agent :node (parse-uuid c) :text "預算是哪一年？"})
+        q2 (notes/add-note! *conn* {:author :agent :node nil :text "整體文風？"})
+        _ (user-note! {:reply-to (:note/id q) :text "民國 114 年"})
+        _ (notes/add-note! *conn* {:author :agent :reply-to (:note/id q2) :text "收到"})
+        _ (user-note! {:reply-to (:note/id q2) :text "再補充"})
+        out (structured (call "list_todos" {}))]
+    (testing "待辦"
+      (is (= 2 (count (get out "todos"))))
+      (let [todo (first (get out "todos"))]
+        (is (= (str (:note/id t)) (get todo "id")))
+        (is (= "請寫得更具體" (get todo "text")))
+        (is (= {"id" c "title" "計畫目標"} (select-keys (get todo "card") ["id" "title"])))
+        (is (= [["agent" "你要我寫幾年？"]] (map (juxt #(get % "author") #(get % "text")) (get todo "replies"))))
+        (is (string? (get todo "at"))))
+      (is (nil? (get-in out ["todos" 1 "card"]))))
+    (testing "使用者已回答的提問"
+      (is (= ["預算是哪一年？" "整體文風？"] (map #(get % "question") (get out "questions_answered"))))
+      (is (= "民國 114 年" (get-in out ["questions_answered" 0 "replies" 0 "text"]))))
+    (testing "依卡片過濾"
+      (let [o (structured (call "list_todos" {"node_id" c}))]
+        (is (= 1 (count (get o "todos"))))
+        (is (= 1 (count (get o "questions_answered")))))
+      (is (re-find #"找不到卡片" (error-text (call "list_todos" {"node_id" (str (random-uuid))})))))
+    (testing "agent 接話後不再列為已回答"
+      (notes/add-note! *conn* {:author :agent :reply-to (:note/id q) :text "好的"})
+      (is (= ["整體文風？"] (map #(get % "question") (get (structured (call "list_todos" {})) "questions_answered")))))))
+
+(deftest complete-todo-tool-test
+  (let [c (card-id "計畫目標")
+        t (user-note! {:node (parse-uuid c) :text "請寫得更具體" :todo true})
+        id (str (:note/id t))]
+    (Thread/sleep 5)
+    (let [upd (structured (call "update_card" {"id" c "intent" "更具體的意圖"}))
+          before (cs-count)
+          out (structured (call "complete_todo" {"id" id "reply" "已改寫意圖"}))
+          done (some #(when (= (:note/id t) (:note/id %)) %) (notes/list-notes (d/db *conn*)))]
+      (testing "自動連結最近的 agent 修改組"
+        (is (= (get upd "changeset_id") (get out "changeset_id")))
+        (is (= (parse-uuid (get upd "changeset_id")) (:note/changeset done)))
+        (is (= :done (:note/state done)))
+        (is (inst? (:note/done-at done))))
+      (testing "回覆"
+        (let [r (last (notes/list-notes (d/db *conn*)))]
+          (is (= {:note/author :agent :note/text "已改寫意圖" :note/reply-to (:note/id t)}
+                 (select-keys r [:note/author :note/text :note/reply-to])))))
+      (is (= before (cs-count)) "不產生修改組")
+      (is (re-find #"已經完成" (error-text (call "complete_todo" {"id" id})))))
+    (testing "明確指定修改組、沒有修改時為 nil"
+      (let [t2 (user-note! {:node (parse-uuid (card-id "1.1 計畫緣起")) :text "另一件" :todo true})
+            cs (str (random-uuid))
+            out (structured (call "complete_todo" {"id" (str (:note/id t2)) "changeset_id" cs}))]
+        (is (= cs (get out "changeset_id"))))
+      (let [t3 (user-note! {:node nil :text "報告層級" :todo true})]
+        (is (nil? (get (structured (call "complete_todo" {"id" (str (:note/id t3))})) "changeset_id")))))
+    (testing "錯誤"
+      (let [plain (user-note! {:node (parse-uuid c) :text "留言"})]
+        (is (re-find #"不是待辦" (error-text (call "complete_todo" {"id" (str (:note/id plain))})))))
+      (is (re-find #"找不到留言" (error-text (call "complete_todo" {"id" (str (random-uuid))}))))
+      (is (re-find #"id" (error-text (call "complete_todo" {})))))))
+
+(deftest outline-and-card-notes-test
+  (let [c (card-id "計畫目標")
+        _ (user-note! {:node (parse-uuid c) :text "待辦一" :todo true})
+        t2 (user-note! {:node (parse-uuid c) :text "待辦二" :todo true})
+        _ (notes/add-note! *conn* {:author :agent :reply-to (:note/id t2) :text "回覆"})
+        cards (get (outline) "cards")]
+    (is (= 2 (some #(when (= c (get % "id")) (get % "open_todos")) cards)))
+    (is (not-any? #(contains? % "open_todos") (remove #(= c (get % "id")) cards)) "沒有待辦時省略")
+    (let [ns (get (structured (call "get_card" {"id" c})) "notes")]
+      (is (= [["user" "待辦一" true "open" nil] ["user" "待辦二" true "open" nil]
+              ["agent" "回覆" nil nil (str (:note/id t2))]]
+             (map #(mapv % ["author" "text" "todo" "state" "reply_to"]) ns)))
+      (is (every? #(string? (get % "at")) ns)))
+    (is (= [] (get (structured (call "get_card" {"id" (card-id "1.1 計畫緣起")})) "notes")))
+    (notes/set-state! *conn* (:note/id t2) :done {})
+    (is (= 1 (some #(when (= c (get % "id")) (get % "open_todos")) (get (outline) "cards"))))))

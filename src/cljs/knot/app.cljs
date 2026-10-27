@@ -17,6 +17,15 @@
    :ui/dismiss-toast ui/dismiss-toast
    :ui/dismiss-conflict ui/dismiss-conflict
    :ui/close-recent ui/close-recent
+   :ui/set-note-draft ui/set-note-draft
+   :ui/set-note-todo ui/set-note-todo
+   :ui/start-reply ui/start-reply
+   :ui/set-reply-draft ui/set-reply-draft
+   :ui/cancel-reply ui/cancel-reply
+   :ui/toggle-todos ui/toggle-todos
+   :ui/close-todos ui/close-todos
+   :ui/open-note-card ui/open-note-card
+   :ui/open-change ui/open-change
    :ui/open-recent-card ui/open-recent-card
    :ui/toggle-editor ui/toggle-editor
    :ui/open-editor ui/open-editor
@@ -99,7 +108,7 @@
           (.scrollTo el #js {:left target
                              :behavior (if (or first-time? (reduced-motion?)) "auto" "smooth")}))))))
 
-(declare dispatch! import-sample! undo! load-previous! load-recent!)
+(declare dispatch! import-sample! undo! load-previous! load-recent! note-request!)
 
 (def nexus
   {:nexus/system->state deref
@@ -156,6 +165,28 @@
 
     :server/load-recent
     (fn [_ _] (load-recent!))
+
+    ;; 留言與待辦（SPEC 5.11）：不是內容修改，直接寫入，回應是整份留言清單
+    :notes/add
+    (fn [_ _ body draft-key]
+      (note-request! "POST" "/api/notes" body
+                     #(cond-> % draft-key (ui/clear-note-draft draft-key))))
+
+    :notes/reply
+    (fn [_ _ id text]
+      (note-request! "POST" "/api/notes" {:reply-to id :text text} ui/cancel-reply))
+
+    :notes/set-todo
+    (fn [_ _ id todo?]
+      (note-request! "POST" (str "/api/notes/" id) {:todo todo?} identity))
+
+    :notes/set-state
+    (fn [_ _ id state]
+      (note-request! "POST" (str "/api/notes/" id) {:state state} identity))
+
+    :notes/delete
+    (fn [_ _ id]
+      (note-request! "DELETE" (str "/api/notes/" id) nil identity))
 
     :clipboard/copy
     (fn [_ _ text]
@@ -228,6 +259,10 @@
         ::composing
         (some-> dom-event .-target .-value)))
 
+    :event/target-checked
+    (fn [{:replicant/keys [dom-event]}]
+      (some-> dom-event .-target .-checked))
+
     ;; <select> 的值轉為 keyword；空字串為 nil
     :event/target-keyword
     (fn [{:replicant/keys [dom-event]}]
@@ -287,7 +322,9 @@
           tree? (= :tree (get-in @store [:ui :page]))]
       (cond
         undo? (do (.preventDefault e) (undo!))
-        (= "Escape" k) (dispatch! {} [[(if (get-in @store [:ui :recent-open]) :ui/close-recent :ui/close-editor)]])
+        (= "Escape" k) (dispatch! {} [[(cond (get-in @store [:ui :recent-open]) :ui/close-recent
+                                               (get-in @store [:ui :todos-open]) :ui/close-todos
+                                               :else :ui/close-editor)]])
         ;; Alt+↑／↓：上移、下移（拖曳的鍵盤替代）
         (and tree? (.-altKey e) (#{:up :down} dir))
         (do (.preventDefault e) (dispatch! {} [[:ui/move-selected (if (= dir :up) -1 1)]]))
@@ -449,6 +486,13 @@
                     (swap! sync-state assoc :reload-pending false
                            :history-count (count (:history @store))))))
          (.catch (fn [err] (js/console.error err)))))))
+
+(defn- note-request!
+  "留言的寫入：成功後以回應的整份清單取代，再套用 after（例如清空輸入框）。"
+  [method path body after]
+  (-> (api method path body)
+      (.then (fn [{:keys [notes]}] (swap! store #(-> % (ui/set-notes notes) after))))
+      (.catch (fn [err] (show-toast! (str "無法儲存留言：" (ex-message err)))))))
 
 (defn- load-recent!
   "讀回最近修改的卡片，供卡片工具列的「最近修改」；先送出尚未儲存的輸入。"

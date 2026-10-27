@@ -126,7 +126,19 @@
    :proposal/base-version long*
    :proposal/dependency kw
    :proposal/new-prose string
-   :proposal/state kw})
+   :proposal/state kw
+
+   ;; 留言與待辦（SPEC 4、5.11）：不屬於修改組
+   :note/id (id-attr)
+   :note/node {:db/valueType :db.type/uuid}
+   :note/author kw
+   :note/text string
+   :note/todo bool
+   :note/state kw
+   :note/reply-to {:db/valueType :db.type/uuid}
+   :note/at {:db/valueType :db.type/instant}
+   :note/done-at {:db/valueType :db.type/instant}
+   :note/changeset {:db/valueType :db.type/uuid}})
 
 ;; ---------------------------------------------------------------------------
 ;; Datalog 規則
@@ -311,14 +323,27 @@
        (sort-by :fact/key)
        vec))
 
+(def ^:private note-attrs
+  [:note/id :note/node :note/author :note/text :note/todo :note/state
+   :note/reply-to :note/at :note/done-at :note/changeset])
+
+(defn list-notes
+  "所有留言（含已隱藏的：所屬卡片已刪除者也在內），依時間由舊到新；
+  前端形式為 :note/* 的 map，沒有值的 key 省略。"
+  [db]
+  (->> (pull-all db :note/id (into [:db/id] note-attrs))
+       (sort-by (juxt :note/at :db/id))
+       (mapv #(dissoc % :db/id))))
+
 (defn load-state
-  "整份報告的前端形式：{:report :nodes :relations :blocks :facts}。"
+  "整份報告的前端形式：{:report :nodes :relations :blocks :facts :notes}。"
   [db]
   {:report (dissoc (report-info db) :db/id)
    :nodes (read-nodes db)
    :relations (read-relations db)
    :blocks (read-blocks db)
-   :facts (read-facts db)})
+   :facts (read-facts db)
+   :notes (list-notes db)})
 
 (defn- entity-before
   "某集合中識別鍵為 k 的實體，前端形式；不存在時為 nil。"
