@@ -247,7 +247,10 @@
     (testing "選一張卡片：選取並關閉清單"
       (let [s (ui/open-recent-card s "b1")]
         (is (= "b1" (get-in s [:ui :selected])))
-        (is (nil? (get-in s [:ui :recent-open])))))))
+        (is (nil? (get-in s [:ui :recent-open])))))
+    (testing "在素材庫選卡片時切到卡片頁，其他頁不變"
+      (is (= :tree (get-in (ui/open-recent-card (ui/set-page s :library) "b1") [:ui :page])))
+      (is (= :fulltext (get-in (ui/open-note-card (ui/set-page s :fulltext) "b1") [:ui :page]))))))
 
 (deftest notes-ui-test
   (testing "新增留言的輸入框與待辦預設"

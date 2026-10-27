@@ -124,13 +124,14 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 
 /* 左：報告與目前位置；中：頁籤；右：動作 */
 .topbar {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 16px;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr); align-items: center; gap: 16px;
   padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--line);
 }
-.topbar-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.topbar-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+.report-name { font-weight: 700; color: var(--ink); }
 .topbar-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.topbar-actions .btn { white-space: nowrap; }
 .tabs button { min-width: 88px; }
-.crumb { font-size: 17px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .segmented { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .segmented button {
@@ -227,36 +228,32 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 .area-title::before {
   content: ""; width: 4px; height: 20px; border-radius: 2px; background: var(--navy);
 }
-.legend {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin-left: auto;
-  font-size: 12px; color: var(--ink-2);
-}
-.legend span { display: inline-flex; align-items: center; gap: 6px; }
-.swatch { display: inline-block; width: 18px; height: 12px; border: 1px solid var(--line-faint); border-radius: 3px; background: var(--surface); }
-.swatch-active { border: 2px solid var(--navy); }
-.swatch-path { border-color: var(--navy); background: var(--navy-tint); }
-.swatch-related { border: 2px dashed var(--teal); }
-.swatch-sibling { opacity: 0.7; }
-.swatch-other { opacity: 0.35; }
 
 .board { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 10px; }
-.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-/* 最近修改的卡片（不分 agent 或使用者） */
-.recent-wrap { position: relative; display: flex; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+/* 選取卡片的位置：上層可以省略，卡片名稱完整顯示 */
+.selected-path { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; font-size: 15px; white-space: nowrap; }
+.path-ancestors { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.path-current { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-weight: 700; color: var(--ink); }
+/* 頂部列的清單：最近修改、待辦 */
+.menu-wrap { position: relative; display: flex; }
 .menu-backdrop { position: fixed; inset: 0; z-index: 40; }
-.recent-menu {
-  position: absolute; top: calc(100% + 6px); left: 0; z-index: 41; width: 380px; max-width: calc(100vw - 32px);
-  display: flex; flex-direction: column; padding: 6px; border-radius: 10px;
-  background: var(--surface); border: 1px solid var(--line); box-shadow: 0 8px 24px rgba(28, 32, 38, 0.14);
+.menu-panel {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 41; width: 420px; max-width: calc(100vw - 32px);
+  max-height: 75vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding: 6px 6px 10px;
+  border-radius: 10px; background: var(--surface); border: 1px solid var(--line); box-shadow: 0 8px 24px rgba(28, 32, 38, 0.14);
 }
-.recent-menu-head { font-size: 12px; color: var(--muted); padding: 4px 8px 6px; }
-.recent-menu > p { margin: 4px 8px 8px; }
-.recent-item {
+.menu-head { font-size: 12px; font-weight: 700; color: var(--muted); padding: 8px 8px 4px; }
+.menu-panel > p { margin: 2px 8px 6px; }
+.menu-item {
   display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: var(--hit);
-  border: 0; background: transparent; border-radius: 6px; padding: 6px 8px; text-align: left; font: inherit; cursor: pointer;
+  border: 0; background: transparent; border-radius: 6px; padding: 6px 8px; text-align: left; font: inherit;
 }
-.recent-item:hover, .recent-item:focus-visible { background: var(--navy-tint); }
-.recent-title { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--ink); }
+button.menu-item { cursor: pointer; }
+button.menu-item:hover, button.menu-item:focus-visible { background: var(--navy-tint); }
+.menu-item-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 14px; color: var(--ink); }
+.menu-item-detail { font-size: 13px; color: var(--muted); }
+.menu-item-text { color: var(--ink-2); }
 .by-tag { flex: none; border-radius: 6px; padding: 0 6px; font-size: 11px; }
 .by-agent { background: var(--teal); color: var(--surface); }
 .by-user { background: var(--ground); color: var(--muted); border: 1px solid var(--line); }
@@ -842,25 +839,10 @@ h4.ft-heading, h5.ft-heading { font-size: 16px; }
 .note-todo-toggle { margin-right: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); cursor: pointer; }
 .note-todo-toggle input { accent-color: var(--navy); }
 
-/* 頂部列的「待辦」 */
-.todos-wrap { position: relative; display: flex; }
+/* 頂部列按鈕上的數字 */
 .count-badge {
   margin-left: 6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
   font-size: 11px; font-weight: 700; line-height: 18px; background: var(--amber); color: var(--surface);
 }
-.todos-panel {
-  position: absolute; top: calc(100% + 6px); right: 0; z-index: 41; width: 440px; max-width: calc(100vw - 32px);
-  max-height: 75vh; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 8px 10px 12px;
-  border-radius: 10px; background: var(--surface); border: 1px solid var(--line); box-shadow: 0 8px 24px rgba(28, 32, 38, 0.14);
-}
-.panel-head { font-size: 12px; font-weight: 700; color: var(--muted); padding: 8px 4px 2px; }
-.todos-panel > p { margin: 2px 4px 4px; }
-.todo-item {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: var(--hit);
-  border: 0; background: transparent; border-radius: 6px; padding: 6px 8px; text-align: left; font: inherit;
-}
-button.todo-item { cursor: pointer; }
-button.todo-item:hover, button.todo-item:focus-visible { background: var(--navy-tint); }
-.todo-where { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); }
-.todo-text { font-size: 14px; color: var(--ink); }
-.todos-panel .threads { padding: 2px 0 4px; }
+.todos-panel .threads { padding: 2px 8px 4px; }
+.todos-panel .note-compose { margin: 0 8px; }

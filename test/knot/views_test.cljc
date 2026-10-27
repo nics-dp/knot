@@ -69,10 +69,11 @@
     (is (not (str/includes? (render state) "card-agent")) "沒有 agent 修改時不標示")))
 
 (deftest recent-menu-test
-  (testing "卡片工具列有「最近修改」，清單預設關閉"
+  (testing "頂部列有「最近修改」，每一頁都有，清單預設關閉"
     (let [html (render state)]
-      (is (str/includes? html "最近修改 ▾"))
-      (is (not (str/includes? html "recent-menu")))))
+      (is (str/includes? html "[:recent/toggle]"))
+      (is (not (str/includes? html "recent-menu"))))
+    (is (str/includes? (render (ui/set-page state :fulltext)) "[:recent/toggle]")))
   (let [html (render (-> state
                          (ui/set-recent-cards [{:node/id "a2" :label "修改「二」" :by :agent}
                                                {:node/id "a1" :label "編輯文字" :by :user}
@@ -123,3 +124,14 @@
     (is (str/includes? html "[:ui/open-note-card \"a2\"]") "agent 的提問")
     (is (str/includes? html "整份報告的留言"))
     (is (str/includes? html "compose-:report"))))
+
+(defn- find-el [tag hiccup]
+  (some #(when (and (vector? %) (= tag (first %))) %) (tree-seq coll? seq hiccup)))
+
+(deftest selected-path-test
+  (testing "選取卡片的位置在卡片區，頂部列只有報告名稱"
+    (let [path (find-el :div.selected-path (views/app state))]
+      (is (= [:span.path-current "一"] (last path)))
+      (is (str/includes? (pr-str path) "甲 ›")))
+    (is (not (str/includes? (pr-str (find-el :header.topbar (views/app state))) "甲")))
+    (is (nil? (find-el :div.selected-path (views/app (ui/set-page state :library)))))))

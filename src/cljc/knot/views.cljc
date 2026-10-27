@@ -120,44 +120,78 @@
 
 (declare author-tag note-threads note-compose)
 
+(defn- card-where
+  "清單裡的卡片名稱；段落名稱常會重複，前面加上所屬標題。"
+  [nodes title id]
+  (list (when-let [p (when-not (tree/heading? nodes id) (tree/parent nodes id))]
+          [:span.muted {:replicant/key "p"} (str (title p) " ›")])
+        [:span {:replicant/key "t"} (title id)]))
+
+(defn- menu-item
+  "頂部列清單的一項：作者、卡片名稱，下面是說明；有卡片時可以點選跳過去。"
+  [key on-click author where detail]
+  (let [body (list [:span.menu-item-title {:replicant/key "w"} (author-tag author) where]
+                   [:span.menu-item-detail {:replicant/key "d"} detail])]
+    (if on-click
+      [:button.menu-item {:replicant/key key :type "button" :on {:click on-click}} body]
+      [:div.menu-item {:replicant/key key} body])))
+
+(defn- menu-button [open? on-click label n title]
+  [:button.btn {:type "button" :aria-expanded (str (boolean open?)) :title title :on {:click on-click}}
+   label (when (pos? n) [:span.count-badge n]) " ▾"])
+
+(defn- recent-menu
+  "最近修改的卡片（不分 agent 或使用者），點選跳到卡片（SPEC 5.13）。"
+  [{:keys [nodes ui]} title]
+  (let [cards (filter #(contains? nodes (:node/id %)) (:recent ui))
+        open? (:recent-open ui)]
+    [:div.menu-wrap
+     (menu-button open? [[:recent/toggle]] "最近修改" 0 "列出最近修改的卡片")
+     (when open?
+       (list
+        [:div.menu-backdrop {:replicant/key "backdrop" :on {:click [[:ui/close-recent]]}}]
+        [:div.menu-panel.recent-menu {:replicant/key "menu"}
+         [:div.menu-head "最近修改的卡片"]
+         (if (seq cards)
+           (for [{id :node/id :keys [label at by]} cards]
+             (menu-item id [[:ui/open-recent-card id]] by (card-where nodes title id)
+                        (str/join " · " (remove str/blank? [label (time-text at)]))))
+           [:p.small.muted "還沒有修改過的卡片"])]))]))
+
 (defn- todos-menu
   "頂部列的「待辦」：整份報告未完成的待辦、agent 的提問與整份報告的留言（SPEC 5.11）。"
   [{:keys [nodes notes ui] :as state} title]
   (let [todos (note/open-todos nodes notes)
         questions (note/agent-questions nodes notes)
-        n (+ (count todos) (count questions))
-        item (fn [{:note/keys [id node text author]}]
-               (let [where (if node (title node) "整份報告")
-                     body (list [:span.todo-where {:replicant/key "w"} (author-tag author) where]
-                                [:span.todo-text {:replicant/key "t"} (gist text)])]
-                 (if node
-                   [:button.todo-item {:replicant/key id :type "button" :on {:click [[:ui/open-note-card node]]}} body]
-                   [:div.todo-item {:replicant/key id} body])))]
-    [:div.todos-wrap
-     [:button.btn {:type "button" :aria-expanded (str (boolean (:todos-open ui)))
-                   :on {:click [[:ui/toggle-todos]]}}
-      "待辦" (when (pos? n) [:span.count-badge n])]
-     (when (:todos-open ui)
+        open? (:todos-open ui)
+        item (fn [{:note/keys [id node text author at]}]
+               (menu-item id (when node [[:ui/open-note-card node]]) author
+                          (if node (card-where nodes title node) "整份報告")
+                          (list [:span.menu-item-text {:replicant/key "x"} (gist text)]
+                                (when at [:span {:replicant/key "at"} (str " · " (time-text at))]))))]
+    [:div.menu-wrap
+     (menu-button open? [[:ui/toggle-todos]] "待辦" (+ (count todos) (count questions))
+                  "交代 agent 的待辦、agent 的提問與整份報告的留言")
+     (when open?
        (list
         [:div.menu-backdrop {:replicant/key "backdrop" :on {:click [[:ui/close-todos]]}}]
-        [:div.todos-panel {:replicant/key "panel"}
-         [:div.panel-head "未完成的待辦"]
+        [:div.menu-panel.todos-panel {:replicant/key "panel"}
+         [:div.menu-head "未完成的待辦"]
          (if (seq todos) (map item todos) [:p.small.muted "沒有未完成的待辦"])
-         [:div.panel-head "agent 的提問"]
+         [:div.menu-head "agent 的提問"]
          (if (seq questions) (map item questions) [:p.small.muted "沒有待回覆的提問"])
-         [:div.panel-head "整份報告的留言"]
+         [:div.menu-head "整份報告的留言"]
          [:div.threads (note-threads state nil)]
          (note-compose state :report nil "給整份報告的交代或備忘…")]))]))
 
-(defn- topbar [{:keys [report nodes ui] :as state} title]
-  (let [{:keys [page selected]} ui
-        crumb (if (= page :library)
-                "素材庫"
-                (str/join " / " (conj (crumb-titles nodes title selected) (title selected))))]
+(defn- topbar [{:keys [report ui] :as state} title]
+  (let [{:keys [page]} ui
+        full (str/join " · " (remove str/blank? [(:report/title report) (:report/subtitle report)]))]
     [:header.topbar
-     [:div.topbar-title
-      [:span.muted.small (:report/title report) " · " (:report/subtitle report)]
-      [:span.crumb crumb]]
+     [:div.topbar-title {:title full}
+      [:span.report-name (:report/title report)]
+      (when-not (str/blank? (:report/subtitle report))
+        [:span.muted " · " (:report/subtitle report)])]
      [:nav.segmented.tabs {:aria-label "頁籤"}
       (for [[p label] tabs]
         [:button {:replicant/key p
@@ -166,6 +200,7 @@
                   :on {:click [[:ui/set-page p]]}}
          label])]
      [:div.topbar-actions
+      (recent-menu state title)
       (todos-menu state title)
       [:button.btn.btn-primary {:type "button" :disabled true :title "M6 實作 LaTeX 匯出"} "匯出 LaTeX"]]]))
 
@@ -279,39 +314,18 @@
                   (+ top height (/ (max (or (:gap-before nxt) 0) 8) 2)))]
           [:span.insert-marker {:style {:top (str (- y 2) "px")}}])))))
 
-(defn- recent-menu
-  "最近修改的卡片（不分 agent 或使用者），點選跳到卡片（SPEC 5.13）。"
-  [{:keys [nodes ui]}]
-  (let [title (let [numbers (tree/numbering nodes)] #(tree/display-title nodes numbers %))
-        cards (filter #(contains? nodes (:node/id %)) (:recent ui))
-        open? (:recent-open ui)]
-    [:div.recent-wrap
-     [:button.btn {:type "button"
-                   :aria-expanded (str (boolean open?))
-                   :title "列出最近修改的卡片"
-                   :on {:click [[:recent/toggle]]}}
-      "最近修改 ▾"]
-     (when open?
-       (list
-        [:div.menu-backdrop {:replicant/key "backdrop" :on {:click [[:ui/close-recent]]}}]
-        [:div.recent-menu {:replicant/key "menu"}
-         [:div.recent-menu-head "最近修改的卡片"]
-         (if (seq cards)
-           (for [{id :node/id :keys [label at by]} cards]
-             [:button.recent-item {:replicant/key id :type "button"
-                                   :on {:click [[:ui/open-recent-card id]]}}
-              [:span.recent-title
-               [:span.by-tag {:class (if (= by :agent) "by-agent" "by-user")} (if (= by :agent) "agent" "使用者")]
-               ;; 段落名稱常會重複，前面加上所屬標題
-               (when-let [p (when-not (tree/heading? nodes id) (tree/parent nodes id))]
-                 [:span.muted (str (title p) " ›")])
-               (title id)]
-              [:span.small.muted (str/join " · " (remove str/blank? [label (time-text at)]))]])
-           [:p.small.muted "還沒有修改過的卡片"])]))]))
+(defn- selected-path
+  "選取卡片的位置：上層卡片接著卡片名稱；太長時省略上層、保留卡片名稱。"
+  [nodes title id]
+  (let [ancestors (crumb-titles nodes title id)]
+    [:div.selected-path {:title (str/join " › " (conj ancestors (title id)))}
+     (when (seq ancestors)
+       [:span.path-ancestors (str (str/join " › " ancestors) " ›")])
+     [:span.path-current (title id)]]))
 
 (defn- tree-toolbar
-  "在選取卡片的層級上新增或刪除；最近修改的卡片清單。"
-  [{:keys [nodes ui] :as state}]
+  "在選取卡片的層級上新增或刪除。"
+  [{:keys [nodes ui]}]
   (let [id (:selected ui)
         k (ui/sibling-kind nodes id)]
     [:div.toolbar {:role "toolbar" :aria-label "卡片操作"}
@@ -325,8 +339,7 @@
      [:button.btn.btn-danger {:type "button"
                                         :title "刪除選取的卡片與其下層卡片；可以復原"
                                         :on {:click [[:ui/delete-node id]]}}
-      "刪除"]
-     (recent-menu state)]))
+      "刪除"]]))
 
 (defn- column-name
   "欄位名稱依內容決定：標題用層級稱呼（章、節、項、款），另有段落、表與圖時一併列出。"
@@ -363,13 +376,8 @@
     [:section.tree-panel {:aria-label "卡片"}
      [:header.board-head
       [:h2.area-title "卡片"]
-      (tree-toolbar state)
-      [:div.legend {:aria-label "圖例"}
-       [:span [:i.swatch.swatch-active] "目前選取"]
-       [:span [:i.swatch.swatch-path] "上層與下層"]
-       [:span [:i.swatch.swatch-related] "不相鄰的關係"]
-       [:span [:i.swatch.swatch-sibling] "同一層"]
-       [:span [:i.swatch.swatch-other] "其他"]]]
+      (selected-path nodes title selected)
+      (tree-toolbar state)]
      [:div.board
       (conflict-view (:conflict ui))
       (when-not drag (toast-view toast))

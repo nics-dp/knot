@@ -495,7 +495,7 @@
       (.catch (fn [err] (show-toast! (str "無法儲存留言：" (ex-message err)))))))
 
 (defn- load-recent!
-  "讀回最近修改的卡片，供卡片工具列的「最近修改」；先送出尚未儲存的輸入。"
+  "讀回最近修改的卡片，供頂部列的「最近修改」；先送出尚未儲存的輸入。"
   []
   (-> (flush!)
       (.then #(api "GET" "/api/report/recent-changes"))

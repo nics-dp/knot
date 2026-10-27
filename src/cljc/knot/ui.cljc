@@ -179,10 +179,18 @@
 (defn close-recent [state]
   (update state :ui dissoc :recent-open))
 
+(declare set-page)
+
+(defn- show-card
+  "從頂部列的清單選一張卡片：選取；在素材庫時切到卡片頁。"
+  [state id]
+  (cond-> (select state id)
+    (= :library (get-in state [:ui :page])) (set-page :tree)))
+
 (defn open-recent-card
   "從最近修改的清單選一張卡片：選取並關閉清單。"
   [state id]
-  (-> state (select id) close-recent))
+  (-> state (show-card id) close-recent))
 
 ;; ---------------------------------------------------------------------------
 ;; 留言與待辦（SPEC 5.11）：寫入走 /api/notes，回應是整份留言清單
@@ -224,7 +232,7 @@
 (defn open-note-card
   "從待辦清單選一張卡片：選取並關閉清單。"
   [state id]
-  (-> state (select id) close-todos))
+  (-> state (show-card id) close-todos))
 
 (defn open-change
   "從完成的待辦看 agent 的修改：選取卡片、打開編輯區並切到「與前一版比較」。"
