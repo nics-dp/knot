@@ -3,6 +3,7 @@
             [knot.api :as api]
             [knot.db :as db]
             [knot.events :as events]
+            [knot.mcp :as mcp]
             [muuntaja.core :as m]
             [org.httpkit.server :as http]
             [reitit.ring :as ring]
@@ -26,13 +27,19 @@
   "events 為 :knot/events 的值；省略時 /api/events 回 503（測試用）。"
   ([conn] (handler conn nil))
   ([conn events]
-   (ring/ring-handler
-    (ring/router (routes conn events)
-                 {:data {:muuntaja m/instance
-                         :middleware [muuntaja/format-middleware]}})
-    (ring/routes
-     (revalidate (ring/create-resource-handler {:path "/" :root "public"}))
-     (ring/create-default-handler)))))
+   (let [mcp-handler (mcp/handler conn)
+         app (ring/ring-handler
+              (ring/router (routes conn events)
+                           {:data {:muuntaja m/instance
+                                   :middleware [muuntaja/format-middleware]}})
+              (ring/routes
+               (revalidate (ring/create-resource-handler {:path "/" :root "public"}))
+               (ring/create-default-handler)))]
+     ;; /mcp 收發 JSON，不經過 muuntaja 的 EDN 格式化，所以在路由之前處理
+     (fn [req]
+       (if (= "/mcp" (:uri req))
+         (mcp-handler req)
+         (app req))))))
 
 (defmethod ig/init-key :knot/db [_ {:keys [config]}]
   (db/open-report (:report-dir config)))
@@ -44,7 +51,7 @@
   (let [port (:http/port config)]
     (println (str "Knot 伺服器：http://localhost:" port "（報告目錄 "
                   (.getCanonicalPath (java.io.File. (str (:report-dir config)))) "）"))
-    (http/run-server (handler db events) {:port port :legacy-return-value? false})))
+    (http/run-server (handler db events) {:ip "127.0.0.1" :port port :legacy-return-value? false})))
 
 (defmethod ig/halt-key! :knot/http [_ server]
   ;; 已停止的伺服器 server-stop! 回傳 nil

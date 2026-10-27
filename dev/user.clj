@@ -4,6 +4,7 @@
             [integrant.repl :as ir]
             [integrant.repl.state :as state]
             [knot.db :as kdb]
+            [knot.mcp :as mcp]
             [knot.seed :as seed]
             [knot.system :as system]))
 
@@ -38,4 +39,13 @@
     (doseq [f (reverse (file-seq dir))] (.delete ^java.io.File f)))
   (go))
 
-;; (import-file! "path") 於 M3 加入
+;; (import-file! "path") 於 M5 加入
+
+(defn mcp!
+  "直接呼叫 MCP 工具的 handler（不經 HTTP），回傳結果（Clojure 資料）。
+  (mcp! \"get_outline\")、(mcp! \"get_card\" {\"id\" \"...\"})"
+  ([tool-name] (mcp! tool-name {}))
+  ([tool-name args]
+   (if-let [tool (some #(when (= tool-name (:name %)) %) mcp/tools)]
+     ((:handler tool) (db) args)
+     (throw (ex-info (str "沒有這個工具：" tool-name) {:tools (map :name mcp/tools)})))))
