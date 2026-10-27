@@ -16,7 +16,7 @@
 
 (def status-pill
   "卡片與編輯區名稱旁的狀態標籤：只標出尚未生成的段落。
-  AI 生成與人工改過仍記錄在 :node/status（重新生成時人工改過的段落要先顯示差異），但不標示。"
+  agent 撰寫與人工改過仍記錄在 :node/status（agent 改寫人工改過的段落時要先顯示差異），但不標示。"
   {:none {:label "尚未生成" :class "pill-none"}})
 
 (def relation-label context/relation-label)
@@ -112,6 +112,11 @@
 
 (def tabs [[:library "素材"] [:tree "卡片"] [:fulltext "全文"]])
 
+(defn- time-text [at]
+  (when at
+    #?(:cljs (.toLocaleString at "zh-TW" #js {:month "numeric" :day "numeric" :hour "2-digit" :minute "2-digit"})
+       :clj (str at))))
+
 (defn- topbar [{:keys [report nodes ui]} title]
   (let [{:keys [page selected]} ui
         crumb (if (= page :library)
@@ -130,6 +135,22 @@
          label])]
      [:div.topbar-actions
       [:button.btn.btn-primary {:type "button" :disabled true :title "M6 實作 LaTeX 匯出"} "匯出 LaTeX"]]]))
+
+(defn- conflict-view
+  "版本衝突後的說明：被其他來源改過的卡片，以及沒有存入、可以複製的文字（SPEC 5.13）。"
+  [conflict]
+  (when-let [{:keys [names lost]} conflict]
+    [:div.conflict {:role "alert"}
+     [:div.conflict-head
+      [:span (str names "剛被其他來源（agent 或其他分頁）修改，已重新載入；剛才的修改沒有存入"
+                  (when (seq lost) "。下面是沒有存入的文字，可以複製後重新輸入："))]
+      [:button.toast-close {:type "button" :aria-label "關閉" :on {:click [[:ui/dismiss-conflict]]}} "×"]]
+     (for [[i {:keys [title field text]}] (map-indexed vector lost)]
+       [:div.conflict-item {:replicant/key i}
+        [:div.conflict-item-head
+         [:span.small (str title " · " field)]
+         [:button.text-btn {:type "button" :on {:click [[:clipboard/copy text]]}} "複製"]]
+        [:textarea.conflict-text {:readonly true :value text :rows (-> text str/split-lines count (max 2) (min 6))}]])]))
 
 (defn- toast-view [toast]
   (when toast
@@ -150,7 +171,7 @@
 
 (def role-opacity {:active 1 :path 1 :related 1 :sibling 0.7 :other 0.35})
 
-(defn- tree-card [{:keys [nodes title role drag over]} {:keys [id top height]}]
+(defn- tree-card [{:keys [nodes title role drag over agent]} {:keys [id top height]}]
   (let [node (get nodes id)
         k (:node/kind node)
         dragging? (= id drag)
@@ -159,7 +180,8 @@
                 :draggable "true"
                 :class (cond-> [(str "card-" (name role)) (str "card-kind-" (name k))]
                          dragging? (conj "card-dragging")
-                         into? (conj "card-into"))
+                         into? (conj "card-into")
+                         (contains? (:ids agent) id) (conj (:class agent)))
                 :style {:top (str top "px")
                         :height (str height "px")
                         :opacity (cond into? 1 dragging? 0.3 :else (role-opacity role))}
@@ -188,7 +210,7 @@
             [:span.pill {:class class} label])]
          [:span.card-gist {:replicant/key "g"}
           (if (and (= k :intro) (str/blank? (:node/draft node)))
-            "（由 AI 依下層內容生成）"
+            "（由 agent 依下層內容撰寫）"
             (gist (:node/draft node)))]))]]))
 
 (defn- relation-chips [{:keys [nodes relations]} col roles]
@@ -218,12 +240,42 @@
                   (+ top height (/ (max (or (:gap-before nxt) 0) 8) 2)))]
           [:span.insert-marker {:style {:top (str (- y 2) "px")}}])))))
 
-(defn- tree-toolbar
-  "在選取卡片的層級上新增或刪除。"
+(defn- recent-menu
+  "最近修改的卡片（不分 agent 或使用者），點選跳到卡片（SPEC 5.13）。"
   [{:keys [nodes ui]}]
+  (let [title (let [numbers (tree/numbering nodes)] #(tree/display-title nodes numbers %))
+        cards (filter #(contains? nodes (:node/id %)) (:recent ui))
+        open? (:recent-open ui)]
+    [:div.recent-wrap
+     [:button.btn {:type "button"
+                   :aria-expanded (str (boolean open?))
+                   :title "列出最近修改的卡片"
+                   :on {:click [[:recent/toggle]]}}
+      "最近修改 ▾"]
+     (when open?
+       (list
+        [:div.menu-backdrop {:replicant/key "backdrop" :on {:click [[:ui/close-recent]]}}]
+        [:div.recent-menu {:replicant/key "menu"}
+         [:div.recent-menu-head "最近修改的卡片"]
+         (if (seq cards)
+           (for [{id :node/id :keys [label at by]} cards]
+             [:button.recent-item {:replicant/key id :type "button"
+                                   :on {:click [[:ui/open-recent-card id]]}}
+              [:span.recent-title
+               [:span.by-tag {:class (if (= by :agent) "by-agent" "by-user")} (if (= by :agent) "agent" "使用者")]
+               ;; 段落名稱常會重複，前面加上所屬標題
+               (when-let [p (when-not (tree/heading? nodes id) (tree/parent nodes id))]
+                 [:span.muted (str (title p) " ›")])
+               (title id)]
+              [:span.small.muted (str/join " · " (remove str/blank? [label (time-text at)]))]])
+           [:p.small.muted "還沒有修改過的卡片"])]))]))
+
+(defn- tree-toolbar
+  "在選取卡片的層級上新增或刪除；最近修改的卡片清單。"
+  [{:keys [nodes ui] :as state}]
   (let [id (:selected ui)
         k (ui/sibling-kind nodes id)]
-    [:div.toolbar {:role "toolbar" :aria-label "新增與刪除卡片"}
+    [:div.toolbar {:role "toolbar" :aria-label "卡片操作"}
      [:button.btn.btn-primary {:type "button"
                              :disabled (nil? k)
                              :title (if k
@@ -234,7 +286,8 @@
      [:button.btn.btn-danger {:type "button"
                                         :title "刪除選取的卡片與其下層卡片；可以復原"
                                         :on {:click [[:ui/delete-node id]]}}
-      "刪除"]]))
+      "刪除"]
+     (recent-menu state)]))
 
 (defn- column-name
   "欄位名稱依內容決定：標題用層級稱呼（章、節、項、款），另有段落、表與圖時一併列出。"
@@ -263,6 +316,9 @@
                   (set (concat (map :relation/to outgoing) (map :relation/from incoming))))
         roles (memoize #(card-role selected anc desc related nodes %))
         sel-depth (tree/depth nodes selected)
+        ;; agent 剛修改的卡片：兩個相同的動畫交替使用，同一張卡片再被修改時才會重新播放
+        agent (when-let [{:keys [ids n]} (:agent-change ui)]
+                {:ids (set ids) :class (if (even? n) "card-agent-a" "card-agent-b")})
         drag-depth (when drag (tree/depth nodes drag))]
     [:section.tree-panel {:aria-label "卡片"}
      [:header.board-head
@@ -275,6 +331,7 @@
        [:span [:i.swatch.swatch-sibling] "同一層"]
        [:span [:i.swatch.swatch-other] "其他"]]]
      [:div.board
+      (conflict-view (:conflict ui))
       (when-not drag (toast-view toast))
       [:div.tree-scroll {:class (cond-> []
                                   drag (conj "is-dragging")
@@ -310,7 +367,7 @@
            [:div.tree-inner {:style {:transform (str "translateY(" translate "px)")}}
             (relation-chips state col roles)
             (for [c col]
-              (tree-card {:nodes nodes :title title :role (roles (:id c)) :drag drag :over over} c))
+              (tree-card {:nodes nodes :title title :role (roles (:id c)) :drag drag :over over :agent agent} c))
             (when (and over (some #(= (:id over) (:id %)) col))
               (insert-marker col over))]]])])]]]))
 
@@ -347,6 +404,7 @@
                              :on {:click [[:ui/select %]]})]
     [:section.fulltext {:aria-label "全文"
                         :replicant/on-render [[:dom/reveal-selected (str selected)]]}
+     (conflict-view (:conflict ui))
      (toast-view (:toast ui))
      [:div.fulltext-page
       (for [id (tree/document-order nodes)
@@ -360,7 +418,7 @@
           [:div.ft-block.ft-intro (select-on id)
            (if-let [doc (:node/prose node)]
              (prose-view facts doc)
-             [:p.prose.muted "（引言尚未生成，將由 AI 依下層內容補上）"])]
+             [:p.prose.muted "（引言尚未生成，將由 agent 依下層內容補上）"])]
 
           :paragraph
           [:div.ft-block (assoc (select-on id) :role "button" :tabindex 0)
@@ -377,7 +435,7 @@
 ;; 編輯區
 ;;
 ;; 由上而下照生成的流程排成固定的區塊（SPEC 5.4）：
-;; 生成依據（使用者在這張卡片上設定的）→ AI 會參考的內容（自動組成，只能看）→ 本文（產出）。
+;; 生成依據（使用者在這張卡片上設定的）→ 撰寫時參考的內容（自動組成，只能看）→ 本文（產出）。
 ;; 標題與表、圖不生成本文，只有「設定」與「結構」。
 
 (defn- zone
@@ -469,7 +527,7 @@
 
 (defn- relation-rows
   "只列在這張卡片上設定的關係：與前後段的相鄰關係、本段新增的不相鄰關係。
-  其他段落指向本段的關係由對方設定，列在「AI 會參考的內容」。"
+  其他段落指向本段的關係由對方設定，列在「撰寫時參考的內容」。"
   [{:keys [nodes relations]} title id editing?]
   ;; 每一列是「關係類型、位置、卡片名稱」；唯讀時類型是標籤，編輯時是下拉選單
   (let [prev (tree/prev-paragraph nodes id)
@@ -598,10 +656,10 @@
                            :meta (if warn? [:span.text-amber "未確認素材"] (or where (:block/source b)))
                            :warn? warn?
                            :control (remove-button "移除依據" [[:ui/remove-citation id block]])}))]
-       [:span.notice-amber {:replicant/key "empty"} "尚未加入依據：AI 只能依意圖撰寫，無法引用素材。"])
+       [:span.notice-amber {:replicant/key "empty"} "尚未加入依據：agent 只能依意圖撰寫，無法引用素材。"])
      (when (:picker ui) (picker state node)))))
 
-;; AI 會參考的內容 --------------------------------------------------------------
+;; 撰寫時參考的內容 --------------------------------------------------------------
 
 (defn- source-tag [source]
   (case source
@@ -623,7 +681,7 @@
 (defn- context-zone [state id]
   (when-let [{:keys [sections chars]} (context/generation-context state id)]
     (let [by-group (group-by :group sections)]
-      (zone "context" "AI 會參考的內容"
+      (zone "context" "撰寫時參考的內容"
             {:class "zone-auto"
              :hint "由上方的設定與周邊卡片自動組成；周邊卡片有本文帶本文，沒有則帶意圖"
              :aside [:span.auto-size (str "約 " chars " 字")]}
@@ -660,11 +718,6 @@
     (if (diff/changed? ops)
       [:div.prose-box (diff-view ops)]
       [:span.muted.small "與前一版相同"])))
-
-(defn- time-text [at]
-  (when at
-    #?(:cljs (.toLocaleString at "zh-TW" #js {:month "numeric" :day "numeric" :hour "2-digit" :minute "2-digit"})
-       :clj (str at))))
 
 (defn- previous-view
   "與前一版比較：只保留最近一次修改之前的內容（連續的逐字輸入算同一次）。"
@@ -710,13 +763,12 @@
 
 (defn- paragraph-editor [{:keys [nodes] :as state} title id]
   (let [node (get nodes id)
-        status (or (:node/status node) :none)
         editing? (get-in state [:ui :editing-relations])
         rels (relation-rows state title id editing?)
         kids (tree/child-ids nodes id)]
     (list
      (zone "inputs" "生成依據"
-           {:hint "意圖、依據與關係會組成 AI 的提示詞，不會出現在報告中"}
+           {:hint "意圖、依據與關係是 agent 撰寫時的依據，不會出現在報告中"}
            (intent-field id (:node/draft node) "這段要說什麼、要強調什麼、用什麼語氣。可以分行列點。")
            (citations state node)
            (field "rels" "關係"
@@ -739,9 +791,9 @@
                                     :title (title k) :on-title [[:ui/select k]]
                                     :meta [:span.mono (get-in nodes [k :node/label])]}))])))
      (context-zone state id)
-     (prose-zone state node "尚未有本文：可直接在下方撰寫，或寫好意圖並加入依據後按「生成本段」。"
-                 [:button.btn.btn-dark {:replicant/key "gen" :type "button" :disabled true :title "M4 實作段落生成"}
-                  (if (= :none status) "生成本段" "重新生成")]))))
+     (prose-zone state node "尚未有本文：可直接在下方撰寫，或寫好意圖並加入依據後請 agent 撰寫。"
+                 [:button.btn.btn-dark {:replicant/key "gen" :type "button" :disabled true :title "M4 實作：在卡片上新增給 agent 的待辦"}
+                  "請 agent 撰寫"]))))
 
 (defn- heading-editor [{:keys [nodes]} title id]
   (let [node (get nodes id)
@@ -751,7 +803,7 @@
         has-heads (some #(tree/heading? nodes %) kids)
         can-sub (< (tree/depth nodes id) tree/max-heading-level)]
     (list
-     (zone "inputs" "設定" {:hint "下層段落與引言生成時會參考這裡的意圖"}
+     (zone "inputs" "設定" {:hint "agent 撰寫下層段落與引言時會參考這裡的意圖"}
            (intent-field id (:node/draft node) "這一章／節要涵蓋什麼、回應哪些契約項目、與前後章節的關係。")
            (when-let [items (seq (:node/contract-items node))]
              (field "contract" "契約項目" {:count (count items)}
@@ -762,7 +814,7 @@
                   (if intro
                     [:button.kid {:type "button" :on {:click [[:ui/select intro]]}}
                      (let [d (get-in nodes [intro :node/draft])]
-                       (if (str/blank? d) "（由 AI 依下層內容生成）" (gist d)))]
+                       (if (str/blank? d) "（由 agent 依下層內容撰寫）" (gist d)))]
                     [:span.muted.small "這一層還沒有引言。"]))
            (let [shown (remove #{intro} kids)]
              (field "kids" "下層內容"
@@ -784,13 +836,13 @@
 (defn- intro-editor [{:keys [nodes] :as state} _title id]
   (let [node (get nodes id)]
     (list
-     (zone "inputs" "生成依據" {:hint "可留空；AI 會依這一層的下層內容生成引言"}
-           (intent-field id (:node/draft node) "想強調的重點或語氣寫在這裡，AI 會依下層內容生成引言。"))
+     (zone "inputs" "生成依據" {:hint "可留空；agent 會依這一層的下層內容撰寫引言"}
+           (intent-field id (:node/draft node) "想強調的重點或語氣寫在這裡，agent 會依下層內容撰寫引言。"))
      (context-zone state id)
-     (prose-zone state node "尚未有本文：可直接撰寫，或在下層內容大致完成後由 AI 生成。"
-                 [:span.small.muted {:replicant/key "note"} "引言適合在下層內容大致完成後才生成"]
-                 [:button.btn.btn-dark {:replicant/key "gen" :type "button" :disabled true :title "M4 實作引言生成"}
-                  "AI 生成引言"]))))
+     (prose-zone state node "尚未有本文：可直接撰寫，或在下層內容大致完成後請 agent 撰寫。"
+                 [:span.small.muted {:replicant/key "note"} "引言適合在下層內容大致完成後才撰寫"]
+                 [:button.btn.btn-dark {:replicant/key "gen" :type "button" :disabled true :title "M4 實作：在卡片上新增給 agent 的待辦"}
+                  "請 agent 撰寫"]))))
 
 (defn- float-editor [{:keys [nodes]} id]
   (let [node (get nodes id)]

@@ -245,3 +245,28 @@
           old (assoc-in state [:nodes para :node/status] :locked)]
       (db/apply-changes! c {:changes (sync/diff state old)})
       (is (= :human (:node/status (node-of (db/load-state (d/db c)) para)))))))
+
+(deftest recent-cards-test
+  (let [[_ c loaded] (seeded)
+        id-of (fn [t] (some #(when (= t (:node/title %)) (:node/id %)) (:nodes loaded)))
+        [p1 p2 p3] (map id-of ["節能效益估算" "維運成本比較" "測試方法概述"])
+        edit! (fn [id text by]
+                (let [state (client-state (db/load-state (d/db c)))]
+                  (db/apply-changes! c {:label text :by by
+                                        :changes (sync/diff state (ui/set-node-field state id :node/draft text))})))
+        recent #(map (juxt :node/id :label :by) (db/recent-cards (d/db c) %))]
+    (is (= [] (recent 10)) "匯入不算修改")
+    (edit! p1 "agent 一" :agent)
+    (edit! p2 "使用者" :user)
+    (edit! p3 "agent 二" :agent)
+    (edit! p1 "agent 三" :agent)
+    (is (= [[p1 "agent 三" :agent] [p3 "agent 二" :agent] [p2 "使用者" :user]] (recent 10))
+        "不分來源，新到舊，每張卡片只列最近一次")
+    (is (= [p1] (map first (recent 1))))
+    (testing "復原本身不算修改，已復原的修改組不列"
+      (db/undo! c)
+      (is (= [[p3 "agent 二" :agent] [p2 "使用者" :user] [p1 "agent 一" :agent]] (recent 10))))
+    (testing "已刪除的卡片不列"
+      (let [state (client-state (db/load-state (d/db c)))]
+        (db/apply-changes! c {:label "刪除" :changes (sync/diff state (ui/delete-node state p3))}))
+      (is (= [p2 p1] (map first (recent 10)))))))

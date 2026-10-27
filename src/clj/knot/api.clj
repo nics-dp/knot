@@ -48,6 +48,8 @@
             (if-let [id (parse-uuid (get-in req [:path-params :id]))]
               {:status 200 :body (db/node-previous (d/db conn) id)}
               (bad-request "卡片 id 格式不正確")))}]
+   ["/report/recent-changes"
+    {:get (fn [_] {:status 200 :body {:cards (db/recent-cards (d/db conn) 10)}})}]
    ["/report/undo"
     {:post (fn [_]
              (let [label (db/undo! conn)]

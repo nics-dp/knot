@@ -1,6 +1,8 @@
 (ns knot.ui
   "主編輯畫面的狀態轉換。每個函式都是 (state & args) → state 的純函式。"
-  (:require [knot.layout :as layout]
+  (:require [clojure.string :as str]
+            [knot.context :as context]
+            [knot.layout :as layout]
             [knot.tree :as tree]))
 
 (def initial-ui
@@ -129,6 +131,58 @@
   (assoc-in state [:ui :toast] nil))
 
 ;; ---------------------------------------------------------------------------
+;; 其他來源的修改（SPEC 5.13）
+
+(def ^:private text-fields
+  [[:node/name "名稱"] [:node/title "名稱"] [:node/draft "意圖"] [:node/prose "本文"]])
+
+(defn lost-input
+  "衝突時沒有存入的文字：與已存檔的資料（sync/data 的形式）不同的名稱、意圖與本文，
+  依文件順序 [{:id :title :field :text}]；本文轉成純文字，空白的不列。"
+  [state saved]
+  (let [nodes (:nodes state)
+        numbers (tree/numbering nodes)]
+    (vec (for [id (tree/document-order nodes)
+               :let [node (get nodes id)]
+               [k field] text-fields
+               :let [v (get node k)]
+               :when (and (some? v) (not= v (get-in saved [:nodes id k])))
+               :let [text (if (= k :node/prose) (context/prose-text (:facts state) v) v)]
+               :when (not (str/blank? text))]
+           {:id id :title (tree/display-title nodes numbers id) :field field :text text}))))
+
+(defn show-conflict
+  "衝突後（已重新載入）說明哪些卡片被其他來源改過，並保留沒有存入的文字供複製。"
+  [state names lost]
+  (update state :ui assoc :conflict {:names names :lost lost} :toast nil))
+
+(defn dismiss-conflict [state]
+  (update state :ui dissoc :conflict))
+
+(defn agent-changed
+  "收到 agent 的修改組：頂部列顯示它的名稱，涉及的卡片短暫標示。
+  :n 每次遞增，畫面據此交替動畫名稱，同一張卡片再次被修改時也會重新標示。"
+  [state {:keys [label nodes]}]
+  (update-in state [:ui :agent-change]
+             (fn [prev] {:label label :ids (vec nodes) :n (inc (:n prev 0))})))
+
+(defn set-recent-cards
+  "最近修改的卡片（後端 /api/report/recent-changes）：[{:node/id :label :at :by}]，新到舊。"
+  [state cards]
+  (assoc-in state [:ui :recent] (vec cards)))
+
+(defn toggle-recent [state]
+  (update-in state [:ui :recent-open] not))
+
+(defn close-recent [state]
+  (update state :ui dissoc :recent-open))
+
+(defn open-recent-card
+  "從最近修改的清單選一張卡片：選取並關閉清單。"
+  [state id]
+  (-> state (select id) close-recent))
+
+;; ---------------------------------------------------------------------------
 ;; 移動
 
 (defn- move-message [state moving-id place]
@@ -228,7 +282,7 @@
         (update state :ui assoc :selected id :bias {} :focus-title (when-not (= kind :intro) id)
                 :editor-collapsed false
                 :toast (if (= kind :intro)
-                         "新增引言：寫下意圖（可留空），本文由 AI 依下層內容生成"
+                         "新增引言：寫下意圖（可留空），本文由 agent 依下層內容撰寫"
                          label))))))
 
 (defn wrap-paragraphs

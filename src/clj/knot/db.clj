@@ -656,3 +656,30 @@
   [db node-id]
   (let [revs (node-revisions db node-id)]
     (into {} (keep (fn [f] (some->> (field-previous revs f) (vector f)))) previous-fields)))
+
+;; ---------------------------------------------------------------------------
+;; 最近修改的卡片（SPEC 5.13）
+
+(defn recent-cards
+  "最近修改的卡片（不分 agent 或使用者），新到舊、每張卡片只列最近一次：
+  [{:node/id :label :at :by}]，最多 n 張。匯入與復原本身不算修改；
+  已刪除的卡片與已復原的修改組不列。"
+  [db n]
+  (let [exists? (set (d/q '[:find [?id ...] :where [_ :node/id ?id]] db))
+        undone (set (d/q '[:find [?t ...] :where [_ :changeset/undoes ?u] [?u :changeset/id ?t]] db))]
+    (->> (d/q '[:find ?target ?at ?label ?by ?cid
+                :where [?c :changeset/id ?cid] [?c :changeset/at ?at] [?c :changeset/origin ?o]
+                [(not= ?o :undo)] [(not= ?o :import)]
+                [(get-else $ ?c :changeset/by :user) ?by]
+                [(get-else $ ?c :changeset/label "") ?label]
+                [?r :revision/changeset ?c] [?r :revision/collection :nodes]
+                [?r :revision/target ?target]]
+              db)
+         (remove #(undone (nth % 4)))
+         (keep (fn [[target at label by]]
+                 (when-let [id (parse-uuid (subs target (count "nodes/")))]
+                   (when (exists? id) {:node/id id :label label :at at :by by}))))
+         (sort-by :at #(compare %2 %1))
+         (reduce (fn [acc {id :node/id :as e}]
+                   (if (or (some #(= id (:node/id %)) acc) (>= (count acc) n)) acc (conj acc e)))
+                 []))))
