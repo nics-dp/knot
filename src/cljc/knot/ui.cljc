@@ -24,7 +24,8 @@
   "由範例報告（巢狀卡片樹）建立狀態；測試與離線使用。"
   [report]
   (let [nodes (tree/from-nested (:tree report))]
-    {:report (select-keys report [:report/title :report/subtitle :report/style-name])
+    {:report (select-keys report [:report/title :report/subtitle])
+     :style (:style report)
      :nodes nodes
      :relations (vec (:relations report))
      :facts (into {} (map (juxt :fact/key identity)) (:facts report))
@@ -40,6 +41,8 @@
    :nodes (into {} (map (juxt :node/id identity)) (:nodes loaded))
    :relations (vec (:relations loaded))
    :facts (into {} (map (juxt :fact/key identity)) (:facts loaded))
+   :style (:style loaded)
+   :style-info (:style-info loaded)
    :blocks (vec (:blocks loaded))
    :notes (vec (:notes loaded))})
 
@@ -582,6 +585,35 @@
       (or (nil? value) (and (string? value) (str/blank? value))) (update-in state [:nodes id] dissoc :node/target-chars)
       (and n (pos? n)) (assoc-in state [:nodes id :node/target-chars] n)
       :else state)))
+
+;; ---------------------------------------------------------------------------
+;; 風格（SPEC 5.7）：整份報告一份，狀態中是 {:style/key "report" :style/text ...} 或 nil
+
+(def style-key "report")
+
+(defn style-text
+  "目前的風格文字；沒有設定時為空字串。"
+  [state]
+  (or (get-in state [:style :style/text]) ""))
+
+(defn style-chars
+  "風格的字數（去掉前後空白）。"
+  [state]
+  (count (str/trim (style-text state))))
+
+(defn set-style-text
+  "編輯風格文字（逐字輸入，不進復原紀錄；輸入框有自己的復原，停頓後由同步存成「編輯文字」修改組）。
+  清空時保留空字串的實體，內容與 nil 視為沒有風格（見 style-chars）。"
+  [state value]
+  (let [v (or value "")]
+    (if (and (nil? (:style state)) (= "" v))
+      state
+      (assoc state :style {:style/key style-key :style/text v}))))
+
+(defn style-saved
+  "使用者自己的風格修改存檔後，頁首的「最後修改」改為使用者與現在。"
+  [state at]
+  (assoc state :style-info {:updated-by :user :updated-at at}))
 
 (defn set-prose
   "在本文編輯器修改本文（逐字輸入，不進復原紀錄；編輯器有自己的復原）。

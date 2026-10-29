@@ -631,3 +631,32 @@
         html (render (ui/select-block s "b1"))]
     (is (not (str/includes? (render (ui/select-block lib-state "b1")) "3,760")))
     (is (str/includes? html "3,760 人次") "素材庫的事實清單")))
+
+(deftest style-tab-and-page-test
+  (testing "頂部分頁：風格在全文之後"
+    (is (= [[:library "素材"] [:tree "卡片"] [:fulltext "全文"] [:style "風格"]] views/tabs))
+    (is (str/includes? (render state) "風格")))
+  (let [s (ui/set-page state :style)
+        html (render s)]
+    (testing "風格頁：標題、說明、字數、編輯框，沒有看板與編輯區"
+      (is (find-el :section.style-page (views/app s)))
+      (is (str/includes? html "agent 撰寫每一段時都會依這份風格"))
+      (is (str/includes? html "0 字"))
+      (is (str/includes? html "用語與語氣"))
+      (is (not (str/includes? html "tree-panel"))))
+    (testing "文字框綁 set-style-text"
+      (let [ta (find-el :textarea.intent.style-input (views/app s))]
+        (is (= [[:ui/set-style-text [:event/target-value]]] (get-in (second ta) [:on :input])))
+        (is (= "" (:value (second ta))))))
+    (testing "有風格時顯示內容、字數、最後修改者"
+      (let [s (-> s (ui/set-style-text "使用「本計畫」") (assoc :style-info {:updated-by :agent :updated-at nil}))
+            html (render s)]
+        (is (= "使用「本計畫」" (:value (second (find-el :textarea.intent.style-input (views/app s))))))
+        (is (str/includes? html "7 字 · 最後修改：agent"))))))
+
+(deftest context-style-row-test
+  (testing "編輯區的撰寫參考不列風格（在風格頁檢視）"
+    (let [s (ui/set-style-text (ui/select (ui/open-editor state) "a2") "使用「本計畫」，避免口語。")
+          html (pr-str (views/app s))]
+      (is (not (str/includes? html "使用「本計畫」")))
+      (is (not (str/includes? html "context-style"))))))

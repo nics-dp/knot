@@ -8,22 +8,26 @@
   {:nodes {:path [:nodes] :id :node/id}
    :relations {:path [:relations] :id tree/relation-key}
    :blocks {:path [:blocks] :id :block/id}
-   :facts {:path [:facts] :id :fact/key}})
+   :facts {:path [:facts] :id :fact/key}
+   ;; 風格：狀態中是單一實體 {:style/key \"report\" :style/text ...} 或 nil
+   :style {:path [:style] :id :style/key :single? true}})
 
 (defn- index-by [f coll]
   (into {} (map (juxt f identity)) coll))
 
-(defn- as-coll [x]
-  (if (map? x) (vals x) x))
+(defn- as-coll [x single?]
+  (cond single? (some-> x vector)
+        (map? x) (vals x)
+        :else x))
 
 (defn diff
   "回傳 {集合 {:upsert [實體...] :delete [識別鍵...]}}，只含有變動的集合；沒有變動時為 nil。"
   [old new]
   (not-empty
    (into {}
-         (for [[k {:keys [path id]}] collections
-               :let [a (index-by id (as-coll (get-in old path)))
-                     b (index-by id (as-coll (get-in new path)))
+         (for [[k {:keys [path id single?]}] collections
+               :let [a (index-by id (as-coll (get-in old path) single?))
+                     b (index-by id (as-coll (get-in new path) single?))
                      upsert (vec (for [[i e] b :when (not= e (get a i))] e))
                      delete (vec (for [i (keys a) :when (not (contains? b i))] i))]
                :when (or (seq upsert) (seq delete))]

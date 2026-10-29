@@ -29,3 +29,12 @@
   (testing "素材狀態"
     (is (= {:blocks {:upsert [{:block/id "b1" :block/kind :para :block/status :discarded}]}}
            (sync/diff state (ui/set-block-status state "b1" :discarded))))))
+
+(deftest style-diff-test
+  (let [s1 (ui/set-style-text state "風格")
+        s2 (ui/set-style-text s1 "風格二")]
+    (is (nil? (sync/diff state state)) "沒有風格、沒有變動")
+    (is (= {:style {:upsert [{:style/key "report" :style/text "風格"}]}} (sync/diff state s1)))
+    (is (= {:style {:upsert [{:style/key "report" :style/text "風格二"}]}} (sync/diff s1 s2)))
+    (is (= {:style {:delete ["report"]}} (sync/diff s1 (assoc s1 :style nil))))
+    (is (= [:style] (keys (select-keys (sync/data s1) [:style]))))))

@@ -451,3 +451,27 @@
     (is (not (get-in r1 [:ui :show-discarded])))
     (is (true? (get-in r2 [:ui :show-discarded])) "已捨棄的素材自動打開顯示已捨棄")
     (is (= "b2" (get-in r2 [:ui :library-selected])))))
+
+(deftest style-test
+  (testing "沒有風格時為空字串與 0 字"
+    (is (= "" (ui/style-text state)))
+    (is (zero? (ui/style-chars state))))
+  (let [s (ui/set-style-text state "  使用「本計畫」 ")]
+    (is (= {:style/key "report" :style/text "  使用「本計畫」 "} (:style s)))
+    (is (= 7 (ui/style-chars s)) "字數不含前後空白")
+    (is (= [] (:history s)) "逐字輸入不進復原紀錄")
+    (testing "清空時保留空字串的實體"
+      (is (= "" (ui/style-text (ui/set-style-text s ""))))
+      (is (zero? (ui/style-chars (ui/set-style-text s "")))))
+    (testing "沒有風格時輸入空字串不建立實體"
+      (is (nil? (:style (ui/set-style-text state ""))))))
+  (testing "存檔後最後修改為使用者"
+    (is (= {:updated-by :user :updated-at :t} (:style-info (ui/style-saved state :t)))))
+  (testing "從後端載入與取代資料"
+    (let [loaded {:report {:report/title "r"} :nodes [] :relations [] :blocks [] :facts [] :notes []
+                  :style {:style/key "report" :style/text "x"} :style-info {:updated-by :agent}}
+          s (ui/from-server loaded)]
+      (is (= "x" (ui/style-text s)))
+      (is (= {:updated-by :agent} (:style-info s)))
+      (is (= "" (ui/style-text (ui/replace-data s (dissoc loaded :style))))
+          "取代資料時風格被清除"))))

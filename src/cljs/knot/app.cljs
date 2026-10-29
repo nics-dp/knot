@@ -51,6 +51,7 @@
    :ui/set-source-query ui/set-source-query
    :ui/set-page ui/set-page
    :ui/set-node-field ui/set-node-field
+   :ui/set-style-text ui/set-style-text
    :ui/set-target-chars ui/set-target-chars
    :ui/set-prose ui/set-prose
    :ui/add-citation ui/add-citation
@@ -473,6 +474,8 @@
                                  ;; 後端寫入後的版本同時寫回已存檔的資料與目前狀態，下次送出才不會與自己衝突
                                  (reset! saved (ui/apply-versions data versions))
                                  (swap! store ui/apply-versions versions)
+                                 ;; 風格存檔後，頁首的最後修改改為使用者與現在
+                                 (when (:style changes) (swap! store ui/style-saved (js/Date.)))
                                  (swap! sync-state #(cond-> (assoc % :in-flight nil
                                                                    :history-count (count (:history state)))
                                                       (:changeset/id res) (update :own conj (:changeset/id res))))
@@ -656,7 +659,7 @@
             (map nodes (tree/document-order nodes)))))
 
 (defn- show-report! [loaded]
-  ;; ?select=、?page=library|tree|fulltext、?drag=、?editor=1（展開編輯區）、?previous=1（與前一版比較）、
+  ;; ?select=、?page=library|tree|fulltext|style、?drag=、?editor=1（展開編輯區）、?previous=1（與前一版比較）、
   ;; ?flash=（模擬 agent 剛修改的標示）
   ;; 指定初始畫面，方便截圖
   (let [params (js/URLSearchParams. js/location.search)

@@ -1,11 +1,12 @@
 (ns knot.context-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [knot.context :as context]
             [knot.ui :as ui]))
 
 (def state
   (ui/init-state
-   {:report/style-name "機關"
+   {:style {:style/key "report" :style/text "使用「本計畫」，避免口語。\n人稱一律第三人稱。"}
     :tree [{:node/id "A" :node/kind :heading :node/name "甲" :node/draft "章的意圖"
             :children [{:node/id "iA" :node/kind :intro :node/draft "引言意圖"}
                        {:node/id "A1" :node/kind :heading :node/name "甲一" :node/draft "節的意圖"
@@ -144,3 +145,30 @@
     (testing "沒設定時沒有"
       (is (not-any? #(= "目標字數" (:label %))
                     (mapcat :entries (:sections (context/generation-context state "a2"))))))))
+
+(deftest style-entry-test
+  (testing "有風格：一個 entry，text 是給 agent 的提示（字數、請依 get_style），不含全文；summary 供畫面顯示"
+    (doseq [id ["a2" "iA"]
+            :let [e (first (:entries (section (context/generation-context state id) "風格")))]]
+      (is (= :style (:source e)))
+      (is (= 23 (:chars e)))
+      (is (str/includes? (:text e) "共 23 字"))
+      (is (str/includes? (:text e) "get_style"))
+      (is (not (str/includes? (:text e) "本計畫")))
+      (is (= "使用「本計畫」，避免口語。 人稱一律第三人稱。" (:summary e)))))
+  (testing "風格很長時摘要只取開頭約 60 字"
+    (let [s (ui/set-style-text state (apply str (repeat 100 "字")))
+          e (first (:entries (section (context/generation-context s "a2") "風格")))]
+      (is (= (str (apply str (repeat 60 "字")) "…") (:summary e)))))
+  (testing "提示帶最後修改的時間與修改者"
+    (let [s (assoc state :style-info {:updated-by :agent :updated-at #?(:clj (java.util.Date. 0) :cljs (js/Date. 0))})
+          e (first (:entries (section (context/generation-context s "a2") "風格")))]
+      (is (str/includes? (:text e) "最後修改：agent"))))
+  (testing "沒有風格"
+    (let [s (dissoc state :style)
+          e (first (:entries (section (context/generation-context s "a2") "風格")))]
+      (is (= "尚未設定風格" (:text e)))
+      (is (nil? (:summary e)))
+      (is (zero? (:chars e)))))
+  (testing "空白的風格視同沒有"
+    (is (= "尚未設定風格" (:text (first (:entries (section (context/generation-context (ui/set-style-text state "  ") "a2") "風格"))))))))
