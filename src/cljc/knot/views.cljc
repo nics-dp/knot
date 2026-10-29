@@ -587,6 +587,8 @@
 
           :intro
           [:div.ft-block.ft-intro (select-on id)
+           ;; 只在畫面上標示，匯出時引言就是一般的文字
+           [:div.ft-kind "引言"]
            (if-let [doc (:node/prose node)]
              (prose-view facts doc (:blocks state))
              (if (and intents? (not (str/blank? intent)))

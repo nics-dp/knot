@@ -82,6 +82,19 @@
 (defn- plan-view [state]
   (find-all :div.ft-plan (views/app (ui/set-page state :fulltext))))
 
+(deftest fulltext-intro-test
+  (let [s (ui/init-state
+           {:report/title "測試報告"
+            :tree [{:node/id "H" :node/kind :heading :node/name "甲"
+                    :children [{:node/id "i" :node/kind :intro
+                                :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "本章說明"}]}]}}
+                               {:node/id "p" :node/kind :paragraph :node/title "背景"
+                                :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "段落本文"}]}]}}]}]})
+        intro (find-el :div.ft-block.ft-intro (views/app (ui/set-page s :fulltext)))]
+    (testing "全文頁的引言有「引言」小標籤，段落沒有"
+      (is (str/includes? (pr-str intro) "[:div.ft-kind \"引言\"]"))
+      (is (= 1 (count (find-all :div.ft-kind (views/app (ui/set-page s :fulltext)))))))))
+
 (deftest fulltext-plan-test
   (let [plans (plan-view plan-state)
         text (pr-str plans)]
