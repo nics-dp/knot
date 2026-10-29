@@ -57,13 +57,57 @@
       (is (= id (first (tree/child-ids (:nodes s) "A"))))
       (testing "引言最多一張"
         (is (= (:nodes s) (:nodes (ui/add-child s "A" :intro)))))))
-  (testing "已有段落的標題不能直接新增下層標題"
-    (is (= (:nodes state) (:nodes (ui/add-child state "A" :heading)))))
+  (testing "已有段落的標題可以直接新增下層標題，接在段落後面"
+    (let [s (ui/add-child state "A" :heading)
+          id (get-in s [:ui :selected])]
+      (is (= ["a1" "a2" id] (tree/child-ids (:nodes s) "A")))
+      (testing "再新增段落：接在最後一個段落之後、下層標題之前"
+        (let [s2 (ui/add-child s "A" :paragraph)
+              pid (get-in s2 [:ui :selected])]
+          (is (= ["a1" "a2" pid id] (tree/child-ids (:nodes s2) "A")))))))
   (testing "把現有段落移到新的下層標題"
     (let [s (ui/wrap-paragraphs state "A")
           sub (get-in s [:ui :selected])]
       (is (= [sub] (tree/child-ids (:nodes s) "A")))
       (is (= ["a1" "a2"] (tree/child-ids (:nodes s) sub))))))
+
+(deftest sibling-kind-mixed-test
+  (let [s (ui/add-child state "A" :heading)
+        s (ui/add-child s "A" :intro)
+        nodes (:nodes s)]
+    (is (= :heading (ui/sibling-kind nodes (last (tree/child-ids nodes "A")))))
+    (is (= :paragraph (ui/sibling-kind nodes "a1")))
+    (is (= :paragraph (ui/sibling-kind nodes (first (tree/child-ids nodes "A"))))
+        "選取引言時新增段落（接在引言後面，段落一律在下層標題之前）")))
+
+(deftest add-sibling-mixed-test
+  (let [s (ui/add-child state "A" :heading)
+        s (ui/add-child s "A" :intro)
+        intro-id (first (tree/child-ids (:nodes s) "A"))
+        s2 (ui/add-sibling s intro-id)
+        nid (get-in s2 [:ui :selected])]
+    (is (= :paragraph (tree/kind (:nodes s2) nid)))
+    (is (= nid (second (tree/child-ids (:nodes s2) "A"))) "緊接在引言後面")))
+
+(deftest mixed-drag-test
+  (let [s (ui/add-child state "A" :heading)
+        sub (get-in s [:ui :selected])
+        s (ui/add-child s "A" :paragraph)
+        pid (get-in s [:ui :selected])
+        s (ui/add-child s "B" :paragraph)
+        extra (get-in s [:ui :selected])]
+    (testing "段落不能拖到下層標題之後"
+      (is (nil? (tree/placement (:nodes s) "b1" sub :after)))
+      (is (some? (tree/placement (:nodes s) "b1" sub :before))))
+    (testing "往上下移動：段落與下層標題不互換"
+      (is (= (:nodes s) (:nodes (ui/move-selected (ui/select s pid) 1))))
+      (is (= (:nodes s) (:nodes (ui/move-selected (ui/select s sub) -1))))
+      (is (= ["a1" "a2" pid sub] (tree/child-ids (:nodes s) "A"))))
+    (testing "into 一張段落到有下層標題的標題：放在段落群的最後"
+      (let [s2 (ui/apply-move s extra (tree/placement (:nodes s) extra "A" :into))
+            kids (tree/child-ids (:nodes s2) "A")]
+        (is (= sub (last kids)))
+        (is (= extra (last (butlast kids))))))))
 
 (deftest paragraph->intro-test
   (let [s (ui/paragraph->intro state "a1")]
@@ -115,7 +159,7 @@
 (deftest sibling-kind-test
   (let [s (ui/add-child state "B" :intro)
         intro (get-in s [:ui :selected])]
-    (is (= :paragraph (ui/sibling-kind (:nodes s) intro)) "引言之後依同層卡片")
+    (is (= :paragraph (ui/sibling-kind (:nodes s) intro)) "選取引言時新增段落")
     (let [s (ui/add-sibling s intro)]
       (is (= [intro (get-in s [:ui :selected]) "b1"] (tree/child-ids (:nodes s) "B"))))))
 
@@ -305,3 +349,32 @@
       (is (nil? (get-in s [:ui :todos-open])))))
   (testing "重新載入時以後端的留言取代"
     (is (= [{:note/id "n"}] (:notes (ui/replace-data state {:nodes (vals (:nodes state)) :notes [{:note/id "n"}]}))))))
+
+(deftest report-edit-test
+  (let [s (ui/open-report-edit (assoc state :report {:report/title "舊名" :report/subtitle "舊副標"}))]
+    (testing "開啟時以目前的名稱與副標當草稿"
+      (is (= {:title "舊名" :subtitle "舊副標"} (get-in s [:ui :report-edit]))))
+    (testing "沒有副標時草稿是空字串"
+      (is (= {:title "測試報告" :subtitle ""} (get-in (ui/open-report-edit state) [:ui :report-edit]))))
+    (testing "名稱空白不能儲存，副標可以留空"
+      (is (true? (ui/report-draft-valid? s)))
+      (is (false? (ui/report-draft-valid? (ui/set-report-draft s :title "  "))))
+      (is (true? (ui/report-draft-valid? (ui/set-report-draft s :subtitle "")))))
+    (testing "儲存成功：以回應取代、關閉面板；副標清除時移除"
+      (let [saved (ui/report-saved (ui/set-report-draft s :title "新名")
+                                   {:report/title "新名" :report/subtitle "新副標"})]
+        (is (= "新名" (get-in saved [:report :report/title])))
+        (is (= "新副標" (get-in saved [:report :report/subtitle])))
+        (is (nil? (get-in saved [:ui :report-edit]))))
+      (let [cleared (ui/report-saved s {:report/title "舊名"})]
+        (is (not (contains? (:report cleared) :report/subtitle)))))
+    (testing "取消：關閉面板，不改資料"
+      (let [closed (ui/close-report-edit (ui/set-report-draft s :title "改了"))]
+        (is (nil? (get-in closed [:ui :report-edit])))
+        (is (= "舊名" (get-in closed [:report :report/title])))))))
+
+(deftest fulltext-intents-test
+  (is (true? (ui/fulltext-intents? state)) "預設顯示")
+  (let [off (ui/toggle-fulltext-intents state)]
+    (is (false? (ui/fulltext-intents? off)))
+    (is (true? (ui/fulltext-intents? (ui/toggle-fulltext-intents off))))))

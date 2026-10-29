@@ -23,6 +23,10 @@
    :ui/set-reply-draft ui/set-reply-draft
    :ui/cancel-reply ui/cancel-reply
    :ui/toggle-todos ui/toggle-todos
+   :ui/open-report-edit ui/open-report-edit
+   :ui/set-report-draft ui/set-report-draft
+   :ui/close-report-edit ui/close-report-edit
+   :ui/toggle-fulltext-intents ui/toggle-fulltext-intents
    :ui/close-todos ui/close-todos
    :ui/open-note-card ui/open-note-card
    :ui/open-recent-card ui/open-recent-card
@@ -108,7 +112,7 @@
           (.scrollTo el #js {:left target
                              :behavior (if (or first-time? (reduced-motion?)) "auto" "smooth")}))))))
 
-(declare dispatch! import-sample! undo! load-previous! load-recent! load-history! load-change! note-request!)
+(declare dispatch! import-sample! undo! load-previous! load-recent! load-history! load-change! note-request! save-report!)
 
 (def nexus
   {:nexus/system->state deref
@@ -127,6 +131,19 @@
          (cond-> []
            (get-in state' [:ui :over]) (conj [:event/prevent-default])
            (not (identical? state state')) (conj [:store/reset state']))))
+
+     ;; 報告名稱面板的輸入框：Enter 儲存、Esc 取消
+     :report/keydown
+     (fn [state key]
+       (case key
+         "Enter" (when (ui/report-draft-valid? state) [[:server/save-report (get-in state [:ui :report-edit])]])
+         "Escape" [[:ui/close-report-edit]]
+         nil))
+
+     :report/save
+     (fn [state]
+       (when (ui/report-draft-valid? state)
+         [[:server/save-report (get-in state [:ui :report-edit])]]))
 
      :drag/drop
      (fn [state]
@@ -181,6 +198,9 @@
 
     :server/import-sample
     (fn [_ _] (import-sample!))
+
+    :server/save-report
+    (fn [_ _ draft] (save-report! draft))
 
     :server/load-recent
     (fn [_ _] (load-recent!))
@@ -294,6 +314,11 @@
         ::composing
         (some-> dom-event .-target .-value)))
 
+    :event/key
+    (fn [{:replicant/keys [dom-event]}]
+      (when (and dom-event (not (.-isComposing dom-event)))
+        (.-key dom-event)))
+
     :event/target-checked
     (fn [{:replicant/keys [dom-event]}]
       (some-> dom-event .-target .-checked))
@@ -359,6 +384,7 @@
         undo? (do (.preventDefault e) (undo!))
         (= "Escape" k) (dispatch! {} [[(cond (get-in @store [:ui :recent-open]) :ui/close-recent
                                                (get-in @store [:ui :todos-open]) :ui/close-todos
+                                               (get-in @store [:ui :report-edit]) :ui/close-report-edit
                                                :else :ui/close-editor)]])
         ;; Alt+↑／↓：上移、下移（拖曳的鍵盤替代）
         (and tree? (.-altKey e) (#{:up :down} dir))
@@ -569,6 +595,14 @@
       (.then (fn [{:keys [notes]}] (swap! store #(-> % (ui/set-notes notes) after))))
       (.catch (fn [err] (show-toast! (str "無法儲存留言：" (ex-message err)))))))
 
+(defn- save-report!
+  "儲存報告名稱與副標；先送出尚未儲存的輸入。成功後以回應更新報告資訊並關閉面板。"
+  [{:keys [title subtitle]}]
+  (-> (flush!)
+      (.then #(api "POST" "/api/report/info" {:title title :subtitle (or subtitle "")}))
+      (.then (fn [{:keys [report]}] (swap! store ui/report-saved report)))
+      (.catch (fn [err] (show-toast! (str "無法儲存報告名稱：" (ex-message err)))))))
+
 (defn- load-recent!
   "讀回最近修改的卡片，供頂部列的「最近修改」；先送出尚未儲存的輸入。"
   []
@@ -595,8 +629,15 @@
 
 (defn- listen-events! []
   (when-not @events
-    (let [es (js/EventSource. "/api/events")]
+    (let [es (js/EventSource. "/api/events")
+          opened? (atom false)]
       (.addEventListener es "change" on-change-event)
+      ;; 重新連上（伺服器重啟、切換報告）時，斷線期間的修改沒有收到通知，重新讀取一次
+      (.addEventListener es "open" (fn [_]
+                                     (when @opened?
+                                       (swap! sync-state assoc :reload-pending true)
+                                       (reload-if-idle!))
+                                     (reset! opened? true)))
       (reset! events es))))
 
 ;; ---------------------------------------------------------------------------

@@ -185,14 +185,41 @@
          [:div.threads (note-threads state nil)]
          (note-compose state :report nil "給整份報告的交代或備忘…")]))]))
 
+(defn- report-edit-panel
+  "報告名稱與副標的編輯面板；Enter 儲存、Esc 取消。"
+  [{:keys [ui] :as state}]
+  (let [{:keys [title subtitle]} (:report-edit ui)
+        input (fn [field label value placeholder focus?]
+                [:label.field {:replicant/key (name field)}
+                 [:span.small label]
+                 [:input (cond-> {:type "text" :value value :placeholder placeholder
+                                  :on {:input [[:ui/set-report-draft field [:event/target-value]]]
+                                       :compositionend [[:ui/set-report-draft field [:event/target-value]]]
+                                       :keydown [[:report/keydown [:event/key]]]}}
+                           focus? (assoc :replicant/on-mount [[:dom/focus]]))]])]
+    (list
+     [:div.menu-backdrop {:replicant/key "backdrop" :on {:click [[:ui/close-report-edit]]}}]
+     [:div.menu-panel.report-edit-panel {:replicant/key "panel"}
+      (input :title "報告名稱" title "" true)
+      (input :subtitle "副標（可留空）" subtitle "例如：成果報告" false)
+      [:div.note-compose-actions
+       [:button.btn {:type "button" :on {:click [[:ui/close-report-edit]]}} "取消"]
+       [:button.btn.btn-primary {:type "button" :disabled (not (ui/report-draft-valid? state))
+                                 :on {:click [[:report/save]]}}
+        "儲存"]]])))
+
 (defn- topbar [{:keys [report ui] :as state} title]
   (let [{:keys [page]} ui
         full (str/join " · " (remove str/blank? [(:report/title report) (:report/subtitle report)]))]
     [:header.topbar
-     [:div.topbar-title {:title full}
-      [:span.report-name (:report/title report)]
-      (when-not (str/blank? (:report/subtitle report))
-        [:span.muted " · " (:report/subtitle report)])]
+     [:div.menu-wrap.topbar-title-wrap
+      [:button.topbar-title {:type "button" :title "編輯報告名稱與副標" :aria-label (str "編輯報告名稱與副標：" full)
+                             :aria-expanded (str (boolean (:report-edit ui)))
+                             :on {:click [[:ui/open-report-edit]]}}
+       [:span.report-name (:report/title report)]
+       (when-not (str/blank? (:report/subtitle report))
+         [:span.muted " · " (:report/subtitle report)])]
+      (when (:report-edit ui) (report-edit-panel state))]
      [:nav.segmented.tabs {:aria-label "頁籤"}
       (for [[p label] tabs]
         [:button {:replicant/key p
@@ -438,6 +465,7 @@
             :let [d (tree/depth nodes id)]]
         [:li {:replicant/key id}
          [:button.outline-item {:type "button"
+                                :title (title id)
                                 :class [(str "outline-d" d)
                                         (when (here id) "outline-here")
                                         (when (= id selected) "outline-selected")]
@@ -446,11 +474,20 @@
           (title id)
           (todo-badge (note/subtree-todo-count nodes todos id))]])]]))
 
+(defn- ft-plan
+  "全文頁中還沒有本文的部分：第一行說明是什麼，下面是意圖（UI 字體，與本文區分）。"
+  [label intent]
+  [:div.ft-plan
+   [:div.ft-plan-label label]
+   (when-not (str/blank? intent)
+     [:p.ft-plan-intent intent])])
+
 (defn- fulltext
   "全文：依序呈現整份報告的標題與本文。點標題或段落選取，右側編輯區隨之切換；
-  從大綱等處選取時捲到該處。"
-  [{:keys [nodes facts ui]} title]
+  從大綱等處選取時捲到該處。沒有本文的段落顯示名稱與意圖，讓使用者在這裡審閱大綱。"
+  [{:keys [nodes facts ui] :as state} title]
   (let [selected (:selected ui)
+        intents? (ui/fulltext-intents? state)
         select-on #(hash-map :replicant/key % :data-id (str %)
                              :class (when (= % selected) "ft-selected")
                              :on {:click [[:ui/select %]]})]
@@ -459,24 +496,38 @@
      (conflict-view (:conflict ui))
      (toast-view (:toast ui))
      [:div.fulltext-page
+      [:label.ft-toggle
+       [:input {:type "checkbox" :checked intents?
+                :on {:change [[:ui/toggle-fulltext-intents]]}}]
+       "顯示意圖"]
       (for [id (tree/document-order nodes)
-            :let [node (get nodes id)]]
+            :let [node (get nodes id)
+                  intent (:node/draft node)]]
         (case (:node/kind node)
           :heading
           (let [d (tree/depth nodes id)]
-            [(keyword (str "h" (inc d) ".ft-heading")) (select-on id) (title id)])
+            (list
+             [(keyword (str "h" (inc d) ".ft-heading")) (select-on id) (title id)]
+             (when (and intents? (not (str/blank? intent)))
+               [:div.ft-plan-wrap {:replicant/key (str id "-plan")}
+                (ft-plan (str "本" (get heading-level-names (dec d)) "意圖") intent)])))
 
           :intro
           [:div.ft-block.ft-intro (select-on id)
            (if-let [doc (:node/prose node)]
              (prose-view facts doc)
-             [:p.prose.muted "（引言尚未生成，將由 agent 依下層內容補上）"])]
+             (if (and intents? (not (str/blank? intent)))
+               (ft-plan "引言 · 尚未撰寫" intent)
+               [:p.prose.muted "（引言尚未生成，將由 agent 依下層內容補上）"]))]
 
           :paragraph
           [:div.ft-block (assoc (select-on id) :role "button" :tabindex 0)
            (if-let [doc (:node/prose node)]
              (prose-view facts doc)
-             [:p.prose.muted (str "（尚未生成：" (:node/title node) "）")])]
+             (if intents?
+               (ft-plan (str (:node/title node) " · 尚未撰寫")
+                        (if (str/blank? intent) "（尚未撰寫，也還沒有意圖）" intent))
+               [:p.prose.muted (str "（尚未撰寫：" (:node/title node) "）")]))]
 
           (:table :figure)
           [:div.ft-float {:replicant/key id}
@@ -1070,7 +1121,6 @@
         kids (tree/child-ids nodes id)
         intro (tree/intro-id nodes id)
         has-paras (some #(tree/paragraph? nodes %) kids)
-        has-heads (some #(tree/heading? nodes %) kids)
         can-sub (< (tree/depth nodes id) tree/max-heading-level)]
     (list
      (zone "inputs" "設定" {:hint "agent 撰寫下層段落與引言時會參考這裡的意圖"}
@@ -1078,7 +1128,7 @@
            (when-let [items (seq (:node/contract-items node))]
              (field "contract" "契約項目" {:count (count items)}
                     [:div.chips (for [c items] [:span.tag {:replicant/key c} c])])))
-     (zone "structure" "結構" {:hint "引言固定在最前面；其後是段落或下層標題，兩者不混用"}
+     (zone "structure" "結構" {:hint "引言固定在最前面；其後依序是段落、下層標題"}
            (field "intro" "引言"
                   {:action (when-not intro (field-button "新增" [[:ui/add-child id :intro]]))}
                   (if intro
@@ -1090,12 +1140,11 @@
              (field "kids" "下層內容"
                     {:count (when (seq shown) (count shown))
                      :action [:div.field-actions
-                              (when-not has-heads
-                                (field-button "新增段落" [[:ui/add-child id :paragraph]]))
+                              (field-button "新增段落" [[:ui/add-child id :paragraph]])
                               (when can-sub
-                                (if has-paras
-                                  (field-button "新增下層標題並移入段落" [[:ui/wrap-paragraphs id]])
-                                  (field-button "新增下層標題" [[:ui/add-child id :heading]])))]}
+                                (field-button "新增下層標題" [[:ui/add-child id :heading]]))
+                              (when (and can-sub has-paras)
+                                (field-button "新增下層標題並移入段落" [[:ui/wrap-paragraphs id]]))]}
                     (if (seq shown)
                       [:div.kids
                        (for [k shown]

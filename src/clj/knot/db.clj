@@ -112,6 +112,10 @@
    :changeset/at {:db/valueType :db.type/instant}
    :changeset/label string
    :changeset/undoes ref-one
+   ;; 修改組分組（B1）：agent 一次工作的多次寫入共用 group-id，歷程與復原都當一次
+   :changeset/group string
+   :changeset/group-id {:db/valueType :db.type/uuid}
+   :changeset/undoes-group {:db/valueType :db.type/uuid}
    :revision/changeset ref-one
    :revision/collection kw
    :revision/target string
@@ -208,11 +212,12 @@
   (d/close conn))
 
 (defn update-report!
-  "修改報告的名稱等資訊（不屬於修改組）。"
+  "修改報告的名稱等資訊（不屬於修改組）。值為 nil 的欄位表示清除。"
   [conn info]
-  (let [id (:report/id (report-info (d/db conn)))]
-    (d/transact! conn [(merge (select-keys info [:report/title :report/subtitle :report/style-name])
-                              {:report/id id})])))
+  (let [id (:report/id (report-info (d/db conn)))
+        info (select-keys info [:report/title :report/subtitle :report/style-name])]
+    (d/transact! conn (into [(merge (into {} (filter (comp some? val)) info) {:report/id id})]
+                            (for [[k v] info :when (nil? v)] [:db/retract [:report/id id] k])))))
 
 (defn empty-report? [db]
   (empty? (d/q '[:find [?e ...] :where [?e :node/id]] db)))
@@ -513,9 +518,38 @@
              :when (and actual (not= actual (:node/version n)))]
          {:node/id (:node/id n) :expected (:node/version n) :actual actual})))
 
+(def group-gap-ms
+  "同一組的寫入相隔不超過這段時間才算同一次修改（B1）。"
+  (* 30 60 1000))
+
+(defn undone-ids
+  "已被復原的修改組 id 集合：被復原修改組的 :changeset/undoes 指到的，
+  加上被整組復原（:changeset/undoes-group）的組內所有修改組。"
+  [db]
+  (into (set (d/q '[:find [?t ...] :where [_ :changeset/undoes ?u] [?u :changeset/id ?t]] db))
+        (d/q '[:find [?t ...] :where [_ :changeset/undoes-group ?g] [?c :changeset/group-id ?g] [?c :changeset/id ?t]] db)))
+
+(defn- continuing-group-id
+  "這次寫入的 group-id：資料庫中最近一個修改組（依時間，不分來源）同組名、同為 agent、
+  相隔不超過 group-gap-ms 且未被復原時沿用它的 group-id，否則產生新的。"
+  [db group by]
+  (let [[_ at id g gid by'] (->> (d/q '[:find ?c ?at ?id ?g ?gid ?by
+                                       :where [?c :changeset/id ?id] [?c :changeset/at ?at]
+                                       [(get-else $ ?c :changeset/group "") ?g]
+                                       [(get-else $ ?c :changeset/group-id "") ?gid]
+                                       [(get-else $ ?c :changeset/by :user) ?by]]
+                                     db)
+                                (sort-by (juxt second first))
+                                last)]
+    (if (and gid (not= "" gid) (= group g) (= :agent by) (= :agent by')
+             (<= (- (System/currentTimeMillis) (inst-ms at)) group-gap-ms)
+             (not (contains? (undone-ids db) id)))
+      gid
+      (random-uuid))))
+
 (defn- write-changes!
   "apply-changes! 的主體；呼叫端須持有 conn 的鎖。"
-  [conn {:keys [origin by label changes undoes]}]
+  [conn {:keys [origin by label changes undoes undoes-group group]}]
   (let [db (d/db conn)
         upserted {:node (set (map :node/id (get-in changes [:nodes :upsert])))
                   :block (set (map :block/id (get-in changes [:blocks :upsert])))
@@ -528,6 +562,7 @@
                   (contains? (upserted kind) k) (str (name kind) "-" k)
                   (exists? db (attr kind) k) [(attr kind) k])))
         cs-id (random-uuid)
+        group-id (when-not (str/blank? group) (continuing-group-id db group (or by :user)))
         revisions (atom [])
         revise! (fn [coll k before after]
                   (swap! revisions conj
@@ -569,7 +604,9 @@
                                                                   :changeset/by (or by :user)
                                                                   :changeset/at (java.util.Date.)
                                                                   :changeset/label (or label "")}
-                                                           undoes (assoc :changeset/undoes [:changeset/id undoes]))]
+                                                           undoes (assoc :changeset/undoes [:changeset/id undoes])
+                                                           undoes-group (assoc :changeset/undoes-group undoes-group)
+                                                           group-id (assoc :changeset/group group :changeset/group-id group-id))]
                                                         @revisions)))
                    db)]
     (cond-> {:versions (into {}
@@ -599,38 +636,67 @@
 ;; 復原
 
 (defn- undoable-changeset
-  "最近一個尚未復原、也不是復原本身的修改組。"
+  "最近一個尚未復原、也不是復原本身的修改組：[id at label group-id group]；沒有 group 時後兩者為 \"\"。"
   [db]
-  (let [undone (set (d/q '[:find [?t ...] :where [_ :changeset/undoes ?u] [?u :changeset/id ?t]] db))]
-    (->> (d/q '[:find ?id ?at ?label :where
+  (let [undone (undone-ids db)]
+    (->> (d/q '[:find ?id ?at ?label ?gid ?group :where
                 [?c :changeset/id ?id] [?c :changeset/at ?at] [?c :changeset/origin ?o]
                 [(not= ?o :undo)] [(not= ?o :import)]
-                [(get-else $ ?c :changeset/label "") ?label]]
+                [(get-else $ ?c :changeset/label "") ?label]
+                [(get-else $ ?c :changeset/group-id "") ?gid]
+                [(get-else $ ?c :changeset/group "") ?group]]
               db)
          (remove (comp undone first))
          (sort-by second)
          last)))
 
+(defn- group-members
+  "同一個 group-id 中尚未復原的修改組 id，舊到新。"
+  [db gid]
+  (let [undone (undone-ids db)]
+    (->> (d/q '[:find ?id ?at ?c :in $ ?gid
+                :where [?c :changeset/group-id ?gid] [?c :changeset/id ?id] [?c :changeset/at ?at]]
+              db gid)
+         (remove (comp undone first))
+         (sort-by (juxt second #(nth % 2)))
+         (mapv first))))
+
+(defn- earliest-befores
+  "這些修改組的修訂中，每個實體取最早那筆的 before：[[coll target before] ...]（before 為 \"\" 表示當時不存在）。"
+  [db cs-ids]
+  (->> (d/q '[:find ?cat ?c ?coll ?target ?before
+              :in $ [?cid ...]
+              :where [?c :changeset/id ?cid] [?c :changeset/at ?cat] [?r :revision/changeset ?c]
+              [?r :revision/collection ?coll] [?r :revision/target ?target]
+              [(get-else $ ?r :revision/before "") ?before]]
+            db cs-ids)
+       (sort-by (juxt first second))
+       (reduce (fn [acc [_ _ coll target before]]
+                 (if (contains? acc [coll target]) acc (assoc acc [coll target] before)))
+               {})
+       (mapv (fn [[[coll target] before]] [coll target before]))))
+
 (defn undo!
-  "復原最近一個修改組：新增一個把各實體還原為修改前快照的修改組。回傳被復原的 label；沒有可復原的時為 nil。"
+  "復原最近一個修改組：新增一個把各實體還原為修改前快照的修改組。
+  該修改組屬於某個 group（agent 一次工作的多次寫入）時整組一起復原：每個實體還原為組內最早一筆的修改前快照，
+  只新增一個復原修改組。回傳被復原的 label（整組時為組名）；沒有可復原的時為 nil。"
   [conn]
   (locking conn
-    (when-let [[cs-id _ label] (undoable-changeset (d/db conn))]
+    (when-let [[cs-id _ label gid group] (undoable-changeset (d/db conn))]
       (let [db (d/db conn)
-            revs (d/q '[:find ?coll ?target ?before
-                        :in $ ?cid
-                        :where [?c :changeset/id ?cid] [?r :revision/changeset ?c]
-                        [?r :revision/collection ?coll] [?r :revision/target ?target]
-                        [(get-else $ ?r :revision/before "") ?before]]
-                      db cs-id)
+            grouped? (not= "" gid)
+            members (if grouped? (group-members db gid) [cs-id])
+            label (if grouped? group label)
             changes (reduce (fn [acc [coll target before]]
                               (let [k (let [s (subs target (inc (count (name coll))))]
                                         (if (#{:nodes :blocks} coll) (parse-uuid s) s))]
                                 (if (str/blank? before)
                                   (update-in acc [coll :delete] (fnil conj []) k)
                                   (update-in acc [coll :upsert] (fnil conj []) (read-edn before)))))
-                            {} revs)]
-        (apply-changes! conn {:origin :undo :label (str "復原：" label) :changes changes :undoes cs-id})
+                            {} (earliest-befores db members))]
+        (apply-changes! conn (cond-> {:origin :undo :label (str "復原：" label) :changes changes
+                                      :undoes (last members)}
+                               grouped? (assoc :undoes-group gid)))
         label))))
 
 ;; ---------------------------------------------------------------------------
@@ -688,19 +754,20 @@
   已刪除的卡片與已復原的修改組不列。"
   [db n]
   (let [exists? (set (d/q '[:find [?id ...] :where [_ :node/id ?id]] db))
-        undone (set (d/q '[:find [?t ...] :where [_ :changeset/undoes ?u] [?u :changeset/id ?t]] db))]
-    (->> (d/q '[:find ?target ?at ?label ?by ?cid
+        undone (undone-ids db)]
+    (->> (d/q '[:find ?target ?at ?cl ?by ?cid ?group
                 :where [?c :changeset/id ?cid] [?c :changeset/at ?at] [?c :changeset/origin ?o]
                 [(not= ?o :undo)] [(not= ?o :import)]
                 [(get-else $ ?c :changeset/by :user) ?by]
-                [(get-else $ ?c :changeset/label "") ?label]
+                [(get-else $ ?c :changeset/label "") ?cl]
+                [(get-else $ ?c :changeset/group "") ?group]
                 [?r :revision/changeset ?c] [?r :revision/collection :nodes]
                 [?r :revision/target ?target]]
               db)
          (remove #(undone (nth % 4)))
-         (keep (fn [[target at label by]]
+         (keep (fn [[target at label by _ group]]
                  (when-let [id (parse-uuid (subs target (count "nodes/")))]
-                   (when (exists? id) {:node/id id :label label :at at :by by}))))
+                   (when (exists? id) {:node/id id :label (if (= "" group) label group) :at at :by by}))))
          (sort-by :at #(compare %2 %1))
          (reduce (fn [acc {id :node/id :as e}]
                    (if (or (some #(= id (:node/id %)) acc) (>= (count acc) n)) acc (conj acc e)))
@@ -720,22 +787,26 @@
   "某張卡片相關的修訂依修改組分好，交給 knot.history/entries。
   卡片刪除後復原是新的實體但 id 相同，所以用 target 字串查，不用 :revision/node。"
   [db node-id]
-  (let [undone (set (d/q '[:find [?t ...] :where [_ :changeset/undoes ?u] [?u :changeset/id ?t]] db))
+  (let [undone (undone-ids db)
         rows (concat
               (map #(into [:nodes] %)
-                   (d/q '[:find ?cid ?at ?label ?by ?origin ?before ?after
+                   (d/q '[:find ?cid ?at ?label ?by ?origin ?group ?gid ?before ?after
                           :in $ ?target
                           :where [?r :revision/target ?target] [?r :revision/changeset ?c]
                           [?c :changeset/id ?cid] [?c :changeset/at ?at] [?c :changeset/origin ?origin]
+                          [(get-else $ ?c :changeset/group "") ?group]
+                          [(get-else $ ?c :changeset/group-id "") ?gid]
                           [(get-else $ ?c :changeset/by :user) ?by]
                           [(get-else $ ?c :changeset/label "") ?label]
                           [(get-else $ ?r :revision/before "") ?before]
                           [(get-else $ ?r :revision/after "") ?after]]
                         db (str "nodes/" node-id)))
-              (->> (d/q '[:find ?cid ?at ?label ?by ?origin ?before ?after ?target
+              (->> (d/q '[:find ?cid ?at ?label ?by ?origin ?group ?gid ?before ?after ?target
                           :where [?r :revision/collection :relations] [?r :revision/target ?target]
                           [?r :revision/changeset ?c]
                           [?c :changeset/id ?cid] [?c :changeset/at ?at] [?c :changeset/origin ?origin]
+                          [(get-else $ ?c :changeset/group "") ?group]
+                          [(get-else $ ?c :changeset/group-id "") ?gid]
                           [(get-else $ ?c :changeset/by :user) ?by]
                           [(get-else $ ?c :changeset/label "") ?label]
                           [(get-else $ ?r :revision/before "") ?before]
@@ -748,12 +819,13 @@
          (group-by (comp second))
          vals
          (map (fn [rs]
-                (let [[_ cid at label by origin] (first rs)
-                      pair (fn [[_ _ _ _ _ _ before after]] {:before (snapshot before) :after (snapshot after)})
+                (let [[_ cid at label by origin group gid] (first rs)
+                      pair (fn [[_ _ _ _ _ _ _ _ before after]] {:before (snapshot before) :after (snapshot after)})
                       node-rev (some #(when (= :nodes (first %)) (pair %)) rs)]
                   (cond-> {:changeset/id cid :at at :label label :by by :origin origin
                            :undone? (contains? undone cid)
                            :relations (into [] (comp (filter #(= :relations (first %))) (map pair)) rs)}
+                    (not= "" gid) (assoc :group group :group-id gid)
                     node-rev (assoc :node node-rev))))))))
 
 (defn node-history

@@ -3,6 +3,7 @@
 
   輸入（每個修改組一筆，順序不拘）：
   {:changeset/id uuid :at inst :label str :by kw :origin kw :undone? bool
+   :group 組名 :group-id uuid                           ; 選填：agent 一次工作的多次寫入（B1）
    :node {:before 卡片快照或 nil :after 卡片快照或 nil}   ; 這張卡片在這個修改組的修訂（可能沒有）
    :relations [{:before 關係或 nil :after 關係或 nil}]}  ; 涉及這張卡片的關係修訂")
 
@@ -41,26 +42,38 @@
           (set (concat (keys before) (keys after))))
     #{}))
 
+(defn- label-of
+  "歷程項目的名稱：屬於某個 group 時用組名，否則是修改組的 label。"
+  [g]
+  (or (:group g) (:label g)))
+
 (defn- mergeable?
-  "兩個相鄰的修改組是否合併成同一次修改：都是同一人的「編輯文字」、都修改了這張卡片、相隔不超過 session-gap-ms。"
+  "兩個相鄰的修改組是否合併成同一次修改：
+  同一個 group-id；或都是同一人的「編輯文字」、都修改了這張卡片、相隔不超過 session-gap-ms。"
   [a b]
   (let [edit? #(and (= typing-label (:label %))
                     (get-in % [:node :before]) (get-in % [:node :after]))]
-    (and (edit? a) (edit? b)
-         (= (:by a) (:by b))
-         (<= (- (inst-ms (:at b)) (inst-ms (:at a))) session-gap-ms))))
+    (or (and (:group-id a) (= (:group-id a) (:group-id b)))
+        (and (edit? a) (edit? b)
+             (= (:by a) (:by b))
+             (<= (- (inst-ms (:at b)) (inst-ms (:at a))) session-gap-ms)))))
 
 (defn- merge-group
   "把一串連續的修改組（舊到新）合成一筆：快照取最早的 before 與最晚的 after。"
   [revs]
-  (let [first-rev (first revs) last-rev (last revs)]
-    (cond-> (assoc last-rev
+  (let [with-node (filter :node revs)]
+    (cond-> (assoc (last revs)
                    :changeset-ids (mapv :changeset/id revs)
                    :merged (count revs)
                    :undone? (boolean (some :undone? revs))
                    :relations (vec (mapcat :relations revs)))
-      (:node last-rev) (assoc :node {:before (get-in first-rev [:node :before])
-                                     :after (get-in last-rev [:node :after])}))))
+      (seq with-node) (assoc :node {:before (get-in (first with-node) [:node :before])
+                                    :after (get-in (last with-node) [:node :after])}
+                             ;; 每個修改組各自改了哪些欄位的聯集（改了又改回去的欄位也算）
+                             :member-fields (when (:group-id (last revs))
+                              (into #{} (mapcat #(changed-fields (get-in % [:node :before])
+                                                                               (get-in % [:node :after])))
+                                                  with-node))))))
 
 (defn- groups
   "依時間排序後，把可以合併的相鄰修改組合併：[{:changeset-ids :merged :node :relations ...}]，舊到新。"
@@ -90,7 +103,7 @@
         ;; 建立、匯入、刪除不列欄位（連帶的關係變動也不列）
         fields (if (#{:create :import :delete} kind)
                  #{}
-                 (cond-> (changed-fields before after)
+                 (cond-> (into (changed-fields before after) (:member-fields g))
                    (seq relations) (conj :relations)))
         text (fn [field f]
                (let [b (f before) a (f after)]
@@ -99,7 +112,7 @@
     (when (or (not= :change kind) (seq fields))
       {:changeset-ids (:changeset-ids g)
        :at (:at g)
-       :label (:label g)
+       :label (label-of g)
        :by (or (:by g) :user)
        :origin (:origin g)
        :kind kind
@@ -117,7 +130,8 @@
    :fields #{:name :intent :prose :basis :relations :position :status :settings}
    :text-changes {:name {:before :after} :intent {:before :after}}  ; 只有名稱、意圖有變時
    :merged n}                 ; 合併了幾個修改組
-  連續的逐字輸入（同一人、「編輯文字」、相隔 10 分鐘內）合併成一筆；建立、匯入、刪除的 :fields 為空；
+  連續的逐字輸入（同一人、「編輯文字」、相隔 10 分鐘內）合併成一筆；在這張卡片的歷程上相鄰、
+  group-id 相同的修改組也合併成一筆（label 為組名，:fields 取各修改組的聯集，文字取最早 before 與最晚 after）；建立、匯入、刪除的 :fields 為空；
   沒有任何欄位變動的修改組（例如只改了版本號）不列。"
   [revs]
   (into [] (keep entry) (groups revs)))
@@ -127,7 +141,7 @@
   那筆沒有改本文時為 {:prose? false :at :label :by}（例如待辦連到的修改只改了意圖）；找不到時為 nil。"
   [revs changeset-id]
   (when-let [g (some #(when (some #{changeset-id} (:changeset-ids %)) %) (groups revs))]
-    (let [meta {:at (:at g) :label (:label g) :by (or (:by g) :user)}]
+    (let [meta {:at (:at g) :label (label-of g) :by (or (:by g) :user)}]
       (if (contains? (:fields (entry g)) :prose)
         (assoc meta :prose? true
                :before (get-in g [:node :before :node/prose])

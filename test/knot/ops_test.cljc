@@ -61,12 +61,26 @@
       (is (str/includes? (error-of (ops/add-card s {:kind :intro :parent-id "A"})) "已經有引言"))
       (is (str/includes? (error-of (ops/add-card s {:kind :intro :parent-id "B" :after-id "b1"})) "最前面"))
       (is (str/includes? (error-of (ops/add-card s {:kind :intro :parent-id "B" :title "x"})) "不需要 title")))
-    (testing "標題底下的段落與下層標題不能混用"
-      (is (str/includes? (error-of (ops/add-card s {:kind :paragraph :parent-id "A" :title "x"}))
-                         "底下已有下層標題，不能再放段落"))
-      (is (str/includes? (error-of (ops/add-card s {:kind :heading :parent-id "A1" :title "x"}))
-                         "「1.1 甲一」底下已有段落，不能再放下層標題")
-          "說明中的編號不受試探卡片影響")
+    (testing "標題底下的段落與下層標題可以並存：段落在前"
+      (let [r (ops/add-card s {:kind :paragraph :parent-id "A" :title "x"})]
+        (is (= ["引言" "x" "甲一" "甲二"] (titles (:state r) "A"))
+            "新段落放在最後一個段落之後、下層標題之前（這裡沒有段落，就在引言之後）"))
+      (let [r (ops/add-card s {:kind :heading :parent-id "A1" :title "x"})]
+        (is (= ["a1" "a2" "a3" "x"] (titles (:state r) "A1")) "已有段落的標題直接新增下層標題，接在段落後面")
+        (let [r2 (ops/add-card (:state r) {:kind :paragraph :parent-id "A1" :title "y"})]
+          (is (= ["a1" "a2" "a3" "y" "x"] (titles (:state r2) "A1")) "再加段落：排在下層標題之前")
+          (is (= ["a1" "a2" "a3" "y" "x"] (mapv #(or (:node/title %) (:node/name %))
+                                                  (tree/children (:nodes (:state r2)) "A1")))
+              "children 順序以 order-key 為準")))
+      (is (str/includes? (error-of (ops/add-card s {:kind :paragraph :parent-id "A" :title "x" :after-id "A1"}))
+                         "段落要排在下層標題之前")
+          "after_id 在下層標題之後：拒絕")
+      (is (str/includes? (error-of (ops/add-card s {:kind :paragraph :parent-id "A" :title "x" :after-id "A1"}))
+                         "請用 position 為 into"))
+      (is (str/includes? (error-of (ops/add-card s {:kind :heading :parent-id "A1" :title "x" :after-id "a1"}))
+                         "下層標題要排在這一層所有段落之後")
+          "標題接在中間的段落後面：拒絕")
+      (is (some? (:state (ops/add-card s {:kind :heading :parent-id "A1" :title "x" :after-id "a3"}))))
       (is (some? (:state (ops/add-card s {:kind :heading :parent-id "A2" :title "x"})))
           "下層標題底下可再加同層下層標題"))
     (testing "最多四層"
@@ -118,12 +132,28 @@
     (testing "整批驗證：錯誤指出位置，狀態不變"
       (let [bad [{:kind :heading :title "丙"}
                  {:kind :heading :title "丁"
-                  :children [{:kind :paragraph :title "ok"}
-                             {:kind :heading :title "混用"}]}]
+                  :children [{:kind :heading :title "子"}
+                             {:kind :paragraph :title "段落排在下層標題之後"}]}]
             r (ops/build-outline s {:parent-id nil :items bad})]
         (is (nil? (:state r)))
         (is (str/starts-with? (:error r) "items[1].children[1]："))
-        (is (str/includes? (:error r) "底下已有段落，不能再放下層標題")))
+        (is (str/includes? (:error r) "段落要排在下層標題之前")))
+      (let [r (ops/build-outline s {:parent-id nil
+                                    :items [{:kind :heading :title "丙"
+                                             :children [{:kind :paragraph :title "p1"}
+                                                        {:kind :heading :title "子"}
+                                                        {:kind :paragraph :title "p2"}]}]})]
+        (is (str/starts-with? (:error r) "items[0].children[2]："))
+        (is (nil? (:state r))))
+      (let [r (ops/build-outline s {:parent-id nil
+                                    :items [{:kind :heading :title "丙"
+                                             :children [{:kind :intro}
+                                                        {:kind :paragraph :title "p1"}
+                                                        {:kind :paragraph :title "p2"}
+                                                        {:kind :heading :title "子"}]}]})]
+        (is (= ["引言" "p1" "p2" "子"]
+               (titles (:state r) (:node/id (nth (tree/children (:nodes (:state r)) nil) 2))))
+            "順序正確：引言、段落、下層標題"))
       (let [r (ops/build-outline s {:parent-id nil :items [{:kind :paragraph :title "x"}]})]
         (is (str/starts-with? (:error r) "items[0]：")))
       (let [r (ops/build-outline s {:parent-id "A211"
@@ -131,8 +161,7 @@
         (is (some? (:state r))))
       (let [r (ops/build-outline s {:parent-id "A1"
                                     :items [{:kind :heading :title "x" :children [{:kind :heading :title "y"}]}]})]
-        (is (str/starts-with? (:error r) "items[0]："))
-        (is (str/includes? (:error r) "底下已有段落")))
+        (is (some? (:state r)) "已有段落的標題可以新增下層標題，下層標題底下也可以再有下層標題"))
       (let [r (ops/build-outline s {:parent-id nil
                                     :items [{:kind :heading :title "a"
                                              :children [{:kind :heading :title "b"
@@ -184,14 +213,26 @@
       (let [r (ops/move-card s {:id "A2" :target-id "A1" :position :before})]
         (is (= ["引言" "甲二" "甲一"] (titles (:state r) "A")))
         (is (str/includes? (:message r) "編號"))))
+    (testing "移入有下層標題的標題：段落放在最後一個段落之後，標題放最後"
+      (let [r (ops/move-card s {:id "b1" :target-id "A" :position :into})]
+        (is (= ["引言" "b1" "甲一" "甲二"] (titles (:state r) "A"))))
+      (let [r (ops/move-card s {:id "A2" :target-id "B" :position :into})]
+        (is (= ["b1" "b2" "甲二"] (titles (:state r) "B")))))
     (testing "移入"
       (let [r (ops/move-card s {:id "b1" :target-id "A1" :position :into})]
         (is (= ["a1" "a2" "a3" "b1"] (titles (:state r) "A1")))))
     (testing "不合法時說明原因"
-      (is (str/includes? (:error (ops/move-card s {:id "b1" :target-id "A" :position :into})) "底下已有下層標題"))
+      (let [e (:error (ops/move-card s {:id "b1" :target-id "A1" :position :after}))]
+        (is (str/includes? e "段落要排在下層標題之前") "段落不能排在下層標題之後")
+        (is (str/includes? e "「1.1 甲一」") "建議用 into 放進該下層標題")
+        (is (str/includes? e "into")))
+      (let [e (:error (ops/move-card s {:id "A2" :target-id "iA" :position :after}))]
+        (is (nil? e) "引言之後、其他標題之前沒有段落時，標題可以放"))
+      (let [s (:state (ops/add-card s {:kind :paragraph :parent-id "A" :title "甲段"}))
+            e (:error (ops/move-card s {:id "A2" :target-id "iA" :position :after}))]
+        (is (str/includes? e "下層標題要排在這一層所有段落之後") "標題不能排在段落之前"))
       (is (str/includes? (:error (ops/move-card s {:id "A" :target-id "A21" :position :after})) "自己的下層"))
       (is (str/includes? (:error (ops/move-card s {:id "A" :target-id "A" :position :into})) "自己"))
-      (is (str/includes? (:error (ops/move-card s {:id "A2" :target-id "B" :position :into})) "底下已有段落"))
       (is (str/includes? (:error (ops/move-card s {:id "b1" :target-id "iA" :position :before})) "引言")
           "不能排在引言前面")
       (is (str/includes? (:error (ops/move-card s {:id "b1" :target-id "a1" :position :into})) "是段落"))

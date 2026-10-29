@@ -18,6 +18,12 @@
 
 (defn- render [state] (pr-str (views/app state)))
 
+(defn- find-all [tag hiccup]
+  (filter #(and (vector? %) (= tag (first %))) (tree-seq coll? seq hiccup)))
+
+(defn- find-el [tag hiccup]
+  (first (find-all tag hiccup)))
+
 (deftest editor-zones-test
   (testing "預設收合，只顯示把手"
     (is (str/includes? (render state) "editor-rail"))
@@ -59,6 +65,84 @@
       (is (str/includes? html "editor-docked"))
       (is (not (str/includes? html "editor-rail")))
       (is (not (str/includes? html "收合編輯區"))))))
+
+(def plan-state
+  (ui/init-state
+   {:report/title "測試報告"
+    :ui/selected "p1"
+    :tree [{:node/id "H" :node/kind :heading :node/name "甲" :node/draft "本章要交代緣起"
+            :children [{:node/id "p1" :node/kind :paragraph :node/title "背景" :node/draft "說明試辦的背景"}
+                       {:node/id "p2" :node/kind :paragraph :node/title "目標"}
+                       {:node/id "p3" :node/kind :paragraph :node/title "已寫"
+                        :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "已有本文"}]}]}}]}]}))
+
+(defn- plan-view [state]
+  (find-all :div.ft-plan (views/app (ui/set-page state :fulltext))))
+
+(deftest fulltext-plan-test
+  (let [plans (plan-view plan-state)
+        text (pr-str plans)]
+    (testing "沒有本文的段落顯示名稱與意圖；意圖空白時有說明；有本文的不顯示"
+      (is (= 3 (count plans)) "標題意圖、兩個沒有本文的段落")
+      (is (str/includes? text "背景 · 尚未撰寫"))
+      (is (str/includes? text "說明試辦的背景"))
+      (is (str/includes? text "目標 · 尚未撰寫"))
+      (is (str/includes? text "（尚未撰寫，也還沒有意圖）"))
+      (is (not (str/includes? text "已寫 · 尚未撰寫"))))
+    (testing "標題下顯示本章意圖"
+      (is (str/includes? text "本章意圖"))
+      (is (str/includes? text "本章要交代緣起"))))
+  (testing "切換有「顯示意圖」，預設勾選"
+    (let [toggle (find-el :label.ft-toggle (views/app (ui/set-page plan-state :fulltext)))]
+      (is (str/includes? (pr-str toggle) "顯示意圖"))
+      (is (str/includes? (pr-str toggle) ":checked true"))
+      (is (str/includes? (pr-str toggle) "[:ui/toggle-fulltext-intents]"))))
+  (testing "關閉後：沒有 ft-plan，標題意圖隱藏，段落回到簡短說明"
+    (let [off (ui/toggle-fulltext-intents (ui/set-page plan-state :fulltext))
+          html (render off)]
+      (is (empty? (find-all :div.ft-plan (views/app off))))
+      (is (str/includes? html "（尚未撰寫：目標）"))
+      (is (not (str/includes? (pr-str (find-el :div.fulltext-page (views/app off))) "本章要交代緣起")))
+      (is (str/includes? (pr-str (find-el :label.ft-toggle (views/app off))) ":checked false"))))
+  (testing "引言沒有本文：有意圖顯示意圖，沒有意圖維持說明"
+    (let [mk (fn [draft] (ui/init-state {:report/title "t" :tree [{:node/id "H" :node/kind :heading :node/name "甲"
+                                                                   :children [{:node/id "i" :node/kind :intro :node/draft draft}
+                                                                              {:node/id "p" :node/kind :paragraph :node/title "段"}]}]}))
+          with (pr-str (plan-view (mk "概述本章")))
+          without (render (ui/set-page (mk nil) :fulltext))]
+      (is (str/includes? with "引言 · 尚未撰寫"))
+      (is (str/includes? with "概述本章"))
+      (is (str/includes? without "引言尚未生成")))))
+
+(deftest outline-title-test
+  (let [items (find-all :button.outline-item (views/app (ui/set-page plan-state :fulltext)))]
+    (is (= 1 (count items)))
+    (is (= "第一章 甲" (:title (second (first items)))))))
+
+(deftest report-edit-view-test
+  (let [named (assoc plan-state :report {:report/title "共享單車" :report/subtitle "成果報告"})
+        top (fn [s] (find-el :header.topbar (views/app s)))]
+    (testing "頂部列的名稱是按鈕，按下開啟編輯"
+      (let [btn (find-el :button.topbar-title (top named))]
+        (is (some? btn))
+        (is (= "編輯報告名稱與副標" (:title (second btn))))
+        (is (str/includes? (pr-str btn) "[:ui/open-report-edit]"))
+        (is (str/includes? (pr-str btn) "共享單車"))
+        (is (str/includes? (pr-str btn) "成果報告")))
+      (is (nil? (find-el :div.report-edit-panel (top named))) "預設不顯示面板"))
+    (testing "面板有名稱與副標輸入框、取消與儲存"
+      (let [panel (pr-str (find-el :div.menu-panel.report-edit-panel (top (ui/open-report-edit named))))]
+        (is (str/includes? panel ":value \"共享單車\""))
+        (is (str/includes? panel ":value \"成果報告\""))
+        (is (str/includes? panel "[:report/keydown [:event/key]]"))
+        (is (str/includes? panel "[:report/save]"))
+        (is (str/includes? panel "[:ui/close-report-edit]"))
+        (is (not (str/includes? panel ":disabled true")))))
+    (testing "名稱空白時儲存 disabled"
+      (let [s (-> named ui/open-report-edit (ui/set-report-draft :title " "))
+            save (->> (find-all :button.btn.btn-primary (top s))
+                      (filter #(str/includes? (pr-str %) "[:report/save]")) first)]
+        (is (true? (:disabled (second save))))))))
 
 (deftest agent-change-test
   (let [s (ui/agent-changed state {:label "建立大綱：3 張卡片" :nodes ["a2"]})
@@ -124,9 +208,6 @@
     (is (str/includes? html "[:ui/open-note-card \"a2\"]") "agent 的提問")
     (is (str/includes? html "整份報告的留言"))
     (is (str/includes? html "compose-:report"))))
-
-(defn- find-el [tag hiccup]
-  (some #(when (and (vector? %) (= tag (first %))) %) (tree-seq coll? seq hiccup)))
 
 (deftest selected-path-test
   (testing "選取卡片的位置在卡片區，頂部列只有報告名稱"
@@ -238,3 +319,37 @@
                                         {:prose? false :by :agent :label "改意圖"}))]
         (is (str/includes? html "這次修改沒有改動本文"))
         (is (not (str/includes? html "diff-legend")))))))
+
+(def mixed-state
+  (ui/init-state
+   {:report/title "測試報告"
+    :ui/selected "H"
+    :tree [{:node/id "H" :node/kind :heading :node/name "甲"
+            :children [{:node/id "i" :node/kind :intro :node/draft "概述"}
+                       {:node/id "p1" :node/kind :paragraph :node/title "章段落"}
+                       {:node/id "S" :node/kind :heading :node/name "乙"
+                        :children [{:node/id "s1" :node/kind :paragraph :node/title "節段落"}]}
+                       {:node/id "T" :node/kind :heading :node/name "丙"}]}]}))
+
+(deftest heading-structure-buttons-test
+  (testing "已有段落的標題：可以同時新增段落、新增下層標題，並保留「移入段落」"
+    (let [html (render (ui/open-editor mixed-state))]
+      (is (str/includes? html "[:ui/add-child \"H\" :paragraph]"))
+      (is (str/includes? html "[:ui/add-child \"H\" :heading]"))
+      (is (str/includes? html "[:ui/wrap-paragraphs \"H\"]"))
+      (is (str/includes? html "段落、下層標題"))
+      (is (not (str/includes? html "不混用")))))
+  (testing "沒有段落的標題：不提供「移入段落」"
+    (let [html (render (ui/open-editor (ui/select mixed-state "T")))]
+      (is (str/includes? html "[:ui/add-child \"T\" :paragraph]"))
+      (is (not (str/includes? html "wrap-paragraphs"))))))
+
+(deftest mixed-fulltext-order-test
+  (let [html (pr-str (find-el :div.fulltext-page (views/app (ui/set-page mixed-state :fulltext))))
+        idx #(str/index-of html %)]
+    (is (< (idx "第一章 甲") (idx "章段落") (idx "1.1 乙") (idx "節段落"))
+        "全文順序：標題、段落、下層標題、下層的段落")))
+
+(deftest mixed-tree-columns-test
+  (let [html (render mixed-state)]
+    (is (str/includes? html "節／段落") "段落與下層標題同一欄時，欄名同時列出")))

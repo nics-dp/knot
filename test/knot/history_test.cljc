@@ -133,3 +133,39 @@
     (testing "時間也可以是毫秒數"
       (is (= [:change :thread]
              (map :type (history/timeline [{:note {:note/at 2}}] [{:at 1 :changeset-ids [1]}])))))))
+
+(defn- grp [c group-id name] (assoc c :group name :group-id group-id))
+
+(deftest group-merge-test
+  (let [s1 (assoc base :node/draft "一")
+        s2 (assoc s1 :node/title "新名")
+        s3 (assoc s2 :node/prose "新文")
+        revs [(grp (cs 1 0 {:before base :after s1} :by :agent :label "改意圖") :g1 "依審查調整")
+              (grp (cs 2 5 {:before s1 :after s2} :by :agent :label "改名") :g1 "依審查調整")
+              (grp (cs 3 6 {:before s2 :after s3} :by :agent :label "文") :g1 "依審查調整")]
+        es (history/entries revs)]
+    (testing "同 group-id 且相鄰合併成一筆，label 為組名"
+      (is (= 1 (count es)))
+      (let [e (first es)]
+        (is (= "依審查調整" (:label e)))
+        (is (= 3 (:merged e)))
+        (is (= [1 2 3] (:changeset-ids e)))
+        (is (= #{:intent :name :prose} (:fields e)) "取各修改組的聯集")
+        (is (= {:before "原意圖" :after "一"} (get-in e [:text-changes :intent])) "文字取最早 before、最晚 after")))
+    (testing "prose-change 取最早 before、最晚 after"
+      (let [c (history/prose-change revs 2)]
+        (is (= "依審查調整" (:label c)))
+        (is (= "原文" (:before c)))
+        (is (= "新文" (:after c)))))
+    (testing "只有一個修改組的組也用組名"
+      (is (= "組" (:label (first (history/entries [(grp (cs 1 0 (change :node/draft "一") :by :agent) :g "組")]))))))
+    (testing "被復原的成員讓整筆算已復原"
+      (is (true? (:undone? (first (history/entries (map #(assoc % :undone? true) revs)))))))
+    (testing "不同 group-id、或中間隔了別人的修改就不合併"
+      (is (= 2 (count (history/entries [(grp (cs 1 0 (change :node/draft "一") :by :agent) :g1 "組")
+                                        (grp (cs 2 1 (change :node/draft "二") :by :agent) :g2 "組")]))))
+      (is (= 3 (count (history/entries [(grp (cs 1 0 (change :node/draft "一") :by :agent) :g1 "組")
+                                        (cs 2 1 (change :node/draft "二"))
+                                        (grp (cs 3 2 (change :node/draft "三") :by :agent) :g1 "組")])))))
+    (testing "沒有 group 的行為不變"
+      (is (= "修改" (:label (first (history/entries [(cs 1 0 (change :node/draft "一"))]))))))))

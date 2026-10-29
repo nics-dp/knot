@@ -13,7 +13,7 @@
   其他交易（例如改報告名稱）：{:type :reload}，畫面應重新載入整份報告。"
   [tx-data db-after]
   (if-let [cs-id (some #(when (= :changeset/id (d/datom-a %)) (d/datom-v %)) tx-data)]
-    (let [cs (d/pull db-after [:changeset/origin :changeset/by :changeset/label] [:changeset/id cs-id])
+    (let [cs (d/pull db-after [:changeset/origin :changeset/by :changeset/label :changeset/group] [:changeset/id cs-id])
           targets (d/q '[:find [?t ...]
                          :in $ ?cid
                          :where [?c :changeset/id ?cid] [?r :revision/changeset ?c] [?r :revision/target ?t]]
@@ -22,7 +22,7 @@
        :changeset/id cs-id
        :origin (:changeset/origin cs)
        :by (:changeset/by cs)
-       :label (:changeset/label cs)
+       :label (or (:changeset/group cs) (:changeset/label cs))
        :nodes (vec (sort (keep #(when (str/starts-with? % "nodes/") (parse-uuid (subs % 6))) targets)))})
     {:type :reload}))
 
