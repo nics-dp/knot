@@ -93,6 +93,26 @@
       (is (< (.indexOf (mapv #(get % "title") cards) "第一章 計畫概述")
              (.indexOf (mapv #(get % "title") cards) "政策背景"))))))
 
+(deftest get-card-history-test
+  (let [id (card-id "主要成果")]
+    (testing "匯入後只有一筆"
+      (is (= [{"kind" "import" "by" "user" "fields" [] "undone" false}]
+             (mapv #(select-keys % ["kind" "by" "fields" "undone"])
+                   (get (structured (call "get_card" {"id" id})) "history")))))
+    (testing "agent 改名稱與意圖：附 text_changes，不含本文"
+      (call "update_card" {"id" id "title" "改過的標題" "intent" "改過的意圖"})
+      (let [h (get (structured (call "get_card" {"id" id})) "history")
+            e (last h)]
+        (is (= 2 (count h)))
+        (is (= "agent" (get e "by")))
+        (is (= "change" (get e "kind")))
+        (is (= ["intent" "name"] (get e "fields")))
+        (is (= false (get e "undone")))
+        (is (string? (get e "at")))
+        (is (= "主要成果" (get-in e ["text_changes" "name" "before"])))
+        (is (= "改過的意圖" (get-in e ["text_changes" "intent" "after"])))
+        (is (not (contains? e "prose")))))))
+
 (deftest get-card-test
   (let [id (card-id "主要成果")
         c (structured (call "get_card" {"id" id}))]

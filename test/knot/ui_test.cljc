@@ -167,6 +167,39 @@
     (is (true? (get-in (ui/select closed "a2") [:ui :editor-collapsed])) "選取卡片不會自動打開")
     (is (false? (get-in (ui/add-sibling closed "a2") [:ui :editor-collapsed])) "新增卡片時打開以輸入名稱")))
 
+(deftest history-test
+  (let [s (ui/select state "a2")]
+    (testing "歷程只收目前選取的卡片，回應慢到時捨棄"
+      (is (= {:id "a2" :data {:entries [] :more? false}}
+             (get-in (ui/set-history s "a2" {:entries [] :more? false}) [:ui :history])))
+      (is (nil? (get-in (ui/set-history s "a1" {:entries []}) [:ui :history]))))
+    (testing "顯示較早的紀錄；換卡片後回到預設筆數"
+      (let [s' (ui/show-all-history s)]
+        (is (true? (get-in s' [:ui :history-all])))
+        (is (nil? (get-in (ui/select s' "a1") [:ui :history-all])))))))
+
+(deftest change-view-test
+  (let [s (-> state (ui/select "a2") (ui/show-change "a2" "cs1"))]
+    (testing "看某次修改：打開編輯區，兩個切換都不是 pressed"
+      (is (false? (get-in s [:ui :editor-collapsed])))
+      (is (false? (get-in s [:ui :show-previous])))
+      (is (= {:id "a2" :changeset-id "cs1"} (get-in s [:ui :change]))))
+    (testing "讀回的內容只在還是同一個檢視時寫入"
+      (is (= {:before "a"} (get-in (ui/set-change s "a2" "cs1" {:before "a"}) [:ui :change :data])))
+      (is (= s (ui/set-change s "a2" "cs2" {:before "a"})))
+      (is (= s (ui/set-change s "a1" "cs1" {:before "a"}))))
+    (testing "離開檢視"
+      (is (nil? (get-in (ui/close-change s) [:ui :change])))
+      (is (nil? (get-in (ui/select s "a1") [:ui :change])) "換卡片時清掉")
+      (let [s' (ui/toggle-previous s)]
+        (is (nil? (get-in s' [:ui :change])))
+        (is (true? (get-in s' [:ui :show-previous]))))
+      (let [s' (ui/show-current (ui/toggle-previous s))]
+        (is (nil? (get-in s' [:ui :change])))
+        (is (false? (get-in s' [:ui :show-previous])))))
+    (testing "再看同一張卡片的差異不重設選取的狀態"
+      (is (true? (get-in (-> s ui/show-all-history (ui/show-change "a2" "cs3")) [:ui :history-all]))))))
+
 (deftest previous-test
   (let [s (ui/toggle-previous state)]
     (is (true? (get-in s [:ui :show-previous])))
@@ -263,11 +296,12 @@
     (let [s (-> state (ui/start-reply "n1") (ui/set-reply-draft "好"))]
       (is (= ["n1" "好"] [(get-in s [:ui :reply-to]) (get-in s [:ui :reply-draft])]))
       (is (nil? (get-in (ui/cancel-reply s) [:ui :reply-to])))))
-  (testing "從完成的待辦看修改：選取、打開編輯區、切到與前一版比較"
-    (let [s (-> state ui/toggle-todos (ui/open-change "b1"))]
+  (testing "從完成的待辦看修改：選取、打開編輯區、切到那一次修改的差異"
+    (let [s (-> state ui/toggle-todos (ui/open-change "b1" "cs1"))]
       (is (= "b1" (get-in s [:ui :selected])))
       (is (false? (get-in s [:ui :editor-collapsed])))
-      (is (true? (get-in s [:ui :show-previous])))
+      (is (false? (get-in s [:ui :show-previous])))
+      (is (= {:id "b1" :changeset-id "cs1"} (get-in s [:ui :change])))
       (is (nil? (get-in s [:ui :todos-open])))))
   (testing "重新載入時以後端的留言取代"
     (is (= [{:note/id "n"}] (:notes (ui/replace-data state {:nodes (vals (:nodes state)) :notes [{:note/id "n"}]}))))))

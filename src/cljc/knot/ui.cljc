@@ -89,8 +89,9 @@
 
 (defn select [state id]
   (if (contains? (:nodes state) id)
-    (update state :ui assoc :selected id :bias {} :toast nil :picker nil :rel-picker nil
-            :editing-relations false)
+    (update state :ui #(-> (assoc % :selected id :bias {} :toast nil :picker nil :rel-picker nil
+                                  :editing-relations false)
+                           (dissoc :change :history-all)))
     state))
 
 (defn navigate
@@ -120,14 +121,57 @@
   (assoc-in state [:ui :editor-collapsed] true))
 
 (defn toggle-previous
-  "本文區切換「與前一版比較」。"
+  "本文區切換「與前一版比較」；正在看某次修改的差異時，離開那個檢視並切到「與前一版比較」。"
   [state]
-  (update-in state [:ui :show-previous] not))
+  (if (get-in state [:ui :change])
+    (update state :ui #(-> (dissoc % :change) (assoc :show-previous true)))
+    (update-in state [:ui :show-previous] not)))
+
+(defn show-current
+  "本文區回到「目前內容」，離開前一版或某次修改的比較。"
+  [state]
+  (update state :ui #(-> (dissoc % :change) (assoc :show-previous false))))
 
 (defn set-previous
   "後端讀回的前一版內容（knot.db/node-previous）。"
   [state id data]
   (assoc-in state [:ui :previous] {:id id :data data}))
+
+;; ---------------------------------------------------------------------------
+;; 卡片歷程（SPEC 5.4）：[:ui :history] 是 {:id 卡片 id :data {:entries [...] :more? bool}}，
+;; [:ui :change] 是正在看的某次修改 {:id 卡片 id :changeset-id uuid :data {:before :after :at :label :by}}
+
+(defn set-history
+  "後端讀回的卡片歷程；回應慢到、選取的卡片已經換了時捨棄。"
+  [state id data]
+  (if (= id (get-in state [:ui :selected]))
+    (assoc-in state [:ui :history] {:id id :data data})
+    state))
+
+(defn show-all-history
+  "「顯示較早的紀錄」：之後讀取歷程時不限筆數。"
+  [state]
+  (assoc-in state [:ui :history-all] true))
+
+(defn show-change
+  "本文區改看某次修改的差異（內容之後由 set-change 補上）；打開編輯區。"
+  [state id changeset-id]
+  (-> (cond-> state (not= id (get-in state [:ui :selected])) (select id))
+      (update :ui assoc :editor-collapsed false :show-previous false
+              :change {:id id :changeset-id changeset-id})))
+
+(defn set-change
+  "後端讀回的某次修改的本文前後；已經離開那個檢視時捨棄。"
+  [state id changeset-id data]
+  (if (= {:id id :changeset-id changeset-id}
+         (select-keys (get-in state [:ui :change]) [:id :changeset-id]))
+    (assoc-in state [:ui :change :data] data)
+    state))
+
+(defn close-change
+  "離開某次修改的差異檢視（例如讀取失敗）。"
+  [state]
+  (update state :ui dissoc :change))
 
 (defn dismiss-toast [state]
   (assoc-in state [:ui :toast] nil))
@@ -235,11 +279,11 @@
   (-> state (show-card id) close-todos))
 
 (defn open-change
-  "從完成的待辦看 agent 的修改：選取卡片、打開編輯區並切到「與前一版比較」。"
-  [state id]
+  "從完成的待辦看 agent 的修改：選取卡片、打開編輯區並切到那一次修改的差異。"
+  [state id changeset-id]
   (-> state
       (open-note-card id)
-      (update :ui assoc :editor-collapsed false :show-previous true)))
+      (show-change id changeset-id)))
 
 ;; ---------------------------------------------------------------------------
 ;; 移動

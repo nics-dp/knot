@@ -9,6 +9,7 @@
             [clojure.string :as str]
             [datalevin.core :as d]
             [jsonista.core :as json]
+            [knot.history :as history]
             [knot.order-key :as ok]
             [knot.tree :as tree]))
 
@@ -639,10 +640,6 @@
   "只保留本文的前一版；意圖不需要歷程。"
   [:node/prose])
 
-(def ^:private session-gap-ms
-  "連續的「編輯文字」修改組相隔不超過這段時間，視為同一次修改。"
-  (* 10 60 1000))
-
 (defn- node-revisions
   "某張卡片的修訂，新到舊：[{:at :label :before :after}]。"
   [db node-id]
@@ -670,7 +667,7 @@
       ;; 逐字輸入每停頓一次就是一個修改組；把連續的輸入合併回這次修改開始前
       (let [start (reduce (fn [newer r]
                             (if (and (typing? newer) (typing? r) (changed? r)
-                                     (< (- (inst-ms (:at newer)) (inst-ms (:at r))) session-gap-ms))
+                                     (< (- (inst-ms (:at newer)) (inst-ms (:at r))) history/session-gap-ms))
                               r
                               (reduced newer)))
                           latest older)]
@@ -708,3 +705,64 @@
          (reduce (fn [acc {id :node/id :as e}]
                    (if (or (some #(= id (:node/id %)) acc) (>= (count acc) n)) acc (conj acc e)))
                  []))))
+
+;; ---------------------------------------------------------------------------
+;; 卡片歷程（SPEC 5.4）
+
+(defn- relation-involves?
+  "關係修訂的 target（\"relations/<from>|<to>|<type>\"）是否涉及這張卡片。"
+  [target node-id]
+  (let [[from to] (str/split (subs target (count "relations/")) #"\|")
+        id (str node-id)]
+    (or (= id from) (= id to))))
+
+(defn- node-history-input
+  "某張卡片相關的修訂依修改組分好，交給 knot.history/entries。
+  卡片刪除後復原是新的實體但 id 相同，所以用 target 字串查，不用 :revision/node。"
+  [db node-id]
+  (let [undone (set (d/q '[:find [?t ...] :where [_ :changeset/undoes ?u] [?u :changeset/id ?t]] db))
+        rows (concat
+              (map #(into [:nodes] %)
+                   (d/q '[:find ?cid ?at ?label ?by ?origin ?before ?after
+                          :in $ ?target
+                          :where [?r :revision/target ?target] [?r :revision/changeset ?c]
+                          [?c :changeset/id ?cid] [?c :changeset/at ?at] [?c :changeset/origin ?origin]
+                          [(get-else $ ?c :changeset/by :user) ?by]
+                          [(get-else $ ?c :changeset/label "") ?label]
+                          [(get-else $ ?r :revision/before "") ?before]
+                          [(get-else $ ?r :revision/after "") ?after]]
+                        db (str "nodes/" node-id)))
+              (->> (d/q '[:find ?cid ?at ?label ?by ?origin ?before ?after ?target
+                          :where [?r :revision/collection :relations] [?r :revision/target ?target]
+                          [?r :revision/changeset ?c]
+                          [?c :changeset/id ?cid] [?c :changeset/at ?at] [?c :changeset/origin ?origin]
+                          [(get-else $ ?c :changeset/by :user) ?by]
+                          [(get-else $ ?c :changeset/label "") ?label]
+                          [(get-else $ ?r :revision/before "") ?before]
+                          [(get-else $ ?r :revision/after "") ?after]]
+                        db)
+                   (filter #(relation-involves? (peek %) node-id))
+                   (map #(into [:relations] (pop %)))))
+        snapshot (fn [s] (when-not (str/blank? s) (read-edn s)))]
+    (->> rows
+         (group-by (comp second))
+         vals
+         (map (fn [rs]
+                (let [[_ cid at label by origin] (first rs)
+                      pair (fn [[_ _ _ _ _ _ before after]] {:before (snapshot before) :after (snapshot after)})
+                      node-rev (some #(when (= :nodes (first %)) (pair %)) rs)]
+                  (cond-> {:changeset/id cid :at at :label label :by by :origin origin
+                           :undone? (contains? undone cid)
+                           :relations (into [] (comp (filter #(= :relations (first %))) (map pair)) rs)}
+                    node-rev (assoc :node node-rev))))))))
+
+(defn node-history
+  "卡片的修改歷程，舊到新（格式見 knot.history/entries）。卡片從來沒有修訂時為空向量。"
+  [db node-id]
+  (history/entries (node-history-input db node-id)))
+
+(defn node-change
+  "某次修改的本文前後（格式見 knot.history/prose-change）；這張卡片沒有這個修改組時為 nil。
+  changeset-id 可以是合併項目中的任何一個修改組。"
+  [db node-id changeset-id]
+  (history/prose-change (node-history-input db node-id) changeset-id))

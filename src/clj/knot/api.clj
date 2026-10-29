@@ -52,6 +52,25 @@
     {:status (error-status msg) :body {:error msg}}
     {:status 200 :body {:notes (notes/list-notes (d/db conn))}}))
 
+(def ^:private default-history-limit 10)
+
+(defn- history-limit
+  "查詢字串的 limit：沒有或不合法時為預設值，\"all\" 為 nil（全部）。"
+  [req]
+  (let [v (some->> (:query-string req) (re-find #"(?:^|&)limit=([^&]*)") second)]
+    (cond
+      (= "all" v) nil
+      (and v (re-matches #"\d+" v) (pos? (parse-long v))) (parse-long v)
+      :else default-history-limit)))
+
+(defn- history-body
+  "最近 limit 筆（舊到新）與是否還有更早的；limit 為 nil 時全部。"
+  [entries limit]
+  (let [n (count entries)]
+    (if (and limit (> n limit))
+      {:entries (subvec entries (- n limit)) :more? true}
+      {:entries entries :more? false})))
+
 (defn routes [conn]
   [["/notes"
     {:post (fn [req]
@@ -94,6 +113,20 @@
             (if-let [id (parse-uuid (get-in req [:path-params :id]))]
               {:status 200 :body (db/node-previous (d/db conn) id)}
               (bad-request "卡片 id 格式不正確")))}]
+   ["/report/nodes/:id/history"
+    {:get (fn [req]
+            (if-let [id (parse-uuid (get-in req [:path-params :id]))]
+              {:status 200 :body (history-body (db/node-history (d/db conn) id) (history-limit req))}
+              (bad-request "卡片 id 格式不正確")))}]
+   ["/report/nodes/:id/changes/:changeset-id"
+    {:get (fn [req]
+            (let [{:keys [id changeset-id]} (:path-params req)
+                  id (parse-uuid id) cs (parse-uuid changeset-id)]
+              (if-not (and id cs)
+                (bad-request "id 格式不正確")
+                (if-let [change (db/node-change (d/db conn) id cs)]
+                  {:status 200 :body change}
+                  {:status 404 :body {:error "這張卡片沒有這次修改"}}))))}]
    ["/report/recent-changes"
     {:get (fn [_] {:status 200 :body {:cards (db/recent-cards (d/db conn) 10)}})}]
    ["/report/undo"

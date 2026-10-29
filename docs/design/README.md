@@ -5,7 +5,7 @@
 | 檔名 | 畫面 | 對應規格章節 | 更新日期 | 畫布連結 |
 |---|---|---|---|---|
 | `screens/01-main-editor.png` | 主編輯畫面 | 5.3、5.4、6 | 尚未匯出 | （待使用者補上） |
-| `screens/02-propagation-review.png` | 修改建議審查 | 5.6、6 | 尚未匯出 | （待使用者補上） |
+| `screens/02-propagation-review.png` | 修改建議審查 | 5.6、6 | 不做（2026-10-29 改為直接寫入） | — |
 | `screens/03-handoff-export.png` | 交接檢查與 LaTeX 匯出 | 5.8、5.9、6 | 尚未匯出 | （待使用者補上） |
 
 ## 尚無設計稿的畫面

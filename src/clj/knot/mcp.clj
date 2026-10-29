@@ -103,6 +103,19 @@
           :title (card-title nodes numbers other)
           :position (tree/position-label nodes numbers other)})))
 
+(defn- history-entry
+  "get_card 的 history 項目；名稱、意圖有變時附 text_changes（不含本文全文）。"
+  [{:keys [at by label kind fields undone? text-changes]}]
+  (cond-> {:at (inst-str at)
+           :by (name by)
+           :label label
+           :kind (name kind)
+           :fields (vec (sort (map name fields)))
+           :undone (boolean undone?)}
+    (seq text-changes) (assoc :text_changes
+                              (into {} (map (fn [[k v]] [(name k) {:before (:before v) :after (:after v)}]))
+                                    text-changes))))
+
 (defn- get-card [conn args]
   (let [{:keys [nodes relations blocks facts] :as state} (current-state conn)
         id (card-id state args)
@@ -139,6 +152,7 @@
                        {:id (str k)
                         :kind (name (tree/kind nodes k))
                         :title (card-title nodes numbers k)}))
+      :history (mapv history-entry (take-last 10 (db/node-history (d/db conn) id)))
       :notes (vec (for [note (notes/list-notes (d/db conn))
                         :when (= id (:note/node note))]
                     (cond-> {:id (str (:note/id note))
@@ -373,7 +387,7 @@
     :inputSchema {:type "object" :properties {} :additionalProperties false}
     :handler get-outline}
    {:name "get_card"
-    :description "取得單張卡片的完整資料：完整意圖、本文純文字、所在章節路徑、依據的素材、前後段與其他段落的關係、下層卡片、這張卡片上的留言與待辦（notes）。要看某張卡片的細節或確認它的關係時使用；id 由 get_outline 取得。"
+    :description "取得單張卡片的完整資料：完整意圖、本文純文字、所在章節路徑、依據的素材、前後段與其他段落的關係、下層卡片、這張卡片上的留言與待辦（notes），以及最近 10 筆修改紀錄 history（舊到新；每筆有時間、修改者 user 或 agent、修改組名稱、類型、改了哪些欄位、是否已復原，名稱與意圖有變時附 text_changes 的前後文字，不含本文全文）。history 讓你知道使用者改了什麼，例如處理待辦前先看，避免蓋掉使用者剛改的內容。要看某張卡片的細節或確認它的關係時使用；id 由 get_outline 取得。"
     :inputSchema id-schema
     :handler get-card}
    {:name "get_writing_context"

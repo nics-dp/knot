@@ -104,13 +104,13 @@
 (deftest notes-zone-test
   (let [html (render note-state)
         idx #(str/index-of html %)]
-    (testing "留言與待辦是編輯區最後一個區塊，最新的在下方"
-      (is (< (idx "與前一版比較") (idx "留言與待辦")))
+    (testing "留言與歷程是編輯區最後一個區塊，最新的在下方"
+      (is (< (idx "與前一版比較") (idx "留言與歷程")))
       (is (< (idx "寫短一點") (idx "好的") (idx "補數據"))))
     (testing "待辦有勾選框；完成的待辦可以看修改"
       (is (str/includes? html "[:notes/set-state \"t1\" :done]"))
       (is (str/includes? html "[:notes/set-state \"t2\" :open]"))
-      (is (str/includes? html "[:ui/open-change \"a1\"]")))
+      (is (str/includes? html "[:ui/open-change \"a1\" \"cs\"]")))
     (testing "只能刪除使用者的留言"
       (is (str/includes? html "[:notes/delete \"t1\"]"))
       (is (not (str/includes? html "[:notes/delete \"r1\"]"))))
@@ -135,3 +135,106 @@
       (is (str/includes? (pr-str path) "甲 ›")))
     (is (not (str/includes? (pr-str (find-el :header.topbar (views/app state))) "甲")))
     (is (nil? (find-el :div.selected-path (views/app (ui/set-page state :library)))))))
+
+(defn- ts [n] #?(:clj (java.util.Date. (long n)) :cljs (js/Date. n)))
+
+(def history-entries
+  [{:changeset-ids [1] :at (ts 0) :label "建立卡片" :by :user :kind :create :fields #{} :merged 1}
+   {:changeset-ids [2 3] :at (ts 2.5) :label "編輯文字" :by :user :kind :change :fields #{:prose :status} :merged 2}
+   {:changeset-ids [4] :at (ts 10) :label "" :by :agent :kind :change
+    :fields #{:name :intent}
+    :text-changes {:name {:before "舊名" :after "新名"} :intent {:before "舊意圖" :after "新意圖"}}
+    :merged 1}
+   {:changeset-ids [5] :at (ts 11) :label "再改名" :by :agent :kind :change :undone? true
+    :fields #{:name} :text-changes {:name {:before "新名" :after "被復原的名稱"}} :merged 1}
+   {:changeset-ids [6] :at (ts 12) :label "復原：再改名" :by :user :kind :undo
+    :fields #{:name} :text-changes {:name {:before "被復原的名稱" :after "新名"}} :merged 1}])
+
+(defn- history-state [& [more?]]
+  (-> note-state
+      (ui/set-notes [{:note/id "t1" :note/node "a1" :note/author :user :note/text "寫短一點" :note/todo true
+                      :note/state :open :note/at (ts 1)}
+                     {:note/id "t2" :note/node "a1" :note/author :user :note/text "補數據" :note/at (ts 20)}])
+      (ui/set-history "a1" {:entries history-entries :more? (boolean more?)})))
+
+(deftest history-timeline-test
+  (let [html (render (history-state))
+        idx #(str/index-of html %)]
+    (testing "留言串與修改依時間穿插，最後是新增留言"
+      (is (< (idx "建立卡片") (idx "寫短一點") (idx "編輯文字") (idx "新名") (idx "補數據") (idx "compose-a1"))))
+    (testing "事件列：改了什麼的欄位標籤、連續輸入、有本文時不列狀態"
+      (let [fields-of #(vec (for [e (tree-seq coll? seq (views/app (history-state)))
+                                  :when (and (vector? e) (= :span.tl-field (first e)))]
+                              (last e)))]
+        (is (= ["本文" "名稱" "意圖"] (sort-by {"本文" 0 "名稱" 1 "意圖" 2} (distinct (fields-of)))))
+        (is (not (some #{"狀態"} (fields-of)))))
+      (is (str/includes? html "連續輸入 2 次")))
+    (testing "label 空字串時依 kind 顯示"
+      (is (str/includes? html "[:span.tl-label \"修改\"]")))
+    (testing "同一事件內：時間在操作者之前，其後是修改名稱"
+      (let [ev (pr-str (find-el :div.tl-line (views/app (history-state))))]
+        (is (< (str/index-of ev "tl-time") (str/index-of ev "tl-by") (str/index-of ev "tl-label")))))
+    (testing "agent 與使用者的操作者與圖示樣式"
+      (is (str/includes? html "tl-event-agent"))
+      (is (str/includes? html "[:span.tl-by {:class \"tl-by-agent\"} \"agent\"]"))
+      (is (str/includes? html "[:span.tl-by {:class \"tl-by-user\"} \"使用者\"]"))
+      (is (str/includes? html "tl-agent")))
+    (testing "名稱與意圖的舊新文字，舊的刪除線"
+      (is (str/includes? html "[:div.tl-diff-name \"名稱\"]"))
+      (is (str/includes? html "[:div.tl-diff-name \"意圖\"]"))
+      (is (str/includes? html "[:del.tl-diff-text \"舊名\"]"))
+      (is (str/includes? html "[:span.tl-diff-text \"新意圖\"]"))
+      (is (< (str/index-of html "舊名") (str/index-of html "新名"))))
+    (testing "已復原"
+      (is (str/includes? html "tl-undone"))
+      (is (str/includes? html "[:span.tl-undone-tag \"已復原\"]")))
+    (testing "已復原的修改與復原本身只留一行，不列前後文字"
+      (is (str/includes? html "復原：再改名"))
+      (is (not (str/includes? html "被復原的名稱"))))
+    (testing "只有本文有變動的項目有「看差異」，帶代表 id"
+      (is (str/includes? html "[:ui/show-change \"a1\" 3]"))
+      (is (not (str/includes? html "[:ui/show-change \"a1\" 1]")))
+      (is (not (str/includes? html "[:ui/show-change \"a1\" 4]"))))
+    (testing "區塊標題"
+      (is (str/includes? html "留言與歷程"))
+      (is (not (str/includes? html "留言與待辦"))))))
+
+(deftest history-more-test
+  (is (not (str/includes? (render (history-state)) "顯示較早的紀錄")))
+  (let [html (render (history-state true))]
+    (is (str/includes? html "顯示較早的紀錄"))
+    (is (str/includes? html "[:history/show-all]"))
+    (is (< (str/index-of html "顯示較早的紀錄") (str/index-of html "建立卡片")))))
+
+(deftest history-other-card-test
+  (testing "歷程是別張卡片的就不顯示（回應慢到時）"
+    (let [s (-> (history-state) (assoc-in [:ui :history :id] "a2"))]
+      (is (not (str/includes? (render s) "建立卡片"))))))
+
+(deftest change-view-test
+  (let [doc #(hash-map :type "doc" :content [{:type "paragraph" :content [{:type "text" :text %}]}])
+        s (-> (history-state) (ui/show-change "a1" 3)
+              (ui/set-change "a1" 3 {:prose? true :before (doc "舊文") :after (doc "新文") :at (ts 2.5) :label "編輯文字" :by :agent}))
+        html (render s)]
+    (testing "顯示那次修改的差異與說明"
+      (is (str/includes? html ":del"))
+      (is (str/includes? html ":ins"))
+      (is (str/includes? html "編輯文字"))
+      (is (str/includes? html "的修改（agent 修改）")))
+    (testing "回到目前內容；切換兩者都不是 pressed"
+      (is (str/includes? html "回到目前內容"))
+      (is (str/includes? html "[:ui/show-current]"))
+      (let [group (pr-str (find-el :div.segmented.segmented-small (views/app s)))]
+        (is (= 2 (count (re-seq #":aria-pressed \"false\"" group))))
+        (is (not (str/includes? group ":aria-pressed \"true\"")))))
+    (testing "讀取中"
+      (is (str/includes? (render (ui/show-change (history-state) "a1" 3)) "讀取修改…")))
+    (testing "使用者修改不標 agent"
+      (is (not (str/includes? (render (ui/set-change (ui/show-change (history-state) "a1" 3) "a1" 3
+                                                     {:prose? true :before (doc "a") :after (doc "b") :by :user :label "x"}))
+                              "agent 修改"))))
+    (testing "那次修改沒有改本文（例如待辦連到只改意圖的修改）"
+      (let [html (render (ui/set-change (ui/show-change (history-state) "a1" 3) "a1" 3
+                                        {:prose? false :by :agent :label "改意圖"}))]
+        (is (str/includes? html "這次修改沒有改動本文"))
+        (is (not (str/includes? html "diff-legend")))))))

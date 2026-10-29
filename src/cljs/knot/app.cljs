@@ -25,12 +25,12 @@
    :ui/toggle-todos ui/toggle-todos
    :ui/close-todos ui/close-todos
    :ui/open-note-card ui/open-note-card
-   :ui/open-change ui/open-change
    :ui/open-recent-card ui/open-recent-card
    :ui/toggle-editor ui/toggle-editor
    :ui/open-editor ui/open-editor
    :ui/close-editor ui/close-editor
    :ui/toggle-previous ui/toggle-previous
+   :ui/show-current ui/show-current
    :ui/toggle-relations-edit ui/toggle-relations-edit
    :ui/move-selected ui/move-selected
    :ui/edge-scroll ui/edge-scroll
@@ -108,7 +108,7 @@
           (.scrollTo el #js {:left target
                              :behavior (if (or first-time? (reduced-motion?)) "auto" "smooth")}))))))
 
-(declare dispatch! import-sample! undo! load-previous! load-recent! note-request!)
+(declare dispatch! import-sample! undo! load-previous! load-recent! load-history! load-change! note-request!)
 
 (def nexus
   {:nexus/system->state deref
@@ -140,6 +140,25 @@
          (cond-> [[:store/reset state']]
            (get-in state' [:ui :recent-open]) (conj [:server/load-recent]))))
 
+     ;; 卡片歷程：看某次修改的差異（讀取內容、把本文區捲進畫面）
+     :ui/show-change
+     (fn [state id changeset-id]
+       [[:store/reset (ui/show-change state id changeset-id)]
+        [:server/load-change id changeset-id]
+        [:dom/reveal-prose]])
+
+     ;; 待辦完成後的「看修改」：選取卡片，再看那一次修改的差異
+     :ui/open-change
+     (fn [state id changeset-id]
+       [[:store/reset (ui/open-change state id changeset-id)]
+        [:server/load-change id changeset-id]
+        [:dom/reveal-prose]])
+
+     :history/show-all
+     (fn [state]
+       [[:store/reset (ui/show-all-history state)]
+        [:server/load-history]])
+
      ;; 滾輪在卡片欄位上只捲動該欄，不捲動整頁
      :ui/wheel-column
      (fn [_ column delta lo hi]
@@ -165,6 +184,22 @@
 
     :server/load-recent
     (fn [_ _] (load-recent!))
+
+    :server/load-history
+    (fn [_ _] (load-history!))
+
+    :server/load-change
+    (fn [_ _ id changeset-id] (load-change! id changeset-id))
+
+    ;; 把本文區捲進畫面（等編輯區與比較檢視 render 完）；留出固定在頂端的標題列高度
+    :dom/reveal-prose
+    (fn [_ _]
+      (js/requestAnimationFrame
+       #(when-let [el (js/document.querySelector ".editor .zone-output")]
+          (let [head (js/document.querySelector ".editor .detail-head")]
+            (set! (.. el -style -scrollMarginTop) (str (+ 12 (if head (.-offsetHeight head) 0)) "px")))
+          (.scrollIntoView el #js {:block "start"
+                                   :behavior (if (reduced-motion?) "auto" "smooth")}))))
 
     ;; 留言與待辦（SPEC 5.11）：不是內容修改，直接寫入，回應是整份留言清單
     :notes/add
@@ -371,7 +406,7 @@
        :origin (if (some #(= :move (:origin %)) entries) :move :manual)}
       {:label "編輯文字" :origin :manual})))
 
-(declare reload-if-idle!)
+(declare reload-if-idle! refresh-history!)
 
 (defn- node-names [state ids]
   (let [title (let [numbers (tree/numbering (:nodes state))]
@@ -411,6 +446,7 @@
                                                                    :history-count (count (:history state)))
                                                       (:changeset/id res) (update :own conj (:changeset/id res))))
                                  (when (get-in @store [:ui :show-previous]) (load-previous!))
+                                 (refresh-history!)
                                  ;; 送出期間又有新的修改
                                  (if (sync/diff @saved (sync/data @store))
                                    (flush!)
@@ -448,6 +484,43 @@
                    (not= (get-in old [:ui :selected]) (get-in new [:ui :selected]))))
       (load-previous!))))
 
+;; 卡片歷程：編輯區展開且有選取的卡片時讀取
+(defn- editor-open? [state]
+  (and (loaded?) (get-in state [:ui :selected])
+       (not (true? (get-in state [:ui :editor-collapsed])))))
+
+(defn- load-history!
+  "讀回選取卡片的歷程（保留「顯示較早的紀錄」）；回應回來時卡片已經換了就捨棄。"
+  []
+  (let [id (get-in @store [:ui :selected])
+        limit (if (get-in @store [:ui :history-all]) "all" "10")]
+    (-> (api "GET" (str "/api/report/nodes/" id "/history?limit=" limit))
+        (.then (fn [data] (swap! store ui/set-history id data)))
+        (.catch (fn [err] (show-toast! (str "無法讀取歷程：" (ex-message err))))))))
+
+(defn- refresh-history! []
+  (when (editor-open? @store) (load-history!)))
+
+(defn- watch-history!
+  "編輯區打開、或選取的卡片改變時讀取歷程。"
+  [old new]
+  (when (and (editor-open? new)
+             (or (not (editor-open? old))
+                 (not= (get-in old [:ui :selected]) (get-in new [:ui :selected]))))
+    (load-history!)))
+
+(defn- load-change!
+  "讀回某次修改的本文前後；失敗時離開那個檢視。"
+  [id changeset-id]
+  (-> (api "GET" (str "/api/report/nodes/" id "/changes/" changeset-id))
+      (.then (fn [data] (swap! store ui/set-change id changeset-id data)))
+      (.catch (fn [err]
+                (swap! store #(if (= {:id id :changeset-id changeset-id}
+                                     (select-keys (get-in % [:ui :change]) [:id :changeset-id]))
+                                (ui/close-change %)
+                                %))
+                (show-toast! (str "無法讀取這次修改：" (ex-message err)))))))
+
 (defn undo!
   "復原最近一個修改組：先送出尚未儲存的變動，再由後端新增反向的修改組。"
   []
@@ -459,7 +532,8 @@
                    (do (swap! store #(-> (ui/replace-data % state)
                                          (assoc-in [:ui :toast] (str "已復原：" label))))
                        (reset! saved (sync/data @store))
-                       (swap! sync-state assoc :history-count (count (:history @store))))
+                       (swap! sync-state assoc :history-count (count (:history @store)))
+                       (refresh-history!))
                    (show-toast! "沒有可以復原的修改"))))
         (.catch (fn [err] (show-toast! (str "無法復原：" (ex-message err))))))))
 
@@ -484,7 +558,8 @@
                     (swap! store ui/replace-data loaded)
                     (reset! saved (sync/data @store))
                     (swap! sync-state assoc :reload-pending false
-                           :history-count (count (:history @store))))))
+                           :history-count (count (:history @store)))
+                    (refresh-history!))))
          (.catch (fn [err] (js/console.error err)))))))
 
 (defn- note-request!
@@ -577,6 +652,7 @@
   (add-watch store ::render (fn [_ _ _ state] (render! state)))
   (add-watch store ::persist (fn [_ _ old new] (schedule-flush! old new)))
   (add-watch store ::previous (fn [_ _ old new] (watch-previous! old new)))
+  (add-watch store ::history (fn [_ _ old new] (watch-history! old new)))
   (js/document.addEventListener "keydown" on-keydown)
   ;; 離開頁面前送出尚未儲存的文字
   (js/window.addEventListener "beforeunload" (fn [_] (flush!)))

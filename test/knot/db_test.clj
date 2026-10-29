@@ -270,3 +270,67 @@
       (let [state (client-state (db/load-state (d/db c)))]
         (db/apply-changes! c {:label "刪除" :changes (sync/diff state (ui/delete-node state p3))}))
       (is (= [p2 p1] (map first (recent 10)))))))
+
+(deftest node-history-test
+  (let [[_ c loaded] (seeded)
+        para (some #(when (= "節能效益估算" (:node/title %)) (:node/id %)) (:nodes loaded))
+        other (some #(when (= "主要成果" (:node/title %)) (:node/id %)) (:nodes loaded))
+        save! (fn [label f opts]
+                (let [state (client-state (db/load-state (d/db c)))]
+                  (db/apply-changes! c (assoc opts :label label :changes (sync/diff state (f state))))))
+        hist #(db/node-history (d/db c) para)]
+    (testing "匯入之後第一筆是匯入"
+      (is (= [:import] (mapv :kind (hist)))))
+    (testing "意圖與連續的逐字輸入"
+      (save! "編輯意圖" #(ui/set-node-field % para :node/draft "新的意圖") {})
+      (save! "編輯文字" #(ui/set-prose % para (prose "新")) {})
+      (save! "編輯文字" #(ui/set-prose % para (prose "新的本文")) {})
+      (let [[_ a b :as es] (hist)]
+        (is (= 3 (count es)))
+        (is (= #{:intent} (:fields a)))
+        (is (= "新的意圖" (get-in a [:text-changes :intent :after])))
+        (is (= 2 (:merged b)))
+        (is (contains? (:fields b) :prose))))
+    (testing "本文前後（合併項目的任一修改組）"
+      (let [b (last (hist))
+            cid (first (:changeset-ids b))
+            change (db/node-change (d/db c) para cid)]
+        (is (= (prose "新的本文") (:after change)))
+        (is (not= (prose "新") (:before change)) "取最早的 before")
+        (is (= change (db/node-change (d/db c) para (last (:changeset-ids b)))))
+        (is (nil? (db/node-change (d/db c) para (:changeset/id (save! "x" identity {})))))))
+    (testing "agent 修改與復原"
+      (save! "重新生成" #(ui/set-prose % para (prose "agent 的本文")) {:by :agent})
+      (is (= :agent (:by (last (hist)))))
+      (db/undo! c)
+      (let [es (hist)]
+        (is (true? (:undone? (last (butlast es)))))
+        (is (= :undo (:kind (last es))))
+        (is (= (prose "新的本文") (:after (db/node-change (d/db c) para (first (:changeset-ids (last es)))))))))
+    (testing "別的卡片的修改不混進來"
+      (let [n (count (hist))]
+        (save! "編輯文字" #(ui/set-node-field % other :node/draft "別張") {})
+        (is (= n (count (hist))))))
+    (testing "沒有修訂的卡片為空"
+      (is (= [] (db/node-history (d/db c) (random-uuid)))))))
+
+(deftest node-history-relations-test
+  (let [[_ c loaded] (seeded)
+        id #(some (fn [n] (when (= % (:node/title n)) (:node/id n))) (:nodes loaded))
+        p411 (id "主要成果") p313 (id "節能效益估算")
+        state (client-state loaded)]
+    (db/apply-changes! c {:label "新增關係"
+                          :changes (sync/diff state (ui/add-remote-relation state p411 p313 :basis))})
+    (is (= :relations (-> (db/node-history (d/db c) p411) last :fields first)) "起點卡片")
+    (is (= #{:relations} (-> (db/node-history (d/db c) p313) last :fields)) "終點卡片")))
+
+(deftest node-history-delete-undo-test
+  (let [[_ c loaded] (seeded)
+        para (some #(when (= "節能效益估算" (:node/title %)) (:node/id %)) (:nodes loaded))
+        state (client-state loaded)]
+    (db/apply-changes! c {:label "刪除" :changes (sync/diff state (ui/delete-node state para))})
+    (is (= [:import :delete] (mapv :kind (db/node-history (d/db c) para))))
+    (db/undo! c)
+    (let [es (db/node-history (d/db c) para)]
+      (is (= [:import :delete :undo] (mapv :kind es)) "刪除後復原是新實體，但 id 相同，歷程接續")
+      (is (true? (:undone? (second es)))))))

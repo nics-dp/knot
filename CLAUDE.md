@@ -18,7 +18,7 @@
 
 - `bb dev` 同時啟動兩者；頁面在 http://localhost:3000。
 - **報告目錄：** 一個目錄一份報告，資料庫在 `<報告目錄>/.knot/db`。REPL 開發使用 `local/report`（不進 git）；`clojure -M:run [目錄]` 預設為目前目錄。空白報告的畫面提供「匯入範例內容」（`POST /api/dev/sample`，本機測試報告優先）。
-- **API：** `GET /api/report`、`POST /api/report/changes`（malli 驗證）、`POST /api/report/undo`、`GET /api/report/nodes/:id/previous`（卡片的前一版）、`GET /api/report/recent-changes`（最近修改的卡片）、`GET /api/events`（SSE）、`POST /api/notes`、`POST|DELETE /api/notes/:id`（留言與待辦，不進修改組，回應整份留言清單）。
+- **API：** `GET /api/report`、`POST /api/report/changes`（malli 驗證）、`POST /api/report/undo`、`GET /api/report/nodes/:id/previous`（卡片的前一版）、`GET /api/report/nodes/:id/history?limit=10|all`（卡片歷程，舊到新，回 `{:entries :more?}`）、`GET /api/report/nodes/:id/changes/:changeset-id`（某次修改前後的本文）、`GET /api/report/recent-changes`（最近修改的卡片）、`GET /api/events`（SSE）、`POST /api/notes`、`POST|DELETE /api/notes/:id`（留言與待辦，不進修改組，回應整份留言清單）。
 - URL 參數 `?select=<卡片 id 或名稱>`、`?page=library|tree|fulltext`、`?drag=<卡片 id>`（拖曳中的樣子）、`?editor=1`（展開編輯區，預設收合）、`?previous=1`（本文區與前一版比較）、`?flash=<卡片 id 或名稱>`（模擬 agent 剛修改的綠色框，約 4 秒）指定初始畫面，方便截圖對照設計稿；截圖可用 headless Chrome：
   `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --window-size=1440,1000 --timeout=4000 --screenshot=out.png "http://localhost:3000/?select=p312&editor=1"`（頁面一直開著事件通知的連線，`--virtual-time-budget` 會等不到結束，要用 `--timeout`）
 - 改了 `knot.server` 的路由要 `(user/reset)` 才會生效；reset 失敗時 `(require 'user :reload)` 再 `(user/go)`。
@@ -41,7 +41,25 @@
 - `(seed!)`：把虛構範例匯入目前的空白報告；`(seed! "local/sample-report.edn")`：匯入本機測試報告
 - `(wipe!)`：刪除 `local/report` 的資料庫並重新啟動（得到空白報告）
 - `(db)`：目前報告的 Datalevin 連線
-- `(import-file! "path")`：M5 加入；`(mcp! "tool" {...})`：M3 加入
+- `(mcp! "tool" {...})`：直接呼叫 MCP 工具（對 dev 報告，真實資料）
+- **沙盒：** `(sandbox!)` 在暫存目錄開一份獨立報告並匯入虛構範例，`(sb)` 取得連線、`(sb-mcp! "tool" {...})` 在沙盒呼叫工具、`(sandbox-close!)` 關閉並刪除。**在 REPL 試寫入一律用沙盒**；dev 報告只做唯讀查詢與最後的畫面確認。
+- `(import-file! "path")`：M5 加入
+
+### 前端：`knot.dev`（shadow REPL）
+
+畫面是 `state → hiccup` 的函式，`knot.dev`（`src/cljs/knot/dev.cljs`，只由 `:preloads` 載入）讓 shadow REPL 直接檢查畫面，不必截圖：
+
+- `(knot.dev/act! [:ui/toggle-todos])` 送 action；`(knot.dev/state :ui :selected)` 讀狀態
+- `(knot.dev/find-all :.menu-item)`、`(knot.dev/texts :div.menu-head)` 在目前畫面的 hiccup 找元素、取文字（`:.class` 不限元素名稱）
+- `(knot.dev/dom ".todos-panel")` 確認實際 render 到 DOM
+- 用法：`clj-nrepl-eval -p 7889 '(shadow.cljs.devtools.api/cljs-eval :app "(knot.dev/texts :div.menu-head)" {})'`
+- 會呼叫後端的 action（留言、卡片寫入）一樣會寫進 dev 報告，只拿來看畫面。
+
+### 驗證的順序
+
+1. **純函式與後端：** 在 nREPL 對沙盒呼叫函式、MCP 工具，確認行為後寫成測試。
+2. **畫面結構：** 在 shadow REPL 用 `knot.dev` 送 action、查 hiccup（文字、按鈕帶的 action、元素有沒有出現）。
+3. **外觀：** 只有排版、顏色、動畫才用 headless Chrome 截圖。
 
 ### 測試與 lint
 
@@ -65,6 +83,16 @@
 - **不擴大範圍。** SPEC 第 1 節的範圍外項目不實作。
 - **遇到待定事項就停下**，列出選項請使用者決定；疑問記在 `docs/QUESTIONS.md`。
 - 每個里程碑開一個分支，測試通過且使用者確認畫面後再合併。
+
+## 分工：主對話規劃，Sonnet 實作
+
+- **主對話用 Opus，負責規劃與把關：** 讀 SPEC、設計資料與介面、拆工作、寫給 subagent 的說明、審查程式碼、在 REPL 與瀏覽器驗證（截圖對照）、更新文件、commit。
+- **實作盡量交給 Sonnet subagent**（Agent 工具指定 `model: sonnet`），後端與前端都是。說明裡寫清楚：要改的檔案、函式名稱與資料格式、錯誤處理、要補的測試、完成條件（`bb test`、`bb cljs-test`、`bb lint`、shadow-cljs 沒有 warning）。
+  - 前端另外寫明：放在哪個 view 函式、用哪些既有的 CSS token 與元件樣式、nexus action 與 `knot.ui` 純函式的分工（狀態變化寫成 `ui.cljc` 的純函式並補測試）、畫面上的文字。
+  - subagent 完成後，主對話審查 diff，並在瀏覽器實際操作、截圖確認；畫面不對時把具體問題（截圖位置、預期樣子）交回同一個 subagent 修改（SendMessage），一兩行的小修正由主對話直接改。
+- **subagent 一次只派一個：** nREPL 與 port 只有一套（見下方「REPL 與開發的坑」），不平行派多個會重新載入程式的 subagent。
+- **subagent 遇到重新載入失敗就停下回報，** 不要自己重啟或修 REPL；由主對話處理。
+- **subagent 不 commit、不碰 `local/` 與真實資料。**
 
 ## REPL 與開發的坑
 

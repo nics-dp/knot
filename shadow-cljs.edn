@@ -7,7 +7,9 @@
         :output-dir "resources/public/js"
         :asset-path "/js"
         :modules {:main {:init-fn knot.app/init}}
-        :devtools {:after-load knot.app/reload!}}
+        :devtools {:after-load knot.app/reload!
+                   ;; 開發時在 shadow REPL 檢查畫面的輔助函式，不進正式 build
+                   :preloads [knot.dev]}}
 
   :test {:target :node-test
          :output-to "target/cljs-test/test.js"
