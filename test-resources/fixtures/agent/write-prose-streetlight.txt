@@ -1,0 +1,6 @@
+三處示範場域於測試期間之量測結果如{{ref:tab:field-results}}所示。
+場域 A 與場域 B 之節電率分別為{{fact:saving-rate.site-a}}與{{fact:saving-rate.site-b}}，場域 C 則為{{fact:saving-rate.site-c}}。主要發現如下：
+- 場域 A 的斷線次數為 2 次[[cite:@@block:各場域量測結果@@]]
+- 場域 C 明顯偏低，詳見下一段
+1. 先檢視供電條件
+2. 再比較燈具型號

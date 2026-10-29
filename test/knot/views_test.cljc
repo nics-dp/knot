@@ -353,3 +353,164 @@
 (deftest mixed-tree-columns-test
   (let [html (render mixed-state)]
     (is (str/includes? html "節／段落") "段落與下層標題同一欄時，欄名同時列出")))
+
+;; ---------------------------------------------------------------------------
+;; M6：清單、表格、圖、未綁定的數字
+
+(def list-doc
+  {:type "doc"
+   :content [{:type "paragraph" :content [{:type "text" :text "主要成果如下："}]}
+             {:type "bulletList"
+              :content [{:type "listItem" :content [{:type "paragraph" :content [{:type "text" :text "甲"}]}]}
+                        {:type "listItem" :content [{:type "paragraph"
+                                                     :content [{:type "text" :text "乙"}
+                                                               {:type "cite" :attrs {:block "b1"}}]}]}]}
+             {:type "orderedList"
+              :content [{:type "listItem" :content [{:type "paragraph" :content [{:type "text" :text "丙"}]}]}]}]})
+
+(deftest prose-view-lists-test
+  (let [v (vec (views/prose-view {} list-doc [{:block/id "b1" :block/title "維運報告"}]))]
+    (is (= 3 (count v)))
+    (is (= :p.prose (first (v 0))))
+    (is (= :ul.prose-list (first (v 1))))
+    (is (= :ol.prose-list (first (v 2))))
+    (is (= 2 (count (find-all :li (v 1)))))
+    (testing "cite 顯示區塊標題，title 帶完整來源"
+      (let [chip (find-el :span.chip.chip-cite (v 1))]
+        (is (= "維運報告" (last chip)))
+        (is (str/includes? (:title (second chip)) "b1"))))
+    (testing "找不到區塊時顯示「來源」"
+      (is (= "來源" (last (find-el :span.chip.chip-cite (views/prose-view {} list-doc []))))))))
+
+(def float-state
+  (ui/init-state
+   {:report/title "測試報告"
+    :ui/selected "t1"
+    :facts [{:fact/key "k" :fact/label "某事實" :fact/value "1" :fact/unit "" :fact/block "b1"}]
+    :tree [{:node/id "A" :node/kind :heading :node/name "甲"
+            :children [{:node/id "a1" :node/kind :paragraph :node/title "一"
+                        :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "共 2,871 人次，達成 95.7%，另 114 件"}]}]}
+                        :children [{:node/id "t1" :node/kind :table :node/title "達成總表" :node/label "tab:sum"
+                                    :node/table-content {:columns ["指標" "數值"] :rows [["人次" "2,871"] ["達成率" "95.7%"]]}}
+                                   {:node/id "t2" :node/kind :table :node/title "空表" :node/label "tab:empty"}
+                                   {:node/id "f1" :node/kind :figure :node/title "架構圖" :node/label "fig:arch"}]}]}]}))
+
+(defn- open-editor [state id]
+  (-> state (ui/select id) ui/open-editor))
+
+(deftest table-editor-test
+  (let [v (views/app (open-editor float-state "t1"))]
+    (is (str/includes? (pr-str v) "表格內容"))
+    (is (str/includes? (pr-str v) "write_table"))
+    (is (= 2 (count (find-all :th v))))
+    (is (= 4 (count (find-all :td v)))))
+  (let [s (pr-str (views/app (open-editor float-state "t2")))]
+    (is (str/includes? s "尚未填寫：在下方"))
+    (is (not (str/includes? s ":table.data-table"))))
+  (testing "圖有虛線佔位"
+    (is (str/includes? (pr-str (views/app (open-editor float-state "f1"))) "圖檔在匯出 LaTeX 時處理"))))
+
+(deftest paragraph-editor-floats-and-unbound-test
+  (let [s (pr-str (views/app (open-editor float-state "a1")))]
+    (testing "下層表與圖有新增按鈕，action 帶段落 id 與類型"
+      (is (str/includes? s "新增表格"))
+      (is (str/includes? s "[:ui/add-child \"a1\" :table]"))
+      (is (str/includes? s "[:ui/add-child \"a1\" :figure]")))
+    (testing "未綁定的數字以 chip 列出"
+      (is (str/includes? s "未綁定的數字"))
+      (is (every? #(str/includes? s %) ["2,871" "95.7%" "114"]))))
+  (testing "沒有下層表與圖時欄位仍顯示說明"
+    (let [s (pr-str (views/app (open-editor state "a2")))]
+      (is (str/includes? s "新增表格"))
+      (is (str/includes? s "建立後在本文以 label 引用"))))
+  (testing "報告沒有任何事實時不提醒"
+    (is (not (str/includes? (pr-str (views/app (open-editor (assoc float-state :facts {}) "a1"))) "未綁定的數字"))))
+  (testing "年月日與章節編號不列入"
+    (let [s (-> float-state
+                (assoc-in [:nodes "a1" :node/prose]
+                          {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "114 年 3 月 15 日，見第 2.1.1 節，共 7 站"}]}]})
+                (open-editor "a1") views/app pr-str)]
+      (is (str/includes? s "未綁定的數字"))
+      (is (not (str/includes? s "2.1.1")))
+      (is (not (str/includes? s "\"114\"")))))
+  (testing "沒有裸數字時不顯示提醒"
+    (is (not (str/includes? (pr-str (views/app (open-editor state "a1"))) "未綁定的數字"))))
+  (testing "超過 12 個以「等 N 個」表示"
+    (let [many (assoc-in float-state [:nodes "a1" :node/prose]
+                         {:type "doc" :content [{:type "paragraph"
+                                                 :content [{:type "text" :text (str/join " " (range 100 115))}]}]})
+          s (pr-str (views/app (open-editor many "a1")))]
+      (is (str/includes? s "等 15 個")))))
+
+(deftest fulltext-floats-test
+  (let [v (views/app (ui/set-page (ui/select float-state "A") :fulltext))
+        s (pr-str v)]
+    (is (str/includes? s "表 tab:sum"))
+    (is (str/includes? s "圖 fig:arch"))
+    (is (= 1 (count (find-all :table.data-table v))) "有內容的表格顯示成表格")
+    (is (str/includes? s "（尚未填寫）"))
+    (is (str/includes? s "圖檔在匯出 LaTeX 時處理"))))
+
+(deftest table-card-unfilled-badge-test
+  (is (str/includes? (pr-str (views/app float-state)) "尚未填寫")))
+
+(deftest count-info-test
+  (testing "沒有字數的卡片或沒有內容也沒目標：不顯示"
+    (is (nil? (views/count-info nil nil)))
+    (is (nil? (views/count-info nil 400)))
+    (is (nil? (views/count-info 0 nil))))
+  (testing "只有字數"
+    (is (= {:text "312 字"} (views/count-info 312 nil)))
+    (is (= {:text "12,345 字"} (views/count-info 12345 nil))))
+  (testing "沒有本文但有目標"
+    (is (= "目標 400 字" (:text (views/count-info 0 400)))))
+  (testing "字數／目標；80%–120% 之間不上色"
+    (is (= {:text "330／400 字"} (views/count-info 330 400)))
+    (is (nil? (:class (views/count-info 320 400))) "剛好 80%")
+    (is (nil? (:class (views/count-info 480 400))) "剛好 120%"))
+  (testing "低於 80% 為不足、超過 120% 為超出，title 說明差多少"
+    (let [low (views/count-info 260 400) high (views/count-info 500 400)]
+      (is (= "count-low" (:class low)))
+      (is (= "比目標少 35%（目標 400 字）" (:title low)))
+      (is (= "count-high" (:class high)))
+      (is (= "比目標多 25%（目標 400 字）" (:title high))))))
+
+(def count-state
+  (ui/init-state
+   {:report/title "測試報告"
+    :ui/selected "p1"
+    :tree [{:node/id "H" :node/kind :heading :node/name "甲" :node/target-chars 1000
+            :children [{:node/id "p1" :node/kind :paragraph :node/title "背景" :node/target-chars 10
+                        :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "一二 三四五六七八九十十一"}]}]}}
+                       {:node/id "p2" :node/kind :paragraph :node/title "目標" :node/target-chars 400}
+                       {:node/id "p3" :node/kind :paragraph :node/title "已寫"
+                        :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "已有本文"}]}]}}]}]}))
+
+(defn- spans-with
+  "帶有指定 class 的 :span（class 在屬性的 :class 向量裡）的文字。"
+  [cls hiccup]
+  (vec (for [el (tree-seq coll? seq hiccup)
+             :when (and (vector? el) (= :span (first el)) (map? (second el))
+                        (some #{cls} (:class (second el))))]
+         (last el))))
+
+(deftest count-views-test
+  (testing "看板卡片：段落的字數／目標、標題合計、沒有本文只顯示目標"
+    (let [shown (set (spans-with "card-count" (views/app count-state)))]
+      (is (contains? shown "12／10 字") (pr-str shown))
+      (is (contains? shown "目標 400 字"))
+      (is (contains? shown "4 字"))
+      (is (contains? shown "16／1,000 字") "標題合計（12 + 4）對 1,000 字目標")))
+  (testing "全文頁的大綱不顯示字數"
+    (let [view (views/app (ui/set-page count-state :fulltext))]
+      (is (nil? (find-el :div.outline-total view)))
+      (is (empty? (spans-with "outline-count" view)))))
+  (testing "編輯區：本文區的字數、目標字數欄位、標題的合計"
+    (let [view (views/app (assoc-in count-state [:ui :editor-collapsed] false))
+          html (pr-str view)]
+      (is (= ["12／10 字"] (spans-with "zone-count" view)))
+      (is (str/includes? html "目標字數"))
+      (is (str/includes? html "[:ui/set-target-chars \"p1\" [:event/target-value]]"))))
+  (testing "標題的編輯區顯示整章合計"
+    (let [view (views/app (-> count-state (assoc-in [:ui :editor-collapsed] false) (assoc-in [:ui :selected] "H")))]
+      (is (= ["整章合計 16／1,000 字"] (spans-with "target-total" view))))))

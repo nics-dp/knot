@@ -53,7 +53,9 @@
       (is (= #{:position} (:fields (one (change :node/order-key "N")))))
       (is (= #{:position} (:fields (one (change :node/parent :q)))))
       (is (= #{:status} (:fields (one (change :node/status :ai)))))
-      (is (= #{:settings} (:fields (one (change :node/label "圖 1"))))))
+      (is (= #{:settings} (:fields (one (change :node/label "圖 1")))))
+      (testing "表格內容（write_table）獨立一類"
+        (is (= #{:table} (:fields (one (change :node/table-content {:columns ["年"] :rows [["2025"]]})))))))
     (testing "只改版本號不列；沒有變動的欄位不列"
       (is (empty? (history/entries [(cs 1 0 (change :node/version 2))])))
       (is (= #{:prose} (:fields (one (change :node/prose "新文" :node/title "原標題"))))))

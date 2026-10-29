@@ -189,3 +189,31 @@
       (is (nil? (by-pair ["b1" "b2"]))))
     (testing "非相鄰的摘要關係保留"
       (is (= :summarizes (:relation/type (by-pair ["b2" "a2"])))))))
+
+(deftest char-counts-test
+  (let [doc (fn [s] {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text s}]}]})
+        state {:facts {}
+               :nodes (tree/from-nested
+                       [{:node/id "A" :node/kind :heading :node/name "甲"
+                         :children [{:node/id "iA" :node/kind :intro :node/prose (doc "引 言")}
+                                    {:node/id "a1" :node/kind :paragraph :node/title "一" :node/prose (doc "一二三")}
+                                    {:node/id "a2" :node/kind :paragraph :node/title "二"}
+                                    {:node/id "A1" :node/kind :heading :node/name "甲一"
+                                     :children [{:node/id "x1" :node/kind :paragraph :node/title "x" :node/prose (doc "四五")}
+                                                {:node/id "t1" :node/kind :table :node/title "表"
+                                                 :node/table-content {:columns ["欄"] :rows [["不算"]]}}]}]}
+                        {:node/id "B" :node/kind :heading :node/name "乙"}])}
+        counts (tree/char-counts state)]
+    (testing "段落與引言為本文字數，沒有本文為 0"
+      (is (= 2 (counts "iA")))
+      (is (= 3 (counts "a1")))
+      (is (= 0 (counts "a2"))))
+    (testing "標題為底下所有段落與引言的合計（含下層標題）；沒有內容為 0"
+      (is (= 2 (counts "A1")))
+      (is (= 7 (counts "A")))
+      (is (= 0 (counts "B"))))
+    (testing "表格與圖沒有字數"
+      (is (not (contains? counts "t1"))))
+    (testing "單張卡片"
+      (is (= 7 (tree/subtree-chars state "A")))
+      (is (nil? (tree/subtree-chars state "t1"))))))

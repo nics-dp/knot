@@ -106,26 +106,41 @@
 ;; ---------------------------------------------------------------------------
 ;; 新增
 
-(defn- new-node [kind title intent]
+(defn- new-node [kind title intent label target-chars]
   (let [draft (or intent "")]
-    (case kind
-      :intro {:node/kind :intro :node/draft draft}
-      :paragraph {:node/kind :paragraph :node/title title :node/status :none :node/draft draft}
-      :heading {:node/kind :heading :node/name title :node/draft draft})))
+    (cond-> (case kind
+              :intro {:node/kind :intro :node/draft draft}
+              :paragraph {:node/kind :paragraph :node/title title :node/status :none :node/draft draft}
+              :heading {:node/kind :heading :node/name title :node/draft draft}
+              (:table :figure) {:node/kind kind :node/title title :node/draft draft :node/label label})
+      target-chars (assoc :node/target-chars target-chars))))
 
-(defn- field-error [kind title]
+(defn- target-chars-error
+  "目標字數的檢查：只有標題、段落、引言可設定，且必須是正整數；合法（含沒給）時為 nil。"
+  [kind target-chars]
   (cond
-    (not (#{:heading :paragraph :intro} kind)) "kind 只接受 heading、paragraph、intro"
+    (nil? target-chars) nil
+    (not (#{:heading :paragraph :intro} kind)) (str (kind-names kind) "沒有字數，不能設定 target_chars")
+    (not (and (integer? target-chars) (pos? target-chars))) "target_chars 必須是正整數（例如 400）"))
+
+(defn- field-error [kind title label target-chars]
+  (cond
+    (target-chars-error kind target-chars) (target-chars-error kind target-chars)
+    (not (#{:heading :paragraph :intro :table :figure} kind)) "kind 只接受 heading、paragraph、intro、table、figure"
+    (and (some? label) (not (#{:table :figure} kind))) "label（代稱）只用於表格與圖，標題、段落、引言不需要"
     (and (= kind :intro) (not (str/blank? (when (string? title) title)))) "引言沒有名稱，不需要 title"
-    (and (not= kind :intro) (blank? title)) "需要 title（標題名稱或段落標題）"))
+    (and (not= kind :intro) (blank? title)) (str "需要 title（" (case kind
+                                                                   :heading "標題名稱"
+                                                                   :paragraph "段落標題"
+                                                                   (str (kind-names kind) "的標題")) "）")))
 
 (defn- insert-card
   "在 parent-id 底下新增一張卡片，接在 after-id 之後（省略時引言放最前面、其他放最後）。
   回傳 {:state :id} 或 {:error}。"
-  [state {:keys [parent-id after-id kind title intent]}]
+  [state {:keys [parent-id after-id kind title intent label target-chars]}]
   (let [{:keys [nodes]} state
         probe (assoc nodes ::probe {:node/id ::probe :node/kind kind})]
-    (or (some->> (field-error kind title) (hash-map :error))
+    (or (some->> (field-error kind title label target-chars) (hash-map :error))
         (cond
           (and (some? parent-id) (not (contains? nodes parent-id)))
           {:error (str "找不到 parent_id：" parent-id)}
@@ -147,22 +162,26 @@
                                            (inc (.indexOf (tree/child-ids nodes parent-id) after-id))
                                            after-id)))]
             {:error why}
-            (let [id (random-uuid)
-                  k (if after-id (tree/key-after nodes after-id) (tree/insert-key nodes parent-id kind))
-                  nodes' (assoc nodes id (assoc (new-node kind title intent)
-                                                :node/id id :node/parent parent-id :node/order-key k))
-                  next-para (tree/next-sibling nodes' id)]
-              {:id id
-               :state (-> state
-                          (assoc :nodes nodes')
-                          ;; 原本接在後面的段落改為承接新段落，關係待確認（同畫面的 add-sibling）
-                          (update :relations #(if (= kind :paragraph)
-                                                (tree/mark-pending % nodes' [next-para]
-                                                                   {next-para (tree/prev-sibling nodes' id)})
-                                                %)))}))))))
+            (let [{:keys [label error]} (when (#{:table :figure} kind) (tree/new-label nodes kind label))]
+              (if error
+                {:error error}
+                (let [id (random-uuid)
+                      k (if after-id (tree/key-after nodes after-id) (tree/insert-key nodes parent-id kind))
+                      nodes' (assoc nodes id (assoc (new-node kind title intent label target-chars)
+                                                    :node/id id :node/parent parent-id :node/order-key k))
+                      next-para (tree/next-sibling nodes' id)]
+                  {:id id
+                   :state (-> state
+                              (assoc :nodes nodes')
+                              ;; 原本接在後面的段落改為承接新段落，關係待確認（同畫面的 add-sibling）
+                              (update :relations #(if (= kind :paragraph)
+                                                    (tree/mark-pending % nodes' [next-para]
+                                                                       {next-para (tree/prev-sibling nodes' id)})
+                                                    %)))}))))))))
 
 (defn add-card
-  "新增一張卡片。kind 為 :heading、:paragraph、:intro；parent-id 為 nil 時新增一章。"
+  "新增一張卡片。kind 為 :heading、:paragraph、:intro、:table、:figure；parent-id 為 nil 時新增一章。
+  表格與圖只能放在段落底下，可給 :label 代稱（見 knot.tree/new-label）；其他卡片給 :label 是錯誤。"
   [state {:keys [kind title] :as args}]
   (let [{:keys [error id] :as r} (insert-card state args)]
     (if error
@@ -187,7 +206,8 @@
             {:keys [kind children]} item]
         (cond
           (not (map? item)) (fail "每一項必須是物件")
-          (and (seq children) (not= kind :heading)) (fail (str (kind-names kind "這種卡片") "不能有 children，只有標題能有下層卡片"))
+          (and (seq children) (not (#{:heading :paragraph} kind)))
+          (fail (str (kind-names kind "這種卡片") "不能有 children，只有標題（可有標題、段落、引言）與段落（可有表格、圖）能有下層卡片"))
           (and children (not (sequential? children))) (fail "children 必須是陣列")
           :else
           (let [r (insert-card state (assoc item :parent-id parent-id
@@ -205,7 +225,8 @@
                          more))))))))))
 
 (defn build-outline
-  "一次建立巢狀骨架：items 為 [{:kind :title :intent :children [...]}]。
+  "一次建立巢狀骨架：items 為 [{:kind :title :intent :label :target-chars :children [...]}]（標題的 children 是標題、段落、引言，
+  段落的 children 只能是表格與圖）。
   任何一項不合法就整批不寫。created 依文件順序列出所有新卡片。"
   [state {:keys [parent-id after-id items]}]
   (cond
@@ -227,17 +248,23 @@
 ;; 修改
 
 (defn update-card
-  "修改卡片的名稱（title）或意圖（intent）；不改本文。
+  "修改卡片的名稱（title）、意圖（intent）或目標字數（target-chars）；不改本文。
+  target-chars 要有這個 key 才修改：正整數為設定，nil 為清除（只有標題、段落、引言有字數）。
   給了 version 且與目前版本不同時不寫入（SPEC 5.13）。"
-  [state {:keys [id title intent version]}]
+  [state {:keys [id title intent version] :as args}]
   (let [{:keys [nodes]} state
         node (get nodes id)
-        k (:node/kind node)]
+        k (:node/kind node)
+        target? (contains? args :target-chars)
+        target (:target-chars args)]
     (cond
       (nil? node) {:error (str "找不到卡片：" id)}
       (and (some? version) (not= version (:node/version node)))
       {:error (str "卡片已被修改（目前版本 " (:node/version node) "），請先 get_card 重新讀取")}
-      (and (nil? title) (nil? intent)) {:error "沒有要修改的欄位：請給 title 或 intent"}
+      (and (nil? title) (nil? intent) (not target?)) {:error "沒有要修改的欄位：請給 title、intent 或 target_chars"}
+      (and target? (target-chars-error k target)) {:error (target-chars-error k target)}
+      (and target? (nil? target) (not (#{:heading :paragraph :intro} k)))
+      {:error (str (kind-names k) "沒有字數，不能設定 target_chars")}
       (and (some? title) (= :intro k)) {:error "引言沒有名稱，不能設定 title"}
       (and (some? title) (not (#{:heading :paragraph} k)))
       {:error (str (kind-names k) "沒有可修改的 title")}
@@ -246,10 +273,88 @@
       :else
       {:state (cond-> state
                 (some? title) (ui/set-node-field id (if (= :heading k) :node/name :node/title) title)
-                (some? intent) (ui/set-node-field id :node/draft intent))
+                (some? intent) (ui/set-node-field id :node/draft intent)
+                target? (ui/set-target-chars id target))
        :touched [id]
        :origin :manual
        :label (str "修改" (card-ref nodes id))})))
+
+;; ---------------------------------------------------------------------------
+;; 本文與表格內容（SPEC 5.4）
+
+(defn- version-error [node version]
+  (when (and (some? version) (not= version (:node/version node)))
+    (str "卡片已被修改（目前版本 " (:node/version node) "），請先 get_card 重新讀取")))
+
+(defn write-prose
+  "寫入段落或引言的本文。doc 為 knot.prose/markup->doc 的結果；cite-blocks 是本文 [[cite:...]] 引用的區塊 id（UUID），
+  依序加入卡片的依據（已有的保留、不重複）。段落的狀態轉為 :ai；引言不套用這組狀態。
+  不論原本的狀態（含 :human）一律寫入，使用者可由歷程比較與復原。給了 version 且不同時不寫入。"
+  [state {:keys [id doc cite-blocks version]}]
+  (let [{:keys [nodes]} state
+        node (get nodes id)
+        k (:node/kind node)]
+    (cond
+      (nil? node) {:error (str "找不到卡片：" id)}
+      (= :table k) {:error "表格的內容請用 write_table"}
+      (not (#{:paragraph :intro} k)) {:error "標題與圖沒有本文，只有段落與引言能用 write_prose"}
+      (version-error node version) {:error (version-error node version)}
+      (not (map? doc)) {:error "缺少本文"}
+      :else
+      (let [have (set (map :block (:node/citations node)))
+            added (vec (remove have (distinct cite-blocks)))]
+        {:state (cond-> (assoc-in state [:nodes id :node/prose] doc)
+                  (= :paragraph k) (assoc-in [:nodes id :node/status] :ai)
+                  (seq added) (update-in [:nodes id :node/citations] (fnil into []) (map (fn [b] {:block b})) added))
+         :touched [id]
+         :origin :manual
+         :label (if (= :intro k)
+                  (str "撰寫「" (:node/name (get nodes (:node/parent node))) "」的引言")
+                  (str "撰寫「" (:node/title node) "」"))}))))
+
+(defn- cell-text [cell]
+  (cond (string? cell) cell
+        (number? cell) (str cell)))
+
+(defn- table-content-error
+  "columns 與 rows 不合法時的說明；合法時為 nil。"
+  [columns rows]
+  (cond
+    (not (and (sequential? columns) (seq columns))) "columns 必須是非空的陣列（欄名）"
+    (some #(or (not (string? %)) (str/blank? %)) columns) "每個欄名都必須是非空白的字串"
+    (not (sequential? rows)) "rows 必須是陣列（可以是空陣列），每一列是儲存格的陣列"
+    :else
+    (some (fn [[i row]]
+            (cond
+              (not (sequential? row)) (str "第 " (inc i) " 列必須是儲存格的陣列")
+              (not= (count columns) (count row))
+              (str "第 " (inc i) " 列有 " (count row) " 個儲存格，但共有 " (count columns) " 欄，每列都要與欄數相同")
+              :else
+              (some (fn [[j cell]]
+                      (when (nil? (cell-text cell))
+                        (str "第 " (inc i) " 列第 " (inc j) " 格必須是字串或數字")))
+                    (map-indexed vector row))))
+          (map-indexed vector rows))))
+
+(defn write-table
+  "寫入表格卡片自己的內容 {:columns [欄名] :rows [[儲存格]]}（儲存格的數字轉成字串），狀態轉為 :ai。
+  給了 version 且不同時不寫入。"
+  [state {:keys [id columns rows version]}]
+  (let [{:keys [nodes]} state
+        node (get nodes id)]
+    (cond
+      (nil? node) {:error (str "找不到卡片：" id)}
+      (not= :table (:node/kind node)) {:error (str (kind-names (:node/kind node)) "不是表格，write_table 只能寫入表格卡片")}
+      (version-error node version) {:error (version-error node version)}
+      (table-content-error columns rows) {:error (table-content-error columns rows)}
+      :else
+      {:state (-> state
+                  (assoc-in [:nodes id :node/table-content]
+                            {:columns (vec columns) :rows (mapv #(mapv cell-text %) rows)})
+                  (assoc-in [:nodes id :node/status] :ai))
+       :touched [id]
+       :origin :manual
+       :label (str "填寫表格「" (:node/title node) "」")})))
 
 ;; ---------------------------------------------------------------------------
 ;; 移動

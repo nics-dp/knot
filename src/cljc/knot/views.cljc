@@ -7,6 +7,7 @@
             [knot.history :as history]
             [knot.layout :as layout]
             [knot.note :as note]
+            [knot.prose :as prose]
             [knot.tree :as tree]
             [knot.ui :as ui]))
 
@@ -27,6 +28,37 @@
 
 (defn- gist [s]
   (str/replace (or s "") "；" "，"))
+
+;; 字數 -----------------------------------------------------------------------
+
+(defn format-chars
+  "字數加千分位：12345 → \"12,345\"。"
+  [n]
+  (str/replace (str n) #"\B(?=(\d{3})+(?!\d))" ","))
+
+(def count-low-ratio "低於目標的這個比例提示不足。" 0.8)
+(def count-high-ratio "高於目標的這個比例提示超出。" 1.2)
+
+(defn count-info
+  "字數的顯示：chars 為目前字數（nil 表示這種卡片沒有字數）、target 為目標字數（nil 表示沒設定）。
+  回傳 {:text 顯示文字 :class 顏色類別或 nil :title 說明或 nil}；沒有東西可顯示時為 nil。
+  有本文：「312 字」或「312／400 字」；沒有本文但有目標：「目標 400 字」。
+  低於目標的 80% 為 :count-low（不足）、超過 120% 為 :count-high（超出），title 說明差多少。"
+  [chars target]
+  (cond
+    (nil? chars) nil
+    (and (zero? chars) (nil? target)) nil
+    (zero? chars) {:text (str "目標 " (format-chars target) " 字")
+                   :title "尚無本文"}
+    (nil? target) {:text (str (format-chars chars) " 字")}
+    :else
+    (let [ratio (/ chars target)
+          pct (fn [r] (str (Math/round (double (* 100 r))) "%"))]
+      (cond-> {:text (str (format-chars chars) "／" (format-chars target) " 字")}
+        (< ratio count-low-ratio)
+        (assoc :class "count-low" :title (str "比目標少 " (pct (/ (- target chars) target)) "（目標 " (format-chars target) " 字）"))
+        (> ratio count-high-ratio)
+        (assoc :class "count-high" :title (str "比目標多 " (pct (/ (- chars target) target)) "（目標 " (format-chars target) " 字）"))))))
 
 (defn- grip []
   [:span.grip {:aria-hidden "true"}
@@ -94,7 +126,12 @@
 (defn xref-text [label]
   (str (if (str/starts-with? label "fig:") "圖 " "表 ") label))
 
-(defn- render-inline [facts {:keys [type text attrs]}]
+(defn cite-text
+  "引用區塊的顯示文字：區塊標題，找不到時為「來源」。blocks 為素材區塊的序列。"
+  [blocks block-id]
+  (or (some #(when (= (str block-id) (str (:block/id %))) (not-empty (:block/title %))) blocks) "來源"))
+
+(defn- render-inline [facts blocks {:keys [type text attrs]}]
   (case type
     "text" text
     "fact" (let [{:fact/keys [label value unit]} (get facts (:key attrs))]
@@ -102,12 +139,32 @@
                [:span.chip.chip-fact {:title (str label "（" (:key attrs) "）")} value unit]
                [:span.chip.chip-warn {:title "找不到這個事實"} (:key attrs)]))
     "ref" [:span.chip.chip-ref (xref-text (:label attrs))]
+    "cite" [:span.chip.chip-cite {:title (str "來源區塊：" (:block attrs))} (cite-text blocks (:block attrs))]
     nil))
 
-(defn prose-view [facts doc]
-  (for [[i block] (map-indexed vector (:content doc))]
-    [:p.prose {:replicant/key i}
-     (map #(render-inline facts %) (:content block))]))
+(defn prose-view
+  "唯讀的本文：段落、項目清單、編號清單（清單只有一層）。blocks 為素材區塊，用來顯示引用的區塊標題。"
+  [facts doc & [blocks]]
+  (for [[i block] (map-indexed vector (:content doc))
+        :let [inline (fn [para] (map #(render-inline facts blocks %) (:content para)))]]
+    (case (:type block)
+      ("bulletList" "orderedList")
+      [(if (= "bulletList" (:type block)) :ul.prose-list :ol.prose-list) {:replicant/key i}
+       (for [[j item] (map-indexed vector (:content block))]
+         [:li {:replicant/key j} (mapcat inline (:content item))])]
+      [:p.prose {:replicant/key i} (inline block)])))
+
+(defn table-card-view
+  "表格卡片自己的內容（{:columns :rows}）：欄名為表頭。"
+  [{:keys [columns rows]}]
+  [:div.data-table-wrap
+   [:table.data-table
+    [:thead [:tr (for [[i c] (map-indexed vector columns)] [:th {:replicant/key i} c])]]
+    [:tbody (for [[ri row] (map-indexed vector rows)]
+              [:tr {:replicant/key ri}
+               (for [[ci cell] (map-indexed vector row)] [:td {:replicant/key ci} cell])])]]])
+
+(defn- table-filled? [node] (boolean (seq (:columns (:node/table-content node)))))
 
 ;; ---------------------------------------------------------------------------
 ;; 頂部列
@@ -271,7 +328,12 @@
   (when (pos? (or n 0))
     [:span.todo-count {:title (str n " 則未完成的待辦")} n]))
 
-(defn- tree-card [{:keys [nodes title role drag over agent todos]} {:keys [id top height]}]
+(defn- count-span
+  "字數小字：class 為基本類別，超出或不足時加上顏色類別並以 title 說明。"
+  [base {:keys [text class title]}]
+  [:span {:class (cond-> [base] class (conj class)) :title title} text])
+
+(defn- tree-card [{:keys [nodes title role drag over agent todos counts]} {:keys [id top height]}]
   (let [node (get nodes id)
         k (:node/kind node)
         dragging? (= id drag)
@@ -301,12 +363,16 @@
          [:span.card-line {:replicant/key "t"}
           [:span.mono.text-navy (if (= k :table) "表" "圖")]
           [:span.card-title (title id)]
+          (when (and (= k :table) (not (table-filled? node)))
+            [:span.pill.pill-none "尚未填寫"])
           (todo-badge (get todos id))]
          [:span.mono.muted.small {:replicant/key "l"} (:node/label node)])
 
         (list
          [:span.card-line {:replicant/key "t"}
           [:span.card-title (title id)]
+          (when-let [info (count-info (get counts id) (:node/target-chars node))]
+            (count-span "card-count" info))
           (when-let [{:keys [label class]} (status-pill (:node/status node))]
             [:span.pill {:class class} label])
           (todo-badge (get todos id))]
@@ -361,7 +427,7 @@
                              :disabled (nil? k)
                              :title (if k
                                       (str "在「" (tree/display-title nodes (tree/numbering nodes) id) "」後面新增")
-                                      "表格與圖的 label 命名方式待定，暫不提供新增")
+                                      "這張卡片不能新增同層卡片")
                              :on {:click [[:ui/add-sibling id]]}}
       "新增"]
      [:button.btn.btn-danger {:type "button"
@@ -400,7 +466,8 @@
         ;; agent 剛修改的卡片：兩個相同的動畫交替使用，同一張卡片再被修改時才會重新播放
         agent (when-let [{:keys [ids n]} (:agent-change ui)]
                 {:ids (set ids) :class (if (even? n) "card-agent-a" "card-agent-b")})
-        drag-depth (when drag (tree/depth nodes drag))]
+        drag-depth (when drag (tree/depth nodes drag))
+        counts (tree/char-counts state)]
     [:section.tree-panel {:aria-label "卡片"}
      [:header.board-head
       [:h2.area-title "卡片"]
@@ -443,7 +510,7 @@
            [:div.tree-inner {:style {:transform (str "translateY(" translate "px)")}}
             (relation-chips state col roles)
             (for [c col]
-              (tree-card {:nodes nodes :title title :role (roles (:id c)) :drag drag :over over :agent agent :todos todos} c))
+              (tree-card {:nodes nodes :title title :role (roles (:id c)) :drag drag :over over :agent agent :todos todos :counts counts} c))
             (when (and over (some #(= (:id over) (:id %)) col))
               (insert-marker col over))]]])])]]]))
 
@@ -515,7 +582,7 @@
           :intro
           [:div.ft-block.ft-intro (select-on id)
            (if-let [doc (:node/prose node)]
-             (prose-view facts doc)
+             (prose-view facts doc (:blocks state))
              (if (and intents? (not (str/blank? intent)))
                (ft-plan "引言 · 尚未撰寫" intent)
                [:p.prose.muted "（引言尚未生成，將由 agent 依下層內容補上）"]))]
@@ -523,16 +590,27 @@
           :paragraph
           [:div.ft-block (assoc (select-on id) :role "button" :tabindex 0)
            (if-let [doc (:node/prose node)]
-             (prose-view facts doc)
+             (prose-view facts doc (:blocks state))
              (if intents?
                (ft-plan (str (:node/title node) " · 尚未撰寫")
                         (if (str/blank? intent) "（尚未撰寫，也還沒有意圖）" intent))
                [:p.prose.muted (str "（尚未撰寫：" (:node/title node) "）")]))]
 
-          (:table :figure)
-          [:div.ft-float {:replicant/key id}
-           [:span.chip.chip-ref (xref-text (:node/label node))]
-           [:span (:node/title node)]]))]]))
+          :table
+          [:div.ft-float.ft-table (assoc (select-on id) :role "button" :tabindex 0)
+           [:div.ft-caption
+            [:span.chip.chip-ref (xref-text (:node/label node))]
+            [:span (:node/title node)]]
+           (if (table-filled? node)
+             (table-card-view (:node/table-content node))
+             [:div.ft-float-empty "（尚未填寫）"])]
+
+          :figure
+          [:div.ft-float.ft-figure (assoc (select-on id) :role "button" :tabindex 0)
+           [:div.figure-placeholder "圖檔在匯出 LaTeX 時處理"]
+           [:div.ft-caption
+            [:span.chip.chip-ref (xref-text (:node/label node))]
+            [:span (:node/title node)]]]))]]))
 
 ;; ---------------------------------------------------------------------------
 ;; 編輯區
@@ -606,6 +684,19 @@
                             :value (or value "")
                             :on {:input [[:ui/set-node-field id :node/draft [:event/target-value]]]
                                  :compositionend [[:ui/set-node-field id :node/draft [:event/target-value]]]}}])))
+
+(defn- target-field
+  "目標字數：數字輸入，可清空；note 是輸入框旁的補充（例如標題的整章合計）。"
+  [id value note]
+  (field "target" "目標字數" nil
+         [:div.target-row
+          [:input.target-input {:replicant/key (str id "-target")
+                                :type "number" :min 1 :step 1 :inputmode "numeric"
+                                :aria-label "目標字數"
+                                :placeholder "例如 400"
+                                :value (if value (str value) "")
+                                :on {:input [[:ui/set-target-chars id [:event/target-value]]]}}]
+          note]))
 
 (defn- relation-select
   "相鄰關係的類型，放在項目列開頭、取代類型標籤。"
@@ -770,6 +861,9 @@
     :intent [:span.source-tag "意圖"]
     nil))
 
+(defn- has-prose-tag [has-prose]
+  (when has-prose [:span.source-tag.source-prose "已有本文"]))
+
 (defn- section-gist
   "摘要列的一項：只有一筆時列出名稱，多筆時列出筆數。"
   [{:keys [group title entries]}]
@@ -779,14 +873,14 @@
       ;; 本段的名稱已在標題列，只標出帶的是意圖
       (= title "本段") [:span "本段意圖" (source-tag (:source e))]
       more [:span (str title " " (count entries) " 項")]
-      :else [:span title "：" (:label e) (source-tag (:source e))])))
+      :else [:span title "：" (:label e) (source-tag (:source e)) (has-prose-tag (:has-prose e))])))
 
 (defn- context-zone [state id]
   (when-let [{:keys [sections chars]} (context/generation-context state id)]
     (let [by-group (group-by :group sections)]
       (zone "context" "撰寫時參考的內容"
             {:class "zone-auto"
-             :hint "由上方的設定與周邊卡片自動組成；周邊卡片有本文帶本文，沒有則帶意圖"
+             :hint "由上方的設定與周邊卡片自動組成；周邊卡片只帶意圖，已有本文的標示「已有本文」，agent 需要時再取"
              :aside [:span.auto-size (str "約 " chars " 字")]}
             [:div.context-summary
              (for [[g label] context/group-label
@@ -800,9 +894,9 @@
              (for [{:keys [title entries]} sections]
                [:div.context-section {:replicant/key title}
                 [:h4 title]
-                (for [[i {:keys [label text relation source warn]}] (map-indexed vector entries)]
+                (for [[i {:keys [label text relation source warn has-prose]}] (map-indexed vector entries)]
                   [:div.context-entry {:replicant/key i :class (when warn "cite-warn")}
-                   [:span.context-label label (source-tag source)
+                   [:span.context-label label (source-tag source) (has-prose-tag has-prose)
                     (when relation [:span.relation-chip relation])]
                    [:span.context-text (if (str/blank? text) "（未填意圖）" (gist text))]])])]))))
 
@@ -856,6 +950,20 @@
            (diff-entry (text before) (text after))
            [:p.muted.small "這次修改沒有改動本文；改了什麼見下方「留言與歷程」。"])]))))
 
+(def ^:private unbound-limit 12)
+
+(defn- unbound-note
+  "本文中不在標記內的數字（SPEC 5.4「驗證」）：由本文即時算出，沒有時不顯示。"
+  [facts node]
+  (when-let [nums (seq (prose/unbound-numbers facts (:node/prose node)))]
+    [:div.unbound-note {:replicant/key "unbound"}
+     [:span.unbound-label "未綁定的數字："]
+     (for [n (take unbound-limit nums)]
+       [:span.chip.chip-warn {:replicant/key n} n])
+     (when (> (count nums) unbound-limit)
+       [:span.unbound-more (str "等 " (count nums) " 個")])
+     [:span.unbound-hint "（素材與事實接上後可改為引用事實）"]]))
+
 (defn- prose-zone
   "本文區。empty-note：尚未有本文時的說明；actions：本文下方的說明或操作（可省略）。"
   [{:keys [facts ui] :as state} node empty-note & actions]
@@ -863,11 +971,14 @@
         diff? (and (boolean (:show-previous ui)) (not change?))]
     (zone "prose" "本文"
           {:class "zone-output"
-           :aside [:div.segmented.segmented-small {:role "group" :aria-label "本文顯示方式"}
+           :aside (list
+                   (when-let [info (count-info (prose/char-count facts (:node/prose node)) (:node/target-chars node))]
+                     (count-span "zone-count" info))
+                   [:div.segmented.segmented-small {:replicant/key "seg" :role "group" :aria-label "本文顯示方式"}
                    [:button {:type "button" :aria-pressed (str (not (or diff? change?)))
                              :on {:click (when (or diff? change?) [[:ui/show-current]])}} "目前內容"]
                    [:button {:type "button" :aria-pressed (str diff?)
-                             :on {:click (when-not diff? [[:ui/toggle-previous]])}} "與前一版比較"]]}
+                             :on {:click (when-not diff? [[:ui/toggle-previous]])}} "與前一版比較"]])}
           (cond
             change? (change-view state node)
             diff? (previous-view state node)
@@ -880,7 +991,8 @@
                (edit-box "prose-box"
                          [:div.prose-box.prose-editor {:replicant/key (str id "-prose")
                                                        :replicant/on-render [[:prose/render id true]]
-                                                       :replicant/on-unmount [[:prose/destroy]]}]))))
+                                                       :replicant/on-unmount [[:prose/destroy]]}])
+               (unbound-note facts node))))
           (when (seq actions) [:div.prose-actions actions]))))
 
 ;; 留言與待辦 -----------------------------------------------------------------
@@ -962,7 +1074,7 @@
 ;; 歷程（SPEC 5.4 卡片歷程）----------------------------------------------------
 
 (def ^:private field-labels
-  [[:name "名稱"] [:intent "意圖"] [:prose "本文"] [:basis "依據"]
+  [[:name "名稱"] [:intent "意圖"] [:prose "本文"] [:table "表格內容"] [:basis "依據"]
    [:relations "關係"] [:position "位置"] [:status "狀態"] [:settings "設定"]])
 
 (def ^:private kind-labels
@@ -998,7 +1110,7 @@
 (defn- event-icon-key [kind fields]
   (cond
     (#{:create :import :delete :undo} kind) kind
-    (some fields [:prose :name :intent :basis]) :pen
+    (some fields [:prose :table :name :intent :basis]) :pen
     (= #{:relations} fields) :link
     (= #{:position} fields) :move
     :else :pen))
@@ -1092,6 +1204,7 @@
      (zone "inputs" "生成依據"
            {:hint "意圖、依據與關係是 agent 撰寫時的依據，不會出現在報告中"}
            (intent-field id (:node/draft node) "這段要說什麼、要強調什麼、用什麼語氣。可以分行列點。")
+           (target-field id (:node/target-chars node) nil)
            (citations state node)
            (field "rels" "關係"
                   {:editing? editing?
@@ -1104,14 +1217,19 @@
                     [:span.muted.small "與前後段的關係會在這裡出現；不相鄰的段落可在「編輯」後新增。"])
                   (when (get-in state [:ui :rel-picker])
                     (rel-picker state title id)))
-           (when (seq kids)
-             (field "kids" "下層表與圖" {:count (count kids)}
+           (field "kids" "下層表與圖"
+                  {:count (when (seq kids) (count kids))
+                   :action [:div.field-actions
+                            (field-button "新增表格" [[:ui/add-child id :table]])
+                            (field-button "新增圖" [[:ui/add-child id :figure]])]}
+                  (if (seq kids)
                     [:div.items
                      (for [k kids]
                        (item-row k {:tag (if (= :figure (tree/kind nodes k)) "圖" "表格")
                                     :tag-class "tag-warm"
                                     :title (title k) :on-title [[:ui/select k]]
-                                    :meta [:span.mono (get-in nodes [k :node/label])]}))])))
+                                    :meta [:span.mono (get-in nodes [k :node/label])]}))]
+                    [:span.muted.small "這段要搭配的表格或圖，建立後在本文以 label 引用。"])))
      (context-zone state id)
      (prose-zone state node "尚未有本文：可直接在下方撰寫，或寫好意圖並加入依據後在「留言與歷程」交代 agent 撰寫。")
      (notes-zone state id))))
@@ -1125,6 +1243,13 @@
     (list
      (zone "inputs" "設定" {:hint "agent 撰寫下層段落與引言時會參考這裡的意圖"}
            (intent-field id (:node/draft node) "這一章／節要涵蓋什麼、回應哪些契約項目、與前後章節的關係。")
+           (let [level (get heading-level-names (dec (tree/depth nodes id)))
+                 t (:node/target-chars node)
+                 chars (get (tree/char-counts state) id)
+                 info (when (pos? chars) (count-info chars t))]
+             (target-field id t
+                           (when info
+                             (count-span "target-total" (update info :text #(str "整" level "合計 " %))))))
            (when-let [items (seq (:node/contract-items node))]
              (field "contract" "契約項目" {:count (count items)}
                     [:div.chips (for [c items] [:span.tag {:replicant/key c} c])])))
@@ -1157,20 +1282,30 @@
   (let [node (get nodes id)]
     (list
      (zone "inputs" "生成依據" {:hint "可留空；agent 會依這一層的下層內容撰寫引言"}
-           (intent-field id (:node/draft node) "想強調的重點或語氣寫在這裡，agent 會依下層內容撰寫引言。"))
+           (intent-field id (:node/draft node) "想強調的重點或語氣寫在這裡，agent 會依下層內容撰寫引言。")
+           (target-field id (:node/target-chars node) nil))
      (context-zone state id)
      (prose-zone state node "尚未有本文：可直接撰寫，或在下層內容大致完成後於「留言與歷程」交代 agent 撰寫。"
                  [:span.small.muted {:replicant/key "note"} "引言適合在下層內容大致完成後才撰寫"])
      (notes-zone state id))))
 
 (defn- float-editor [{:keys [nodes] :as state} id]
-  (let [node (get nodes id)]
+  (let [node (get nodes id)
+        table? (= :table (:node/kind node))]
     (list
      (zone "inputs" "設定" {:hint "段落撰寫時會以 label 引用這張表／圖"}
            (intent-field id (:node/draft node) "這張表／圖要呈現什麼、圖說的重點。")
            (field "label" "LaTeX label" nil [:span.mono.boxed-muted (:node/label node)])
            (when-let [f (:node/figure-file node)]
-             (field "file" "圖檔" nil [:span.mono.boxed-muted f])))
+             (field "file" "圖檔" nil [:span.mono.boxed-muted f]))
+           (when-not table?
+             [:div.figure-placeholder {:replicant/key "placeholder"} "圖檔在匯出 LaTeX 時處理"]))
+     (when table?
+       (zone "content" "表格內容"
+             {:aside [:span.small.muted "agent 以 write_table 填寫"]}
+             (if (table-filled? node)
+               (table-card-view (:node/table-content node))
+               [:p.muted.small "尚未填寫：在下方「留言與歷程」交代 agent 填寫表格內容。"])))
      (notes-zone state id))))
 
 ;; 抽屜 ----------------------------------------------------------------------

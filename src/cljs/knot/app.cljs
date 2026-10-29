@@ -50,6 +50,7 @@
    :ui/set-source-query ui/set-source-query
    :ui/set-page ui/set-page
    :ui/set-node-field ui/set-node-field
+   :ui/set-target-chars ui/set-target-chars
    :ui/set-prose ui/set-prose
    :ui/add-citation ui/add-citation
    :ui/remove-citation ui/remove-citation
@@ -282,7 +283,8 @@
              :fact-text (fn [k]
                           (let [{:fact/keys [value unit]} (get-in @store [:facts k])]
                             (if value (str value unit) k)))
-             :ref-text views/xref-text})))
+             :ref-text views/xref-text
+             :cite-text #(views/cite-text (:blocks @store) %)})))
 
     :prose/destroy
     (fn [{:keys [dispatch-data]} _]
