@@ -75,8 +75,11 @@
     (contains? counts (:node/id n)) (assoc :chars (get counts (:node/id n)))
     (:node/target-chars n) (assoc :target_chars (:node/target-chars n))))
 
-(defn- get-outline [conn _args]
-  (let [{:keys [nodes report] :as state} (current-state conn)
+(defn- get-outline [conn args]
+  (let [full? (let [v (get args "full_intent")]
+                (when-not (or (nil? v) (boolean? v)) (tool-error! "full_intent 必須是 true 或 false"))
+                (true? v))
+        {:keys [nodes report] :as state} (current-state conn)
         counts (tree/char-counts state)
         numbers (tree/numbering nodes)
         todo-counts (notes/todo-counts (d/db conn))]
@@ -89,7 +92,7 @@
                             :parent_id (some-> (:node/parent n) str)
                             :number (ops/heading-number nodes numbers id)
                             :title (card-title nodes numbers id)
-                            :intent (truncate (:node/draft n) 80)
+                            :intent (if full? (or (:node/draft n) "") (truncate (:node/draft n) 80))
                             :status (status-name n)
                             :has_prose (has-prose? n)
                             :version (:node/version n)}
@@ -188,6 +191,25 @@
 
 ;; ---------------------------------------------------------------------------
 ;; get_writing_context
+
+(def ^:private max-batch 30)
+
+(defn- get-cards
+  "一次取得多張卡片，每張與 get_card 相同；找不到或格式不對的 id 列在 errors，不影響其他卡片。"
+  [conn args]
+  (let [ids (get args "card_ids")]
+    (when-not (and (sequential? ids) (seq ids) (every? string? ids))
+      (tool-error! "card_ids 必須是非空的字串陣列（卡片 id，由 get_outline 取得）"))
+    (when (> (count ids) max-batch)
+      (tool-error! (str "一次最多 " max-batch " 張卡片，收到 " (count ids) " 張；請分批呼叫")))
+    (let [results (for [raw (distinct ids)]
+                    (try {:card (get-card conn {"card_id" raw})}
+                         (catch clojure.lang.ExceptionInfo e
+                           (if (::tool-error (ex-data e))
+                             {:error {:card_id raw :error (ex-message e)}}
+                             (throw e)))))]
+      (cond-> {:cards (vec (keep :card results))}
+        (some :error results) (assoc :errors (vec (keep :error results)))))))
 
 (defn- get-writing-context [conn args]
   (let [state (current-state conn)
@@ -504,13 +526,23 @@
 
 (def read-tools
   [{:name "get_outline"
-    :description "取得整份報告的卡片樹（依文件順序的扁平清單）與報告資訊（名稱 title 與副標 subtitle，可用 update_report 修改）：card_id、類型、深度、編號 number、名稱 title、意圖摘要、狀態、是否有本文，字數 chars（段落、引言為本文去掉空白的字數，標題為整章／整節合計，表格與圖沒有）與目標字數 target_chars（有設定才有），以及未完成待辦數 open_todos（沒有待辦時省略）。title 是純名稱，不含編號；編號（標題為「第一章」「1.2」，其他卡片為 null）由卡片的位置決定、隨移動重新計算，存在 number 欄位，不要把編號寫進名稱。這是規劃與定位卡片的起點；意圖已截斷為前 80 字，完整內容請用 get_card。"
-    :inputSchema {:type "object" :properties {} :additionalProperties false}
+    :description "取得整份報告的卡片樹（依文件順序的扁平清單）與報告資訊（名稱 title 與副標 subtitle，可用 update_report 修改）：card_id、類型、深度、編號 number、名稱 title、意圖摘要、狀態、是否有本文，字數 chars（段落、引言為本文去掉空白的字數，標題為整章／整節合計，表格與圖沒有）與目標字數 target_chars（有設定才有），以及未完成待辦數 open_todos（沒有待辦時省略）。title 是純名稱，不含編號；編號（標題為「第一章」「1.2」，其他卡片為 null）由卡片的位置決定、隨移動重新計算，存在 number 欄位，不要把編號寫進名稱。這是規劃與定位卡片的起點；意圖預設截斷為前 80 字；要完整意圖時傳 full_intent: true（撰寫或審閱整份大綱時用，不必逐張 get_card）。"
+    :inputSchema {:type "object"
+                  :properties {:full_intent {:type "boolean" :description "true 時回傳完整意圖（預設 false：前 80 字）"}}
+                  :additionalProperties false}
     :handler get-outline}
    {:name "get_card"
     :description "取得單張卡片的完整資料：完整意圖、字數 chars 與目標字數 target_chars（有設定才有）、本文 prose（與 write_prose 相同的格式：每行一段、「- 」與「1. 」開頭的行是清單、事實以 {{fact:key}}、交互參照以 {{ref:label}}、引用以 [[cite:區塊id]] 表示，修改後可直接交回）與其中未綁定事實的數字 unbound_numbers、表格卡片的 label 與內容 table（欄名 columns 與各列 rows；沒有內容時省略）、圖的 label、所在章節路徑 path（每層為 {number, title}，title 不含編號）、依據的素材、前後段與其他段落的關係、下層卡片（相鄰、遠距關係與下層卡片的 title 同樣是純名稱，編號在 number）、這張卡片上的留言與待辦（notes），以及最近 10 筆修改紀錄 history（舊到新；每筆有時間、修改者 user 或 agent、修改組名稱、類型、改了哪些欄位、是否已復原，名稱與意圖有變時附 text_changes 的前後文字，不含本文全文）。history 讓你知道使用者改了什麼，例如處理待辦前先看，避免蓋掉使用者剛改的內容。要看某張卡片的細節或確認它的關係時使用；card_id 由 get_outline 取得。"
     :inputSchema id-schema
     :handler get-card}
+   {:name "get_cards"
+    :description "一次取得多張卡片（最多 30 張），每張的內容與 get_card 相同。要連續看多張卡片時用它，不必逐張呼叫 get_card。找不到或格式不對的 card_id 列在 errors，不影響其他卡片。"
+    :inputSchema {:type "object"
+                  :properties {:card_ids {:type "array" :items {:type "string"}
+                                          :description "卡片 id 的陣列（UUID，由 get_outline 的 card_id 取得），依序回傳"}}
+                  :required ["card_ids"]
+                  :additionalProperties false}
+    :handler get-cards}
    {:name "get_writing_context"
     :description "取得撰寫某段本文時應參考的內容（章節路徑、本段意圖、依據的素材與事實、前後段、有關係的段落、文風、本段的目標字數 target_chars），與 Knot 編輯區的「撰寫時參考的內容」相同。周邊卡片（上層、前後段、有關係的段落）只帶意圖，has_prose 為 true 表示對方已有本文，需要銜接或用到其結果時用 get_card 取它的本文；引言例外，下層內容有本文時帶本文。撰寫本文時以它為依據，並參考目標字數控制篇幅；只有段落與引言適用。context_chars 是這份參考內容本身的長度，不是本文的字數。"
     :inputSchema id-schema
@@ -701,7 +733,7 @@
 (def supported-versions ["2025-11-25" "2025-06-18" "2025-03-26"])
 
 (def instructions
-  "Knot 是撰寫結構化報告的本機工具。報告是一棵卡片樹：標題（heading，最多四層，編號由位置決定）、引言（intro，每個標題至多一張）、段落（paragraph，要撰寫本文的單位）、表格（table）與圖（figure）。每張卡片有意圖（要寫什麼）、狀態（none：尚無本文、ai：agent 撰寫、human：使用者改過）與選填的本文。卡片以 card_id 識別、留言以 note_id 識別，都是 UUID 字串；指定要操作或查詢的卡片一律用參數 card_id、留言一律用 note_id。卡片名稱（title）不含編號：編號由位置決定、隨移動重新計算，只出現在 number 欄位，不要把編號寫進名稱。請先呼叫 get_outline 了解整體結構，再用 get_card 看單張卡片，撰寫某段前用 get_writing_context 取得應參考的內容（周邊卡片只帶意圖，has_prose 為 true 的表示對方已有本文；需要銜接或用到其結果時用 get_card 取本文），寫好後用 write_prose 交回：本文每一行一段，「- 」開頭是項目清單、「1. 」開頭是編號清單，引用用 {{fact:key}}、{{ref:label}}、[[cite:區塊id]]，不存在的標記會被拒絕。表格與圖先用 add_card 建在段落底下（取得 label），本文再以 {{ref:label}} 引用，表格內容用 write_table 填寫。規劃結構與整理關係可用 add_card、build_outline、update_card、move_card、delete_card、set_relation、add_remote_relation、remove_relation；報告的名稱與副標用 update_report。卡片可設定目標字數（target_chars）；get_outline 與 get_card 回傳每張卡片目前的字數 chars（標題為整章／整節合計，空白不算），get_writing_context 的本段會帶目標字數，撰寫時參考目標字數控制篇幅（大約即可，不必精確）。使用者會在卡片上留言與交代待辦：開始工作時先用 list_todos 查看。處理待辦或修改卡片前先用 get_card 看 history：使用者改過的內容不要蓋掉，有疑問就用 add_note 留言詢問，而不是自行猜測。完成待辦一律用 complete_todo 並附 reply 說明做了什麼。使用者回覆你的提問後，處理完要用 add_note（reply_to 指向那則提問）在同一串回一句說明你怎麼處理；沒有接話的討論串會一直出現在 list_todos 的 questions_answered。一次工作有多次寫入時，每次寫入都傳相同的 group（例如「依審查意見調整大綱」），Knot 的歷程會顯示為一筆，使用者可以一次復原。所有修改都會記錄，使用者可以在 Knot 畫面上檢視與復原。")
+  "Knot 是撰寫結構化報告的本機工具。報告是一棵卡片樹：標題（heading，最多四層，編號由位置決定）、引言（intro，每個標題至多一張）、段落（paragraph，要撰寫本文的單位）、表格（table）與圖（figure）。每張卡片有意圖（要寫什麼）、狀態（none：尚無本文、ai：agent 撰寫、human：使用者改過）與選填的本文。卡片以 card_id 識別、留言以 note_id 識別，都是 UUID 字串；指定要操作或查詢的卡片一律用參數 card_id、留言一律用 note_id。卡片名稱（title）不含編號：編號由位置決定、隨移動重新計算，只出現在 number 欄位，不要把編號寫進名稱。請先呼叫 get_outline 了解整體結構，再用 get_card 看單張卡片（連續看多張用 get_cards；要整份大綱的完整意圖時 get_outline 傳 full_intent: true），撰寫某段前用 get_writing_context 取得應參考的內容（周邊卡片只帶意圖，has_prose 為 true 的表示對方已有本文；需要銜接或用到其結果時用 get_card 取本文），寫好後用 write_prose 交回：本文每一行一段，「- 」開頭是項目清單、「1. 」開頭是編號清單，引用用 {{fact:key}}、{{ref:label}}、[[cite:區塊id]]，不存在的標記會被拒絕。表格與圖先用 add_card 建在段落底下（取得 label），本文再以 {{ref:label}} 引用，表格內容用 write_table 填寫。規劃結構與整理關係可用 add_card、build_outline、update_card、move_card、delete_card、set_relation、add_remote_relation、remove_relation；報告的名稱與副標用 update_report。卡片可設定目標字數（target_chars）；get_outline 與 get_card 回傳每張卡片目前的字數 chars（標題為整章／整節合計，空白不算），get_writing_context 的本段會帶目標字數，撰寫時參考目標字數控制篇幅（大約即可，不必精確）。使用者會在卡片上留言與交代待辦：開始工作時先用 list_todos 查看。處理待辦或修改卡片前先用 get_card 看 history：使用者改過的內容不要蓋掉，有疑問就用 add_note 留言詢問，而不是自行猜測。完成待辦一律用 complete_todo 並附 reply 說明做了什麼。使用者回覆你的提問後，處理完要用 add_note（reply_to 指向那則提問）在同一串回一句說明你怎麼處理；沒有接話的討論串會一直出現在 list_todos 的 questions_answered。一次工作有多次寫入時，每次寫入都傳相同的 group（例如「依審查意見調整大綱」），Knot 的歷程會顯示為一筆，使用者可以一次復原。所有修改都會記錄，使用者可以在 Knot 畫面上檢視與復原。")
 
 (defn- result [id res] {:jsonrpc "2.0" :id id :result res})
 (defn- rpc-error [id code msg] {:jsonrpc "2.0" :id id :error {:code code :message msg}})

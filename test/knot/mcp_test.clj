@@ -71,7 +71,7 @@
 (deftest tools-list-test
   (let [tools (get-in (rpc "tools/list") [:body "result" "tools"])]
     (is (= ["add_card" "add_note" "add_remote_relation" "build_outline" "complete_todo" "delete_card" "get_card"
-            "get_outline" "get_writing_context" "list_todos" "move_card" "remove_relation" "set_relation"
+            "get_cards" "get_outline" "get_writing_context" "list_todos" "move_card" "remove_relation" "set_relation"
             "update_card" "update_report" "write_prose" "write_table"]
            (sort (map #(get % "name") tools))))
     (is (every? #(= "object" (get-in % ["inputSchema" "type"])) tools))
@@ -905,3 +905,33 @@
             props (fn [n] (get-in (some #(when (= n (get % "name")) %) tools) ["inputSchema" "properties"]))]
         (is (every? #(contains? (props %) "target_chars") ["add_card" "update_card"]))
         (is (str/includes? (get-in (rpc "initialize" {}) [:body "result" "instructions"]) "目標字數"))))))
+
+(deftest get-outline-full-intent-test
+  (let [id (card-id "政策背景")
+        long-intent (apply str (repeat 30 "說明政策"))]
+    (call "update_card" {"card_id" id "intent" long-intent})
+    (let [intent-of (fn [args] (some #(when (= id (get % "card_id")) (get % "intent"))
+                                     (get (structured (call "get_outline" args)) "cards")))]
+      (testing "預設截斷為 80 字"
+        (is (= (str (subs long-intent 0 80) "…") (intent-of {}))))
+      (testing "full_intent 回傳完整意圖"
+        (is (= long-intent (intent-of {"full_intent" true}))))
+      (testing "格式錯誤"
+        (is (re-find #"full_intent" (error-text (call "get_outline" {"full_intent" "yes"}))))))))
+
+(deftest get-cards-test
+  (let [a (card-id "政策背景") b (card-id "第一章 計畫概述") missing (str (random-uuid))]
+    (testing "依序回傳，內容與 get_card 相同"
+      (let [out (structured (call "get_cards" {"card_ids" [a b]}))]
+        (is (= [a b] (mapv #(get % "card_id") (get out "cards"))))
+        (is (= (structured (call "get_card" {"card_id" a})) (first (get out "cards"))))
+        (is (nil? (get out "errors")))))
+    (testing "找不到或格式不對的 id 列在 errors，不影響其他"
+      (let [out (structured (call "get_cards" {"card_ids" [a missing "xyz"]}))]
+        (is (= [a] (mapv #(get % "card_id") (get out "cards"))))
+        (is (= [missing "xyz"] (mapv #(get % "card_id") (get out "errors"))))
+        (is (every? #(seq (get % "error")) (get out "errors")))))
+    (testing "參數錯誤"
+      (is (re-find #"card_ids" (error-text (call "get_cards" {"card_ids" []}))))
+      (is (re-find #"card_ids" (error-text (call "get_cards" {"card_ids" "x"}))))
+      (is (re-find #"最多 30" (error-text (call "get_cards" {"card_ids" (repeat 31 a)})))))))
