@@ -51,6 +51,7 @@
 
 (defn heading? [nodes id] (= :heading (kind nodes id)))
 (defn paragraph? [nodes id] (= :paragraph (kind nodes id)))
+(defn intro? [nodes id] (= :intro (kind nodes id)))
 
 (defn heading-level
   "標題的層級等於它在樹中的深度。"
@@ -81,10 +82,12 @@
     (when (< -1 i (dec (count sibs))) (nth sibs (inc i)))))
 
 (defn prev-paragraph
-  "同一 parent 下緊鄰在前的段落；前面是引言或沒有卡片時為 nil。"
+  "同一 parent 下緊鄰在前的段落；id 不是段落、前面是引言、標題或沒有卡片時為 nil
+  （段落一律排在下層標題之前，所以不會跨到下層標題）。"
   [nodes id]
-  (let [p (prev-sibling nodes id)]
-    (when (and p (paragraph? nodes p)) p)))
+  (when (paragraph? nodes id)
+    (let [p (prev-sibling nodes id)]
+      (when (and p (paragraph? nodes p)) p))))
 
 ;; ---------------------------------------------------------------------------
 ;; 編號
@@ -143,8 +146,9 @@
 
 (defn accepts?
   "parent-id 底下能否放入 moving-id 這張卡片（moving-id 已在別處時，不把它算進現有子卡片）。
-  規則見 SPEC 5.3：引言最多一張；引言之後只能全是段落或全是下層標題；
-  表格與圖只能掛在段落底下；標題連同子樹不得超過四層。"
+  規則見 SPEC 5.3：引言最多一張；標題底下可以同時有段落與下層標題（順序另由
+  `order-ok?` 判斷：引言、段落、下層標題）；表格與圖只能掛在段落底下；
+  標題連同子樹不得超過四層。"
   [nodes parent-id moving-id]
   (let [k (kind nodes moving-id)
         sibs (others nodes parent-id moving-id)
@@ -159,11 +163,10 @@
       (heading? nodes parent-id)
       (case k
         :intro (not (sib-kinds :intro))
-        :paragraph (not (sib-kinds :heading))
-        :heading (and (not (sib-kinds :paragraph))
-                      (<= (+ (depth nodes parent-id)
-                             (subtree-heading-height nodes moving-id))
-                          max-heading-level))
+        :paragraph true
+        :heading (<= (+ (depth nodes parent-id)
+                        (subtree-heading-height nodes moving-id))
+                     max-heading-level)
         false)
 
       (paragraph? nodes parent-id)
@@ -182,21 +185,42 @@
         after (when (< index (count sibs)) (get-in nodes [(nth sibs index) :node/order-key]))]
     (ok/between before after)))
 
-(defn- valid-index?
-  "引言固定在最前面：引言只能放在 0，其他卡片不能排在引言前面。"
+(defn- kind-rank
+  "同一 parent 底下的排列順序：引言、段落（含表與圖）、下層標題。"
+  [k]
+  (case k :intro 0 :heading 2 1))
+
+(defn order-ok?
+  "moving-id 插入 parent-id 的 index 位置（不含 moving-id 的兄弟中計算）後，
+  兄弟的種類順序是否仍是：引言、段落、下層標題（SPEC 5.3）。"
   [nodes parent-id moving-id index]
   (let [sibs (vec (others nodes parent-id moving-id))
-        has-intro (= :intro (some->> (first sibs) (kind nodes)))]
-    (if (= :intro (kind nodes moving-id))
-      (zero? index)
-      (not (and has-intro (zero? index))))))
+        ranks (mapv #(kind-rank (kind nodes %))
+                    (concat (subvec sibs 0 index)
+                            [moving-id]
+                            (subvec sibs index)))]
+    (apply <= ranks)))
 
 (defn- into-index
-  "移入時放在同類卡片的最後；引言放在最前面。"
+  "移入時放在同類卡片的最後：引言放最前面，段落放在最後一個段落之後（下層標題之前），
+  標題放在最後。"
   [nodes parent-id moving-id]
-  (if (= :intro (kind nodes moving-id))
-    0
-    (count (others nodes parent-id moving-id))))
+  (let [sibs (vec (others nodes parent-id moving-id))
+        r (kind-rank (kind nodes moving-id))]
+    (if (= :intro (kind nodes moving-id))
+      0
+      (count (take-while #(<= (kind-rank (kind nodes %)) r) sibs)))))
+
+(defn target-slot
+  "把 moving-id 放到 target-id 的 pos（:before、:after、:into）時的位置 {:parent :index}，
+  不判斷合法性（合法性見 `placement`）；供說明違規原因用。"
+  [nodes moving-id target-id pos]
+  (if (= pos :into)
+    {:parent target-id :index (into-index nodes target-id moving-id)}
+    (let [p (parent nodes target-id)
+          sibs (vec (others nodes p moving-id))
+          i (.indexOf sibs target-id)]
+      {:parent p :index (if (= pos :before) i (inc i))})))
 
 (defn placement
   "把 moving-id 放到 target-id 的 pos（:before、:after、:into）時的新位置
@@ -206,16 +230,10 @@
              (contains? nodes target-id)
              (not= moving-id target-id)
              (not (descendant? nodes moving-id target-id)))
-    (if (= pos :into)
-      (when (accepts? nodes target-id moving-id)
-        {:parent target-id :index (into-index nodes target-id moving-id)})
-      (let [p (parent nodes target-id)
-            sibs (vec (others nodes p moving-id))
-            i (.indexOf sibs target-id)
-            index (if (= pos :before) i (inc i))]
-        (when (and (accepts? nodes p moving-id)
-                   (valid-index? nodes p moving-id index))
-          {:parent p :index index})))))
+    (let [{p :parent index :index :as slot} (target-slot nodes moving-id target-id pos)]
+      (when (and (accepts? nodes p moving-id)
+                 (or (= pos :into) (order-ok? nodes p moving-id index)))
+        slot))))
 
 (defn move
   "依 placement 移動卡片：只改被移動卡片的 parent 與 order-key。"
@@ -232,16 +250,26 @@
         i (.indexOf sibs id)
         index (+ i delta)]
     (when (and (<= 0 index (dec (count sibs)))
-               (valid-index? nodes p id index))
+               (order-ok? nodes p id index))
       {:parent p :index index})))
 
-(defn insert-key
-  "在 parent-id 下新增 kind 卡片時的 order-key：引言放最前面，其他放最後。"
+(defn insert-index
+  "在 parent-id 下新增 kind 卡片時的位置：引言最前面；段落（與表、圖）接在最後一個
+  段落之後、第一個下層標題之前；標題放最後。"
   [nodes parent-id kind]
-  (let [sibs (children nodes parent-id)]
+  (let [sibs (children nodes parent-id)
+        r (kind-rank kind)]
     (if (= kind :intro)
-      (ok/between nil (some-> (first sibs) :node/order-key))
-      (ok/between (some-> (peek sibs) :node/order-key) nil))))
+      0
+      (count (take-while #(<= (kind-rank (:node/kind %)) r) sibs)))))
+
+(defn insert-key
+  "在 parent-id 下新增 kind 卡片時的 order-key（位置見 `insert-index`）。"
+  [nodes parent-id kind]
+  (let [sibs (children nodes parent-id)
+        i (insert-index nodes parent-id kind)]
+    (ok/between (when (pos? i) (:node/order-key (nth sibs (dec i))))
+                (when (< i (count sibs)) (:node/order-key (nth sibs i))))))
 
 (defn key-after
   "緊接在 id 後面的 order-key。"

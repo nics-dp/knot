@@ -135,3 +135,21 @@
           (is (= 200 (:status res)))
           (is (not-any? #(= my-id (:note/id %)) (get-in res [:body :notes])))
           (is (some #(= theirs (:note/id %)) (get-in res [:body :notes]))))))))
+
+(deftest report-info-test
+  (let [info #(:report (:body %))]
+    (testing "改名稱與副標"
+      (let [res (request :post "/api/report/info" {:title "新名稱" :subtitle "副標"})]
+        (is (= 200 (:status res)))
+        (is (= ["新名稱" "副標"] ((juxt :report/title :report/subtitle) (info res))))
+        (is (= "新名稱" (get-in (request :get "/api/report") [:body :report :report/title])))))
+    (testing "只給副標；空字串清除"
+      (let [res (request :post "/api/report/info" {:subtitle ""})]
+        (is (= ["新名稱" nil] ((juxt :report/title :report/subtitle) (info res))))))
+    (testing "不屬於修改組"
+      (is (nil? (db/undo! *conn*))))
+    (testing "格式錯誤"
+      (is (= 400 (:status (request :post "/api/report/info" {}))))
+      (is (= 400 (:status (request :post "/api/report/info" {:title "  "}))))
+      (is (= 400 (:status (request :post "/api/report/info" {:title 1}))))
+      (is (= 400 (:status (request :post "/api/report/info" {:title "x" :other 1})))))))

@@ -51,6 +51,21 @@
     (is (= ["引言意圖"] (mapv :text (:entries (section ctx "引言的意圖")))))
     (is (= ["節的意圖"] (mapv :text (:entries (section ctx "這一層的下層內容")))))))
 
+(deftest mixed-structure-context-test
+  (let [s (ui/add-child state "A" :paragraph)           ; 接在引言後面、下層標題 1.1 之前
+        pid (get-in s [:ui :selected])
+        s (update-in s [:nodes pid] assoc :node/title "章的段落" :node/draft "章段意圖")
+        ctx (context/generation-context s pid)]
+    (testing "段落的後一段只取緊接的段落：後面是下層標題時沒有"
+      (is (nil? (section ctx "下一段")))
+      (is (nil? (section ctx "前一段"))))
+    (testing "下層標題的第一段沒有前一段，不會取到上層的段落"
+      (is (nil? (section (context/generation-context s "a1") "前一段"))))
+    (testing "引言的下層內容包含這一層直接的段落與下層標題"
+      (let [ictx (context/generation-context s "iA")]
+        (is (= [["章的段落" "章段意圖"] ["1.1 甲一" "節的意圖"]]
+               (mapv (juxt :label :text) (:entries (section ictx "這一層的下層內容")))))))))
+
 (deftest parent-intro-test
   (let [s (assoc-in state [:nodes "iA" :node/prose]
                     {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "引言本文"}]}]})

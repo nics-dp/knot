@@ -334,3 +334,116 @@
     (let [es (db/node-history (d/db c) para)]
       (is (= [:import :delete :undo] (mapv :kind es)) "刪除後復原是新實體，但 id 相同，歷程接續")
       (is (true? (:undone? (second es)))))))
+
+;; ---------------------------------------------------------------------------
+;; 修改組分組（B1）
+
+(defn- group-fixture
+  "三張段落與一個存檔函式：(save! f opts) 把 f 套在目前狀態上寫成一個修改組。"
+  [c loaded]
+  (let [titles ["節能效益估算" "各場域結果比較" "主要成果"]
+        ids (mapv (fn [t] (some #(when (= t (:node/title %)) (:node/id %)) (:nodes loaded))) titles)
+        save! (fn [f opts]
+                (let [state (client-state (db/load-state (d/db c)))]
+                  (db/apply-changes! c (assoc opts :changes (sync/diff state (f state))))))]
+    {:ids ids :save! save!}))
+
+(defn- intent-of [c id]
+  (some #(when (= id (:node/id %)) (:node/draft %)) (:nodes (db/load-state (d/db c)))))
+
+(defn- changesets [c]
+  (->> (d/q '[:find ?id ?at :where [?c :changeset/id ?id] [?c :changeset/at ?at]] (d/db c))
+       (sort-by second)
+       (mapv (fn [[id _]] (d/pull (d/db c) '[*] [:changeset/id id])))))
+
+(deftest group-merge-and-undo-test
+  (let [[_ c loaded] (seeded)
+        {[a b _] :ids save! :save!} (group-fixture c loaded)
+        orig-a (intent-of c a) orig-b (intent-of c b)
+        agent {:by :agent :group "依審查調整" :label "x"}
+        set-intent (fn [id v] #(ui/set-node-field % id :node/draft v))]
+    (save! (set-intent a "A1") agent)
+    (save! (set-intent b "B1") agent)
+    (save! (set-intent a "A2") agent)
+    (testing "同組的修改組共用 group-id"
+      (let [[_ & cs] (changesets c)]
+        (is (= 3 (count cs)))
+        (is (= 1 (count (set (map :changeset/group-id cs)))))
+        (is (every? #(= "依審查調整" (:changeset/group %)) cs))))
+    (testing "每張卡片的歷程只有一筆，label 是組名"
+      (let [ha (db/node-history (d/db c) a) hb (db/node-history (d/db c) b)]
+        (is (= ["依審查調整"] (map :label (rest ha))))
+        (is (= 2 (:merged (last ha))))
+        (is (= #{:intent} (:fields (last ha))))
+        (is (= {:before orig-a :after "A2"} (get-in (last ha) [:text-changes :intent])))
+        (is (= ["依審查調整"] (map :label (rest hb))))))
+    (testing "最近修改用組名"
+      (is (= #{"依審查調整"} (set (map :label (db/recent-cards (d/db c) 5))))))
+    (testing "一次復原整組，只多一個復原修改組"
+      (let [n (count (changesets c))]
+        (is (= "依審查調整" (db/undo! c)))
+        (is (= (inc n) (count (changesets c))))
+        (is (= [orig-a orig-b] [(intent-of c a) (intent-of c b)]))
+        (let [undo (last (changesets c))]
+          (is (= :undo (:changeset/origin undo)))
+          (is (= "復原：依審查調整" (:changeset/label undo)))
+          (is (some? (:changeset/undoes-group undo))))
+        (is (= 3 (count (filter (db/undone-ids (d/db c)) (map :changeset/id (changesets c))))))
+        (is (every? :undone? (filter #(= :change (:kind %)) (db/node-history (d/db c) a))))
+        (is (empty? (db/recent-cards (d/db c) 5)) "已復原的修改組不列")
+        (testing "再復原只會復原組之前的修改（這裡沒有，是匯入）"
+          (is (nil? (db/undo! c))))))))
+
+(deftest group-break-test
+  (let [[_ c loaded] (seeded)
+        {[a b _] :ids save! :save!} (group-fixture c loaded)
+        set-intent (fn [id v] #(ui/set-node-field % id :node/draft v))
+        gids #(mapv :changeset/group-id (rest (changesets c)))
+        agent #(assoc {:by :agent :label "x"} :group %)]
+    (testing "中間夾使用者寫入就斷開"
+      (save! (set-intent a "1") (agent "G"))
+      (save! (set-intent b "2") {:label "編輯意圖"})
+      (save! (set-intent a "3") (agent "G"))
+      (let [[g1 u g3] (gids)]
+        (is (nil? u))
+        (is (not= g1 g3))
+        (is (= 3 (count (db/node-history (d/db c) a))) "匯入加兩筆（兩組）")
+        (is (= ["G" "G"] (map :label (rest (db/node-history (d/db c) a)))))))
+    (testing "不同組名斷開"
+      (save! (set-intent a "4") (agent "H"))
+      (save! (set-intent a "5") (agent "H"))
+      (save! (set-intent a "6") (agent "I"))
+      (let [gs (take-last 3 (gids))]
+        (is (= (first gs) (second gs)))
+        (is (not= (second gs) (last gs)))))
+    (testing "超過 30 分鐘斷開"
+      (let [last-id (:changeset/id (last (changesets c)))]
+        (d/transact! c [{:changeset/id last-id
+                         :changeset/at (java.util.Date. (- (System/currentTimeMillis) (* 31 60 1000)))}])
+        (save! (set-intent a "7") (agent "I"))
+        (let [gs (take-last 2 (gids))]
+          (is (not= (first gs) (last gs))))))
+    (testing "組被復原後不再延續"
+      (save! (set-intent a "8") (agent "J"))
+      (db/undo! c)
+      (save! (set-intent a "9") (agent "J"))
+      (let [cs (changesets c)]
+        (is (not= (:changeset/group-id (nth cs (- (count cs) 3))) (:changeset/group-id (last cs))))))))
+
+(deftest ungrouped-undo-unchanged-test
+  (let [[_ c loaded] (seeded)
+        {[a b _] :ids save! :save!} (group-fixture c loaded)
+        oa (intent-of c a)]
+    (save! #(ui/set-node-field % a :node/draft "1") {:by :agent :label "一"})
+    (save! #(ui/set-node-field % b :node/draft "2") {:by :agent :label "二"})
+    (is (= "二" (db/undo! c)))
+    (is (= "1" (intent-of c a)))
+    (is (= "一" (db/undo! c)))
+    (is (= oa (intent-of c a)))
+    (is (every? nil? (map :changeset/group-id (changesets c))))))
+
+(deftest update-report-test
+  (db/update-report! *conn* {:report/title "新名" :report/subtitle "副標"})
+  (is (= ["新名" "副標"] ((juxt :report/title :report/subtitle) (db/report-info (d/db *conn*)))))
+  (db/update-report! *conn* {:report/subtitle nil})
+  (is (= ["新名" nil] ((juxt :report/title :report/subtitle) (db/report-info (d/db *conn*))))))

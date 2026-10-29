@@ -28,6 +28,30 @@
       (let [[_ c1] cols]
         (is (= (+ (layout/card-height :intro) layout/gap-in-group) (:top (second c1))))))))
 
+(deftest mixed-columns-test
+  (let [nodes (tree/from-nested
+               [{:node/id "A" :node/kind :heading
+                 :children [{:node/id "iA" :node/kind :intro}
+                            {:node/id "p1" :node/kind :paragraph}
+                            {:node/id "p2" :node/kind :paragraph}
+                            {:node/id "A1" :node/kind :heading
+                             :children [{:node/id "a1" :node/kind :paragraph}]}]}])
+        cols (layout/columns nodes)]
+    (testing "同一 parent 的段落與下層標題在同一欄，段落在前"
+      (is (= [["A"] ["iA" "p1" "p2" "A1"] ["a1"]] (mapv #(mapv :id %) cols))))
+    (testing "同一組：段落之間留關係空間，段落與下層標題之間是組內間距"
+      (is (= [0 layout/gap-in-group layout/gap-between-paragraphs layout/gap-in-group]
+             (mapv :gap-before (second cols)))))
+    (testing "選取下層標題：子孫欄對齊它底下的段落"
+      (is (= 3 (count (layout/offsets nodes cols "A1" 600)))))
+    (testing "段落可以拖到下層標題之前，不能拖到之後"
+      (is (nil? (tree/placement nodes "p1" "A1" :after)))
+      (is (some? (tree/placement nodes "p1" "A1" :before)))
+      (let [{:keys [top height]} (last (second cols))
+            y (+ top height 4)]
+        (is (not= {:id "A1" :pos :after} (layout/drop-target nodes cols "p1" 1 y))
+            "指標在最後一張下層標題下緣：不能放在它後面")))))
+
 (deftest offsets-test
   (let [cols (layout/columns nodes)
         v 600

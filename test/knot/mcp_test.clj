@@ -1,6 +1,7 @@
 (ns knot.mcp-test
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [datalevin.core :as d]
             [jsonista.core :as json]
@@ -40,8 +41,13 @@
 
 (defn- outline [] (get-in (call "get_outline" {}) ["result" "structuredContent"]))
 
+(defn- display
+  "測試用的顯示名稱：有編號時為「1.2 名稱」（title 本身不含編號）。"
+  [card]
+  (if-let [n (get card "number")] (str n " " (get card "title")) (get card "title")))
+
 (defn- card-id [title]
-  (some #(when (= title (get % "title")) (get % "id")) (get (outline) "cards")))
+  (some #(when (or (= title (get % "title")) (= title (display %))) (get % "id")) (get (outline) "cards")))
 
 (defn- structured [res] (get-in res ["result" "structuredContent"]))
 
@@ -66,14 +72,14 @@
   (let [tools (get-in (rpc "tools/list") [:body "result" "tools"])]
     (is (= ["add_card" "add_note" "add_remote_relation" "build_outline" "complete_todo" "delete_card" "get_card"
             "get_outline" "get_writing_context" "list_todos" "move_card" "remove_relation" "set_relation"
-            "update_card"]
+            "update_card" "update_report"]
            (sort (map #(get % "name") tools))))
     (is (every? #(= "object" (get-in % ["inputSchema" "type"])) tools))
     (is (every? #(seq (get % "description")) tools))))
 
 (deftest get-outline-test
   (let [{:strs [report cards]} (outline)
-        by-title (into {} (map (juxt #(get % "title") identity)) cards)]
+        by-title (into {} (map (juxt display identity)) cards)]
     (is (= "OO 市智慧路燈示範計畫" (get report "title")))
     (is (= 47 (count cards)))
     (testing "標題的編號與深度"
@@ -120,7 +126,7 @@
     (is (= "paragraph" (get c "kind")))
     (is (= "主要成果" (get c "title")))
     (is (vector? (get c "path")))
-    (is (every? string? (get c "path")))
+    (is (every? #(and (contains? % "number") (string? (get % "title"))) (get c "path")))
     (is (string? (get c "intent")))
     (is (= 1 (get c "version")))
     (is (contains? (get c "relations") "prev"))
@@ -136,7 +142,7 @@
       (is (= [] (get-in c ["relations" "outgoing"])))))
   (testing "有本文與依據的段落"
     (let [c (structured (call "get_card" {"id" (card-id "政策背景")}))]
-      (is (= ["第一章 計畫概述" "1.1 計畫緣起"] (get c "path")))
+      (is (= [{"number" "第一章" "title" "計畫概述"} {"number" "1.1" "title" "計畫緣起"}] (get c "path")) "title 不含編號")
       (is (re-find #"節能減碳" (get c "prose")))
       (is (= 1 (count (get c "citations"))))
       (is (= {"type" "因果" "pending" false}
@@ -219,7 +225,8 @@
 (deftest add-card-tool-test
   (let [before (count (changesets))
         parent (card-id "1.2 計畫目標")
-        res (call "add_card" {"kind" "paragraph" "parent_id" parent "after_id" (card-id "計畫目標")
+        para-id (fn [t] (str (:node/id (node-by #(= t (:node/title %))))))
+        res (call "add_card" {"kind" "paragraph" "parent_id" parent "after_id" (para-id "計畫目標")
                               "title" "補充說明" "intent" "說明預期效益" "summary" "規劃：補充段落"})
         out (structured res)
         card (first (get out "cards"))
@@ -244,15 +251,52 @@
 
 (deftest add-card-tool-default-label-and-chapter-test
   (let [out (structured (call "add_card" {"kind" "heading" "parent_id" nil "title" "附錄"}))]
-    (is (= {"kind" "heading" "number" "第五章" "title" "第五章 附錄"} (dissoc (first (get out "cards")) "id")))
+    (is (= {"kind" "heading" "number" "第五章" "title" "附錄"} (dissoc (first (get out "cards")) "id")))
     (is (= "新增標題「附錄」" (:changeset/label (peek (changesets)))))
     (is (= :agent (:changeset/by (peek (changesets)))))))
 
+(deftest add-card-tool-mixed-test
+  (let [h (card-id "1.1 計畫緣起")
+        kids #(mapv (fn [id] (:node/title (get (:nodes (state)) id) (:node/name (get (:nodes (state)) id))))
+                    (tree/child-ids (:nodes (state)) (parse-uuid h)))
+        before (kids)
+        out (structured (call "add_card" {"kind" "heading" "parent_id" h "title" "新下層"}))
+        sub (get (first (get out "cards")) "id")]
+    (testing "已有段落的標題底下新增下層標題：接在所有段落之後"
+      (is (= "1.1.1" (get (first (get out "cards")) "number")))
+      (is (= (conj before "新下層") (kids))))
+    (testing "再新增段落：放在最後一個段落之後、下層標題之前"
+      (call "add_card" {"kind" "paragraph" "parent_id" h "title" "新段落"})
+      (is (= (conj before "新段落" "新下層") (kids))))
+    (testing "移動段落到下層標題之後被拒絕，into 則放進下層標題"
+      (let [n (count (changesets))]
+        (is (re-find #"段落要排在下層標題之前"
+                     (error-text (call "move_card" {"id" (card-id "政策背景") "target_id" sub "position" "after"}))))
+        (is (= n (count (changesets)))))
+      (call "move_card" {"id" (card-id "政策背景") "target_id" sub "position" "into"})
+      (is (= (parse-uuid sub) (tree/parent (:nodes (state)) (parse-uuid (card-id "政策背景"))))))
+    (testing "build_outline 混放：順序對成功、錯誤時指出項目"
+      (is (re-find #"^items\[0\]\.children\[1\]："
+                   (error-text (call "build_outline"
+                                     {"parent_id" nil
+                                      "items" [{"kind" "heading" "title" "混放"
+                                                "children" [{"kind" "heading" "title" "子"}
+                                                            {"kind" "paragraph" "title" "段"}]}]}))))
+      (is (some? (structured (call "build_outline"
+                                   {"parent_id" nil
+                                    "items" [{"kind" "heading" "title" "混放"
+                                              "children" [{"kind" "paragraph" "title" "段"}
+                                                          {"kind" "heading" "title" "子"}]}]})))))))
+
 (deftest add-card-tool-errors-test
   (let [before (count (changesets))]
-    (testing "規則：下層已有段落時不能放標題"
-      (is (re-find #"底下已有段落，不能再放下層標題"
-                   (error-text (call "add_card" {"kind" "heading" "parent_id" (card-id "1.1 計畫緣起") "title" "x"})))))
+    (testing "規則：段落不能排在下層標題之後、下層標題不能排在段落之前"
+      (is (re-find #"段落要排在下層標題之前.*into"
+                   (error-text (call "add_card" {"kind" "paragraph" "parent_id" (card-id "第一章 計畫概述")
+                                                 "after_id" (card-id "1.1 計畫緣起") "title" "x"}))))
+      (is (re-find #"下層標題要排在這一層所有段落之後"
+                   (error-text (call "add_card" {"kind" "heading" "parent_id" (card-id "1.1 計畫緣起")
+                                                 "after_id" (card-id "政策背景") "title" "x"})))))
     (testing "after_id 不在同層"
       (is (re-find #"after_id 不是 parent_id 的子卡片"
                    (error-text (call "add_card" {"kind" "paragraph" "parent_id" (card-id "1.1 計畫緣起")
@@ -278,7 +322,7 @@
     (testing "依文件順序回傳所有新卡片與編號"
       (is (= [["heading" "第五章"] ["intro" nil] ["heading" "5.1"] ["paragraph" nil] ["heading" "5.2"]]
              (mapv #(vec (map % ["kind" "number"])) (get out "cards"))))
-      (is (= "第五章 後續規劃" (get-in out ["cards" 0 "title"]))))
+      (is (= ["第五章" "後續規劃"] ((juxt #(get % "number") #(get % "title")) (get-in out ["cards" 0])))))
     (testing "整批一個修改組"
       (is (= (inc before) (count (changesets))))
       (is (= {:changeset/by :agent :changeset/label "規劃第五章" :changeset/origin :manual}
@@ -295,8 +339,8 @@
                                {"parent_id" nil
                                 "items" [{"kind" "heading" "title" "好的"}
                                          {"kind" "heading" "title" "壞的"
-                                          "children" [{"kind" "paragraph" "title" "p"}
-                                                      {"kind" "heading" "title" "混用"}]}]}))]
+                                          "children" [{"kind" "heading" "title" "子"}
+                                                      {"kind" "paragraph" "title" "p"}]}]}))]
     (is (re-find #"^items\[1\]\.children\[1\]：" text))
     (is (= before (count (changesets))))
     (is (= n-before (count (:nodes (state)))) "整批都沒寫"))
@@ -320,7 +364,7 @@
     (testing "標題寫名稱"
       (let [hid (card-id "2.1 場域選定")
             out (structured (call "update_card" {"id" hid "title" "場域評估"}))]
-        (is (= "2.1 場域評估" (get-in out ["cards" 0 "title"])))
+        (is (= ["2.1" "場域評估"] ((juxt #(get % "number") #(get % "title")) (get-in out ["cards" 0]))))
         (is (= "場域評估" (:node/name (by-name "場域評估"))))))
     (testing "沒有變動"
       (let [n (count (changesets))
@@ -345,8 +389,8 @@
     (is (some :relation/pending (:relations s)) "相鄰關係標為待確認")
     (testing "不合法"
       (let [n (count (changesets))]
-        (is (re-find #"底下已有下層標題"
-                     (error-text (call "move_card" {"id" id "target_id" (card-id "第一章 計畫概述") "position" "into"}))))
+        (is (re-find #"段落要排在下層標題之前"
+                     (error-text (call "move_card" {"id" id "target_id" (card-id "1.1 計畫緣起") "position" "after"}))))
         (is (re-find #"position" (error-text (call "move_card" {"id" id "target_id" id "position" "x"}))))
         (is (= n (count (changesets))))))
     (db/undo! *conn*)
@@ -547,3 +591,69 @@
     (is (= [] (get (structured (call "get_card" {"id" (card-id "1.1 計畫緣起")})) "notes")))
     (notes/set-state! *conn* (:note/id t2) :done {})
     (is (= 1 (some #(when (= c (get % "id")) (get % "open_todos")) (get (outline) "cards"))))))
+
+;; ---------------------------------------------------------------------------
+;; 分組、報告資訊、名稱不帶編號、移動訊息（試寫後修正）
+
+(deftest group-param-test
+  (let [a (card-id "政策背景") b (card-id "現況問題")
+        g {"group" "依審查意見調整大綱"}
+        card-history #(get (structured (call "get_card" {"id" %})) "history")]
+    (call "update_card" (assoc g "id" a "intent" "一"))
+    (call "update_card" (assoc g "id" b "intent" "二" "summary" "改現況"))
+    (call "update_card" (assoc g "id" a "intent" "三"))
+    (let [cs (rest (changesets))
+          gids (->> (d/q '[:find ?g :where [_ :changeset/group-id ?g]] (d/db *conn*)))]
+      (is (= 3 (count cs)))
+      (is (= 1 (count gids)) "同組共用 group-id"))
+    (testing "每張卡片歷程只有一筆、label 是組名"
+      (is (= ["依審查意見調整大綱"] (map #(get % "label") (rest (card-history a)))))
+      (is (= ["依審查意見調整大綱"] (map #(get % "label") (rest (card-history b))))))
+    (testing "一次復原整組"
+      (is (= "依審查意見調整大綱" (db/undo! *conn*)))
+      (is (not= "三" (:node/draft (get (:nodes (state)) (parse-uuid a)))))
+      (is (every? #(true? (get % "undone")) (filter #(= "change" (get % "kind")) (card-history a)))))
+    (testing "沒有 group 時與以前相同（各自一筆）"
+      (call "update_card" {"id" a "intent" "甲"})
+      (call "update_card" {"id" a "intent" "乙"})
+      (is (= 2 (count (filter #(= "change" (get % "kind")) (take-last 2 (card-history a)))))))
+    (testing "schema 說明 group"
+      (let [tools (get-in (rpc "tools/list") [:body "result" "tools"])]
+        (is (every? #(get-in % ["inputSchema" "properties" "group"])
+                    (filter #(#{"add_card" "build_outline" "update_card" "move_card" "set_relation"
+                                "add_remote_relation" "remove_relation" "delete_card"} (get % "name")) tools)))))))
+
+(deftest update-report-tool-test
+  (let [n (count (changesets))]
+    (is (= {"title" "新名稱" "subtitle" "副標"}
+           (get (structured (call "update_report" {"title" "新名稱" "subtitle" "副標"})) "report")))
+    (is (= {"title" "新名稱" "subtitle" "副標"} (get (outline) "report")))
+    (testing "只改副標、空字串清除"
+      (call "update_report" {"subtitle" ""})
+      (is (= {"title" "新名稱" "subtitle" nil} (get (outline) "report"))))
+    (is (= n (count (changesets))) "不產生修改組")
+    (testing "錯誤"
+      (is (re-find #"至少" (error-text (call "update_report" {}))))
+      (is (re-find #"title" (error-text (call "update_report" {"title" "  "})))))))
+
+(deftest title-without-number-test
+  (let [c (get (outline) "cards")
+        h (some #(when (= "計畫緣起" (get % "title")) %) c)]
+    (is (= "1.1" (get h "number")))
+    (is (not-any? #(re-find #"^(第.章|\d+(\.\d+)*) " (get % "title")) c))
+    (is (every? #(or (get % "number") (not= "heading" (get % "kind"))) c))
+    (let [card (structured (call "get_card" {"id" (get h "id")}))]
+      (is (= ["政策背景" "現況問題"] (map #(get % "title") (get card "children"))))
+      (is (= [nil nil] (map #(get % "number") (get card "children")))))
+    (let [card (structured (call "get_card" {"id" (card-id "各場域結果比較")}))]
+      (is (every? #(contains? % "number") (get-in card ["relations" "incoming"]))))))
+
+(deftest move-message-uses-new-number-test
+  (let [id (card-id "1.2 計畫目標")
+        out (structured (call "move_card" {"id" id "target_id" (card-id "1.1 計畫緣起") "position" "before"}))]
+    (is (re-find #"已將「1\.1 計畫目標」移到" (get out "message")) "用移動後的編號")
+    (is (not (re-find #"1\.2 計畫目標" (get out "message"))))))
+
+(deftest instructions-test
+  (let [text (get-in (rpc "initialize" {"protocolVersion" "2025-06-18"}) [:body "result" "instructions"])]
+    (is (every? #(str/includes? text %) ["reply_to" "get_card" "history" "complete_todo" "group" "update_report" "編號"]))))

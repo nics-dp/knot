@@ -12,7 +12,9 @@
   "開發用的報告目錄（不進 git）。"
   "local/report")
 
-(ir/set-prep! (fn [] (system/config {:report-dir report-dir})))
+(defonce ^:private current-dir (atom report-dir))
+
+(ir/set-prep! (fn [] (system/config {:report-dir @current-dir})))
 
 (defn go [] (ir/go))
 (defn halt [] (ir/halt))
@@ -31,11 +33,21 @@
   ([] (seed/seed! (db) (edn/read-string (slurp (io/resource "fixtures/reports/streetlight.edn")))))
   ([path] (seed/seed! (db) (edn/read-string (slurp path)))))
 
+(defn use-report!
+  "把執行中的系統切到另一個報告目錄（例如試寫用的 local/trial-report）並重新啟動；
+  畫面重新整理後就是那份報告。(use-report!) 切回 local/report。"
+  ([] (use-report! report-dir))
+  ([dir]
+   (halt)
+   (reset! current-dir dir)
+   (go)
+   dir))
+
 (defn wipe!
-  "刪除開發用報告目錄的資料庫並重新啟動，得到一份空白報告。"
+  "刪除目前報告目錄（預設 local/report）的資料庫並重新啟動，得到一份空白報告。"
   []
   (halt)
-  (let [dir (kdb/db-dir report-dir)]
+  (let [dir (kdb/db-dir @current-dir)]
     (doseq [f (reverse (file-seq dir))] (.delete ^java.io.File f)))
   (go))
 

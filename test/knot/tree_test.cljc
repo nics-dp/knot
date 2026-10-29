@@ -58,10 +58,10 @@
   (testing "最上層只能放標題"
     (is (tree/accepts? nodes nil "A1"))
     (is (not (tree/accepts? nodes nil "a1"))))
-  (testing "段落與下層標題不混用"
+  (testing "段落與下層標題可以並存（順序另見 order-ok?）"
     (is (tree/accepts? nodes "B" "a1"))
-    (is (not (tree/accepts? nodes "A" "a1")))
-    (is (not (tree/accepts? nodes "B" "A21"))))
+    (is (tree/accepts? nodes "A" "a1"))
+    (is (tree/accepts? nodes "B" "A21")))
   (testing "引言最多一張"
     (is (not (tree/accepts? (assoc nodes "iX" {:node/id "iX" :node/kind :intro}) "A" "iX")))
     (is (tree/accepts? (assoc nodes "iX" {:node/id "iX" :node/kind :intro}) "B" "iX")))
@@ -89,6 +89,66 @@
   (testing "不能拖到自己或子孫"
     (is (nil? (tree/placement nodes "A" "A" :into)))
     (is (nil? (tree/placement nodes "A2" "A211" :into)))))
+
+;; 第一章 M：引言 iM、段落 m1 m2（m2 底下有表 mt）、1.1 M1：段落 q1、1.2 M2
+(def mixed
+  (tree/from-nested
+   [(h "M" "混"
+       (intro "iM") (p "m1") (p "m2" (tbl "mt"))
+       (h "M1" "混一" (p "q1"))
+       (h "M2" "混二"))
+    (h "N" "乙" (p "n1"))]))
+
+(deftest mixed-order-test
+  (is (= ["M" "iM" "m1" "m2" "mt" "M1" "q1" "M2" "N" "n1"] (tree/document-order mixed))
+      "全文順序：標題、引言、段落、下層標題")
+  (is (= {"M" "1" "M1" "1.1" "M2" "1.2" "N" "2"} (tree/numbering mixed)))
+  (is (= "m1" (tree/prev-paragraph mixed "m2")))
+  (is (nil? (tree/prev-paragraph mixed "M1")) "下層標題前面的段落不算它的前一段")
+  (is (= "M1" (tree/next-sibling mixed "m2"))))
+
+(deftest order-ok-test
+  (testing "段落排在下層標題之後不行"
+    (is (tree/order-ok? mixed "M" "n1" 3) "m1 m2 之後、M1 之前")
+    (is (not (tree/order-ok? mixed "M" "n1" 4)) "M1 之後")
+    (is (not (tree/order-ok? mixed "M" "n1" 0)) "引言之前"))
+  (testing "標題排在段落之前不行"
+    (is (tree/order-ok? mixed "M" "N" 4) "最後")
+    (is (tree/order-ok? mixed "M" "N" 3) "段落之後、第一個下層標題之前")
+    (is (not (tree/order-ok? mixed "M" "N" 2)) "m1 之後、m2 之前")
+    (is (not (tree/order-ok? mixed "M" "N" 1)) "引言之後、段落之前")))
+
+(deftest mixed-placement-test
+  (testing "before / after"
+    (is (= {:parent "M" :index 2} (tree/placement mixed "n1" "m2" :before)))
+    (is (= {:parent "M" :index 3} (tree/placement mixed "n1" "m2" :after)))
+    (is (nil? (tree/placement mixed "n1" "M1" :after)) "段落不能排在下層標題之後")
+    (is (= {:parent "M" :index 3} (tree/placement mixed "n1" "M1" :before)))
+    (is (nil? (tree/placement mixed "N" "m1" :before)) "標題不能排在段落之前")
+    (is (nil? (tree/placement mixed "N" "iM" :after)) "引言之後是段落，標題不能插在中間")
+    (is (= {:parent "M" :index 5} (tree/placement mixed "N" "M2" :after)))
+    (is (= {:parent "M" :index 3} (tree/placement mixed "N" "m2" :after))))
+  (testing "into：段落放在最後一個段落之後，標題放最後"
+    (is (= {:parent "M" :index 3} (tree/placement mixed "n1" "M" :into)))
+    (is (= {:parent "M" :index 5} (tree/placement mixed "N" "M" :into))))
+  (testing "標題內的段落移到同層其他段落之間"
+    (is (= {:parent "M" :index 1} (tree/placement mixed "m2" "m1" :before)))
+    (is (nil? (tree/placement mixed "m1" "M1" :after)))))
+
+(deftest mixed-sibling-placement-test
+  (is (nil? (tree/sibling-placement mixed "m2" 1)) "段落不能下移到下層標題之後")
+  (is (nil? (tree/sibling-placement mixed "M1" -1)) "下層標題不能上移到段落之前")
+  (is (= {:parent "M" :index 4} (tree/sibling-placement mixed "M1" 1)) "下層標題之間可以交換")
+  (is (= {:parent "M" :index 1} (tree/sibling-placement mixed "m2" -1))))
+
+(deftest insert-key-test
+  (let [pos (fn [kind]
+              (let [k (tree/insert-key mixed "M" kind)
+                    ns (assoc mixed "new" {:node/id "new" :node/kind kind :node/parent "M" :node/order-key k})]
+                (.indexOf (tree/child-ids ns "M") "new")))]
+    (is (= 0 (pos :intro)))
+    (is (= 3 (pos :paragraph)) "最後一個段落之後、第一個下層標題之前")
+    (is (= 5 (pos :heading)) "標題放最後")))
 
 (deftest move-test
   (let [moved (tree/move nodes "a3" (tree/placement nodes "a3" "a1" :before))]

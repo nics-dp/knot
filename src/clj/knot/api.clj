@@ -42,6 +42,14 @@
    [:map {:closed true} [:todo boolean?]]
    [:map {:closed true} [:state [:enum :open :done]]]])
 
+(def ReportInfo
+  "POST /api/report/info：報告的名稱與副標；至少給一個，空字串的副標表示清除。"
+  [:and
+   [:map {:closed true}
+    [:title {:optional true} [:and string? [:fn {:error/message "名稱不能是空白"} #(not (str/blank? %))]]]
+    [:subtitle {:optional true} string?]]
+   [:fn {:error/message "請至少給 title 或 subtitle"} #(or (contains? % :title) (contains? % :subtitle))]])
+
 (defn- bad-request [msg & [data]]
   {:status 400 :body (cond-> {:error msg} data (assoc :details data))})
 
@@ -99,6 +107,17 @@
                  (bad-request "留言 id 格式不正確")))}]
    ["/report"
     {:get (fn [_] {:status 200 :body (db/load-state (d/db conn))})}]
+   ["/report/info"
+    {:post (fn [req]
+             (let [body (:body-params req)]
+               (if-not (m/validate ReportInfo body)
+                 (bad-request "報告資訊格式不正確" (me/humanize (m/explain ReportInfo body)))
+                 (do (db/update-report! conn (cond-> {}
+                                               (contains? body :title) (assoc :report/title (str/trim (:title body)))
+                                               (contains? body :subtitle) (assoc :report/subtitle
+                                                                                 (when-not (str/blank? (:subtitle body))
+                                                                                   (str/trim (:subtitle body))))))
+                     {:status 200 :body {:report (dissoc (db/report-info (d/db conn)) :db/id)}}))))}]
    ["/report/changes"
     {:post (fn [req]
              (let [body (:body-params req)]

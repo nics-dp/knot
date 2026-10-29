@@ -35,6 +35,31 @@
 ;; ---------------------------------------------------------------------------
 ;; 合法性說明
 
+;; 結構規則（SPEC 5.3）：標題底下依序是引言、段落、下層標題。
+(defn- order-reason
+  "moving-id（新卡片為 ::probe）放進 parent-id 的 index 位置而違反排列順序時的說明；合法時為 nil。
+  after-id 是新增時指定的 after_id（沒有時為 nil）。"
+  [nodes parent-id moving-id index after-id]
+  (when-not (tree/order-ok? nodes parent-id moving-id index)
+    (let [r (when parent-id (card-ref nodes parent-id))
+          sibs (vec (remove #{moving-id} (tree/child-ids nodes parent-id)))
+          before (when (pos? index) (nth sibs (dec index)))
+          after (when (< index (count sibs)) (nth sibs index))
+          rule "標題底下依序是引言、段落、下層標題"]
+      (case (if (and after (tree/intro? nodes after) (not= :intro (tree/kind nodes moving-id)))
+              :before-intro
+              (tree/kind nodes moving-id))
+        :paragraph (str rule "，段落要排在下層標題之前，不能排在下層標題之後"
+                        (when (and before (tree/heading? nodes before))
+                          (str "；要放進" (card-ref nodes before) "請用 position 為 into"
+                               (when after-id "（新增時改以它為 parent_id，建立大綱時放進它的 children）"))))
+        :heading (str rule "，下層標題要排在這一層所有段落之後"
+                      (when r (str "；要放到" r "的最後，"
+                                   (if after-id "after_id 請指定最後一個子卡片，或省略 after_id"
+                                       "請接在最後一個子卡片之後，或用 position 為 into"))))
+        :intro "引言固定在最前面"
+        (str rule "，其他卡片不能排在引言前面")))))
+
 (defn- reject-reason
   "把 moving-id（已在 nodes 中，新卡片為試探用的 probe）放進 parent-id 底下為什麼不行；
   合法時為 nil。判斷本身以 tree/accepts? 為準，這裡只是把原因說清楚。"
@@ -52,9 +77,8 @@
           (let [r (card-ref nodes parent-id)]
             (case k
               :intro (when (sib-kinds :intro) (str r "已經有引言，每個標題最多一張"))
-              :paragraph (when (sib-kinds :heading) (str r "底下已有下層標題，不能再放段落"))
+              :paragraph nil
               :heading (cond
-                         (sib-kinds :paragraph) (str r "底下已有段落，不能再放下層標題")
                          (> (+ (tree/depth nodes parent-id) (tree/subtree-heading-height nodes moving-id))
                             tree/max-heading-level)
                          (if (and (= 1 (tree/subtree-heading-height nodes moving-id))
@@ -70,6 +94,14 @@
           :else (str (card-ref nodes parent-id) "底下不能放卡片"))]
     (or reason
         (when-not (tree/accepts? nodes parent-id moving-id) "不符合層級規則"))))
+
+(defn- placement-reason
+  "move-card 不能移動的原因：先看 parent 能不能容納，再看排列順序。"
+  [nodes moving-id target-id position]
+  (let [{p :parent index :index} (tree/target-slot nodes moving-id target-id position)]
+    (or (reject-reason nodes p moving-id)
+        (order-reason nodes p moving-id index nil)
+        "不符合層級規則")))
 
 ;; ---------------------------------------------------------------------------
 ;; 新增
@@ -109,7 +141,11 @@
           {:error "引言固定在最前面，新增引言時不能指定 after_id"}
 
           :else
-          (if-let [why (reject-reason probe parent-id ::probe)]
+          (if-let [why (or (reject-reason probe parent-id ::probe)
+                           (when after-id
+                             (order-reason probe parent-id ::probe
+                                           (inc (.indexOf (tree/child-ids nodes parent-id) after-id))
+                                           after-id)))]
             {:error why}
             (let [id (random-uuid)
                   k (if after-id (tree/key-after nodes after-id) (tree/insert-key nodes parent-id kind))
@@ -235,17 +271,15 @@
         (if-not place
           {:error (str "不能把" title "移到" (card-ref nodes target-id)
                        ({:before "之前" :after "之後" :into "裡面"} position) "："
-                       (or (reject-reason nodes (if (= position :into) target-id (tree/parent nodes target-id)) id)
-                           (if (= :intro (tree/kind nodes id))
-                             "引言固定在最前面"
-                             "引言固定在最前面，其他卡片不能排在它前面")))}
+                       (placement-reason nodes id target-id position))}
           (let [{ns :nodes rels :relations} (tree/move-with-relations state id place)
                 para? (tree/paragraph? nodes id)]
             {:state (assoc state :nodes ns :relations rels)
              :touched [id]
              :origin :move
              :label (str "移動" title)
-             :message (str "已將" title "移到" (if-let [p (:parent place)] (card-ref nodes p) "報告最上層")
+             ;; message 用移動後的編號（舊的 title 只用在錯誤與修改組名稱）
+             :message (str "已將" (card-ref ns id) "移到" (if-let [p (:parent place)] (card-ref ns p) "報告最上層")
                            (if para? "；相鄰段落的關係標為「待確認」" "；編號已重新計算"))}))))))
 
 ;; ---------------------------------------------------------------------------
@@ -265,14 +299,15 @@
       {:error "報告至少要保留一張卡片"}
       :else
       (let [title (card-ref nodes id)
+            state' (ui/delete-node state id)
             n (count (tree/descendant-ids nodes id))
             next-para (let [s (tree/next-sibling nodes id)] (when (tree/paragraph? nodes s) s))]
-        {:state (ui/delete-node state id)
+        {:state state'
          :touched (if next-para [next-para] [])
          :origin :manual
          :label (str "刪除" title)
          :message (str "已刪除" title (when (pos? n) (str "與 " n " 張下層卡片"))
-                       (when next-para (str "；" (card-ref nodes next-para) "與前一段的關係標為「待確認」"))
+                       (when next-para (str "；" (card-ref (:nodes state') next-para) "與前一段的關係標為「待確認」"))
                        "；使用者可在 Knot 畫面復原")}))))
 
 ;; ---------------------------------------------------------------------------

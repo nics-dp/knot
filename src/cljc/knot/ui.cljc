@@ -223,6 +223,43 @@
 (defn close-recent [state]
   (update state :ui dissoc :recent-open))
 
+;; 報告名稱與副標的編輯（頂部列）：草稿在 [:ui :report-edit]，沒有這個鍵表示面板關著
+
+(defn open-report-edit
+  "開啟編輯面板，以目前的名稱與副標當草稿。"
+  [state]
+  (assoc-in state [:ui :report-edit]
+            {:title (or (get-in state [:report :report/title]) "")
+             :subtitle (or (get-in state [:report :report/subtitle]) "")}))
+
+(defn set-report-draft [state field value]
+  (assoc-in state [:ui :report-edit field] value))
+
+(defn close-report-edit [state]
+  (update state :ui dissoc :report-edit))
+
+(defn report-draft-valid?
+  "名稱不能是空白；副標可以留空。"
+  [state]
+  (let [t (get-in state [:ui :report-edit :title])]
+    (and (string? t) (not (str/blank? t)))))
+
+(defn report-saved
+  "儲存成功：以後端回的報告資訊取代名稱與副標（副標清除時沒有這個鍵），關閉面板。"
+  [state report]
+  (-> state
+      (update :report #(-> % (dissoc :report/title :report/subtitle)
+                           (merge (select-keys report [:report/title :report/subtitle]))))
+      close-report-edit))
+
+;; 全文頁是否顯示意圖（預設顯示）
+
+(defn fulltext-intents? [state]
+  (not (false? (get-in state [:ui :fulltext-intents]))))
+
+(defn toggle-fulltext-intents [state]
+  (assoc-in state [:ui :fulltext-intents] (not (fulltext-intents? state))))
+
 (declare set-page)
 
 (defn- show-card
@@ -447,13 +484,12 @@
 
 ;; ---------------------------------------------------------------------------
 (defn sibling-kind
-  "在 id 的層級上新增時的卡片類型：標題、段落照原類型；引言之後依同層其他卡片，
-  沒有其他卡片時為段落。表格與圖待 label 命名方式定案（回傳 nil）。"
+  "在 id 的層級上新增時的卡片類型：標題、段落照原類型；選取引言時為段落（接在引言後面，
+  段落一律排在下層標題之前）。表格與圖待 label 命名方式定案（回傳 nil）。"
   [nodes id]
   (case (tree/kind nodes id)
     (:heading :paragraph) (tree/kind nodes id)
-    :intro (or (some #{:heading :paragraph} (map #(tree/kind nodes %) (tree/siblings nodes id)))
-               :paragraph)
+    :intro :paragraph
     nil))
 
 (defn add-sibling
