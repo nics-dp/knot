@@ -279,6 +279,7 @@ button.menu-item:hover, button.menu-item:focus-visible { background: var(--navy-
 .by-tag { flex: none; border-radius: 6px; padding: 0 6px; font-size: 11px; }
 .by-agent { background: var(--teal); color: var(--surface); }
 .by-user { background: var(--ground); color: var(--muted); border: 1px solid var(--line); }
+.by-knot { background: var(--ground); color: var(--ink); border: 1px dashed var(--muted); }
 .toast {
   align-self: flex-start; background-clip: padding-box; display: inline-flex; align-items: center; gap: 8px;
   font-size: 13px; color: var(--amber); background: var(--amber-bg);
@@ -911,6 +912,10 @@ h5.ft-heading { font-size: 16px; font-weight: 500; color: var(--ink-2); margin-t
 .text-danger { color: #A4342A; }
 .text-danger:hover { background: #FBEAE8; }
 .note-text { margin: 0; font-size: 14px; line-height: 1.7; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Knot 待辦的觸發卡片：內容下方一列，卡片名稱是可點的小標籤，多個時換行 */
+.note-triggers { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.note-trigger { font: inherit; font-size: 12px; color: var(--navy); background: var(--surface); border: 1px solid var(--navy-line); border-radius: 999px; padding: 2px 10px; cursor: pointer; }
+.note-trigger:hover { background: var(--navy-tint); }
 
 /* 留言與歷程時間軸：左欄 24px 圓形圖示，垂直線穿過圖示中心 */
 .tl { display: flex; flex-direction: column; gap: 12px; }
@@ -985,3 +990,4 @@ h5.ft-heading { font-size: 16px; font-weight: 500; color: var(--ink-2); margin-t
 .target-total { font-size: 12px; margin-left: 8px; font-variant-numeric: tabular-nums; }
 .count-low.card-count, .count-low.zone-count, .count-low.target-total { color: var(--amber); font-weight: 500; }
 .count-high.card-count, .count-high.zone-count, .count-high.target-total { color: #A4342A; font-weight: 500; }
+.note-modified { flex: none; border-radius: 6px; padding: 0 6px; font-size: 11px; background: var(--amber-bg); color: var(--amber); border: 1px dashed var(--amber-dash); margin-left: 4px; }

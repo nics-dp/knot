@@ -5,7 +5,8 @@
             [datalevin.core :as d]
             [knot.db :as db]
             [knot.notes :as notes]
-            [knot.seed :as seed]))
+            [knot.seed :as seed]
+            [knot.ui :as ui]))
 
 (def ^:dynamic *conn* nil)
 
@@ -105,6 +106,32 @@
       (is (= #{(:note/id q) (:note/id r1) (:note/id r2)} (set (:deleted res)))))
     (is (= [(:note/id other)] (ids (notes/list-notes (db*)))) "回覆一併刪除")))
 
+(deftest delete-knot-note-test
+  (let [k (first (notes/record-change!
+                  *conn*
+                  (ui/from-server (db/load-state (d/db *conn*)))
+                  (-> (ui/from-server (db/load-state (d/db *conn*)))
+                      (assoc-in [:nodes (card "各場域結果比較") :node/draft] "改過"))))]
+    (is (= :knot (:note/author k)))
+    (is (= {:error "只能刪除自己的留言"} (notes/delete-note! *conn* (:note/id k) :agent)))
+    (is (= {:deleted [(:note/id k)]} (notes/delete-note! *conn* (:note/id k) :user)) "使用者可以刪除 Knot 待辦")))
+
+(deftest record-user-change-test
+  (let [load #(ui/from-server (db/load-state (d/db *conn*)))
+        p312 (card "各場域結果比較")
+        before (load)
+        after (assoc-in before [:nodes p312 :node/prose] {:type "doc" :content []})
+        ns (notes/record-change! *conn* before after)]
+    (is (= 2 (count ns)) "主要成果與第三章引言還沒有本文，不留")
+    (is (every? #(= :knot (:note/author %)) (notes/list-notes (db*))))
+    (is (= {(card "節能效益估算") 1 (card "異常狀況說明") 1} (notes/todo-counts (db*))))
+    (testing "同一觸發卡片的未完成待辦不重複，完成後會再留"
+      (is (empty? (notes/record-change! *conn* before after)))
+      (notes/set-state! *conn* (:note/id (first ns)) :done {})
+      (is (= 1 (count (notes/record-change! *conn* before after)))))
+    (testing "標題修改不觸發"
+      (is (empty? (notes/record-change! *conn* before (assoc-in before [:nodes (:node/id (first (filter #(= :heading (:node/kind %)) (vals (:nodes before))))) :node/name] "新名")))))))
+
 (deftest deleted-card-hides-notes-test
   (let [c (card "主要成果")
         t (user! {:node c :text "請補充" :todo true})
@@ -142,3 +169,34 @@
       (is (= cs (notes/latest-agent-changeset (db*) c before)))
       (is (nil? (notes/latest-agent-changeset (db*) (card "計畫目標") before)))
       (is (nil? (notes/latest-agent-changeset (db*) nil before))))))
+
+(deftest knot-todo-merge-test
+  (let [load #(ui/from-server (db/load-state (d/db *conn*)))
+        p312 (card "各場域結果比較")
+        p311 (card "測試方法概述")
+        p313 (card "異常狀況說明")
+        b0 (load)
+        a1 (assoc-in b0 [:nodes p312 :node/draft] "改一")
+        n1 (notes/record-change! *conn* b0 a1)
+        target #(first (filter (fn [n] (= p313 (:note/node n))) (notes/list-notes (db*))))]
+    (is (= 2 (count n1)))
+    (is (= [p312] (map :id (:note/triggers (target)))))
+    (testing "同一目標再有新的觸發：附加到同一則，不新增"
+      (let [b1 (load)
+            a2 (-> b1
+                   (assoc-in [:nodes p311 :node/prose] {:type "doc" :content [{:type "paragraph"}]})
+                   (update :relations conj {:relation/from p313 :relation/to p311 :relation/type :basis :relation/remote true}))
+            n2 (notes/record-change! *conn* b1 a2)
+            t (target)]
+        (is (= [p313] (map :note/node (filter :merged? n2))) "p312 因遞進承接另有新的一則，p313 為附加")
+        (is (= [p312 p311] (map :id (:note/triggers t))))
+        (is (= 1 (count (filter #(= p313 (:note/node %)) (notes/list-notes (db*))))))
+        (is (= (:note/id (first (filter :merged? n2))) (:note/id t)))
+        (is (re-find #"改了，本段因果承接它們、以它們為依據" (:note/text t)))
+        (is (inst? (:note/updated-at (first (filter #(= (:note/id t) (:note/id %)) (d/q '[:find [(pull ?e [*]) ...] :where [?e :note/id]] (db*)))))))))
+    (testing "舊的單一 :note/trigger 讀成一個元素的 triggers"
+      (let [id (random-uuid)]
+        (d/transact! *conn* [{:note/id id :note/author :knot :note/todo true :note/state :open :note/at (java.util.Date.)
+                              :note/node p312 :note/trigger p311 :note/dependency :argument}])
+        (is (= [{:id p311 :dependency :argument}]
+               (:note/triggers (first (filter #(= id (:note/id %)) (notes/list-notes (db*)))))))))))

@@ -38,6 +38,7 @@
   "後端 load-state 的結果轉成狀態中的資料部分。"
   [loaded]
   {:report (:report loaded)
+   :dev? (boolean (:dev? loaded))
    :nodes (into {} (map (juxt :node/id identity)) (:nodes loaded))
    :relations (vec (:relations loaded))
    :facts (into {} (map (juxt :fact/key identity)) (:facts loaded))
@@ -253,7 +254,29 @@
   (-> state
       (update :report #(-> % (dissoc :report/title :report/subtitle)
                            (merge (select-keys report [:report/title :report/subtitle]))))
-      close-report-edit))
+      (update :ui dissoc :report-edit :report-setup)
+      (assoc-in [:ui :report-named] true)))
+
+;; 空白報告先請使用者確認名稱與副標：草稿在 [:ui :report-setup]，確認後 [:ui :report-named] 為 true
+;; （只記在這次的畫面狀態，重新整理會再問一次）
+
+(defn report-setup-needed?
+  "報告還沒有任何卡片、而且這次還沒確認名稱。"
+  [state]
+  (and (empty? (:nodes state)) (not (get-in state [:ui :report-named]))))
+
+(defn report-setup-draft
+  "表單的草稿；還沒輸入時用目前的名稱（目錄名）與副標。"
+  [state]
+  (or (get-in state [:ui :report-setup])
+      {:title (or (get-in state [:report :report/title]) "")
+       :subtitle (or (get-in state [:report :report/subtitle]) "")}))
+
+(defn set-report-setup-draft [state field value]
+  (assoc-in state [:ui :report-setup] (assoc (report-setup-draft state) field value)))
+
+(defn report-setup-valid? [state]
+  (not (str/blank? (:title (report-setup-draft state)))))
 
 ;; 全文頁是否顯示意圖（預設顯示）
 

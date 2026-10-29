@@ -475,3 +475,23 @@
       (is (= {:updated-by :agent} (:style-info s)))
       (is (= "" (ui/style-text (ui/replace-data s (dissoc loaded :style))))
           "取代資料時風格被清除"))))
+
+(deftest report-setup-test
+  (let [empty-s (-> (ui/init-state {:report/title "目錄名" :tree []}) (assoc-in [:report :report/subtitle] "舊副標"))]
+    (testing "沒有卡片且這次還沒確認時需要先問名稱；有卡片或已確認則不需要"
+      (is (true? (ui/report-setup-needed? empty-s)))
+      (is (false? (ui/report-setup-needed? state)))
+      (is (false? (ui/report-setup-needed? (assoc-in empty-s [:ui :report-named] true)))))
+    (testing "草稿預填目前的名稱與副標，輸入後以草稿為準"
+      (is (= {:title "目錄名" :subtitle "舊副標"} (ui/report-setup-draft empty-s)))
+      (is (= {:title "新名" :subtitle "舊副標"}
+             (ui/report-setup-draft (ui/set-report-setup-draft empty-s :title "新名")))))
+    (testing "名稱空白不能確定，副標可留空"
+      (is (true? (ui/report-setup-valid? empty-s)))
+      (is (false? (ui/report-setup-valid? (ui/set-report-setup-draft empty-s :title " "))))
+      (is (true? (ui/report-setup-valid? (ui/set-report-setup-draft empty-s :subtitle "")))))
+    (testing "儲存成功後標為已確認、清掉草稿"
+      (let [saved (ui/report-saved (ui/set-report-setup-draft empty-s :title "新名") {:report/title "新名"})]
+        (is (= "新名" (get-in saved [:report :report/title])))
+        (is (false? (ui/report-setup-needed? saved)))
+        (is (nil? (get-in saved [:ui :report-setup])))))))

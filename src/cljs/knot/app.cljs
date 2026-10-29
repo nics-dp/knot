@@ -27,6 +27,7 @@
    :ui/open-report-edit ui/open-report-edit
    :ui/set-report-draft ui/set-report-draft
    :ui/close-report-edit ui/close-report-edit
+   :ui/set-report-setup-draft ui/set-report-setup-draft
    :ui/toggle-fulltext-intents ui/toggle-fulltext-intents
    :ui/close-todos ui/close-todos
    :ui/open-note-card ui/open-note-card
@@ -144,6 +145,17 @@
          "Enter" (when (ui/report-draft-valid? state) [[:server/save-report (get-in state [:ui :report-edit])]])
          "Escape" [[:ui/close-report-edit]]
          nil))
+
+     ;; 空白報告的名稱表單
+     :report/setup-keydown
+     (fn [state key]
+       (when (and (= "Enter" key) (ui/report-setup-valid? state))
+         [[:server/save-report (ui/report-setup-draft state)]]))
+
+     :report/save-setup
+     (fn [state]
+       (when (ui/report-setup-valid? state)
+         [[:server/save-report (ui/report-setup-draft state)]]))
 
      :report/save
      (fn [state]
@@ -474,6 +486,8 @@
                                  ;; 後端寫入後的版本同時寫回已存檔的資料與目前狀態，下次送出才不會與自己衝突
                                  (reset! saved (ui/apply-versions data versions))
                                  (swap! store ui/apply-versions versions)
+                                 ;; 後端回傳留言清單時（Knot 待辦的「之後已修改」可能變了）一併更新
+                                 (when-let [ns (:notes res)] (swap! store ui/set-notes ns))
                                  ;; 風格存檔後，頁首的最後修改改為使用者與現在
                                  (when (:style changes) (swap! store ui/style-saved (js/Date.)))
                                  (swap! sync-state #(cond-> (assoc % :in-flight nil
@@ -499,7 +513,10 @@
     (if (> (count (:history new)) (count (:history old)))
       (flush!)
       (do (some-> (:timer @sync-state) js/clearTimeout)
-          (swap! sync-state assoc :timer (js/setTimeout flush! 800))))))
+          (swap! sync-state assoc :timer (js/setTimeout
+                                          ;; 送出後補一次重新載入：等待期間收到的其他來源通知（例如 Knot 留下的待辦）
+                                          #(-> (flush!) (.then (fn [_] (reload-if-idle!))))
+                                          800))))))
 
 (defn- load-previous!
   "讀回選取卡片的前一版內容，供本文區「與前一版比較」。"

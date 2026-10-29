@@ -9,13 +9,13 @@
             [reitit.ring :as ring]
             [reitit.ring.middleware.muuntaja :as muuntaja]))
 
-(defn routes [conn events]
+(defn routes [conn events opts]
   [["/api"
     ["/health" {:get (fn [_] {:status 200 :body {:status "ok"}})}]
     ["/events" {:get (if events
                        (events/handler events)
                        (fn [_] {:status 503 :body {:error "事件通知未啟用"}}))}]
-    (api/routes conn)]])
+    (api/routes conn opts)]])
 
 (defn- revalidate
   "靜態檔每次都向伺服器確認是否更新（未變更時回 304），避免瀏覽器沿用舊的 CSS／JS。"
@@ -24,12 +24,14 @@
     (some-> (h req) (assoc-in [:headers "Cache-Control"] "no-cache"))))
 
 (defn handler
-  "events 為 :knot/events 的值；省略時 /api/events 回 503（測試用）。"
-  ([conn] (handler conn nil))
-  ([conn events]
+  "events 為 :knot/events 的值；省略時 /api/events 回 503（測試用）。
+  opts：{:dev? true} 時提供開發用的 API（匯入範例內容）。"
+  ([conn] (handler conn nil {}))
+  ([conn events] (handler conn events {}))
+  ([conn events opts]
    (let [mcp-handler (mcp/handler conn)
          app (ring/ring-handler
-              (ring/router (routes conn events)
+              (ring/router (routes conn events opts)
                            {:data {:muuntaja m/instance
                                    :middleware [muuntaja/format-middleware]}})
               (ring/routes
@@ -51,7 +53,7 @@
   (let [port (:http/port config)]
     (println (str "Knot 伺服器：http://localhost:" port "（報告目錄 "
                   (.getCanonicalPath (java.io.File. (str (:report-dir config)))) "）"))
-    (http/run-server (handler db events) {:ip "127.0.0.1" :port port :legacy-return-value? false})))
+    (http/run-server (handler db events (select-keys config [:dev?])) {:ip "127.0.0.1" :port port :legacy-return-value? false})))
 
 (defmethod ig/halt-key! :knot/http [_ server]
   ;; 已停止的伺服器 server-stop! 回傳 nil

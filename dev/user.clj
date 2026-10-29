@@ -14,7 +14,7 @@
 
 (defonce ^:private current-dir (atom report-dir))
 
-(ir/set-prep! (fn [] (system/config {:report-dir @current-dir})))
+(ir/set-prep! (fn [] (system/config {:report-dir @current-dir :dev? true})))
 
 (defn go [] (ir/go))
 (defn halt [] (ir/halt))

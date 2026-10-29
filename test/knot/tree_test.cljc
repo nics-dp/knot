@@ -217,3 +217,69 @@
     (testing "單張卡片"
       (is (= 7 (tree/subtree-chars state "A")))
       (is (nil? (tree/subtree-chars state "t1"))))))
+
+(deftest dependents-test
+  (let [ids (fn [ds] (mapv (juxt :id :dependency :reason) (remove #(= "iA" (:id %)) ds)))
+        with-intro (fn [ds] (mapv (juxt :id :dependency :reason) ds))
+        rel (fn [from to type & {:as m}] (merge {:relation/from from :relation/to to :relation/type type} m))]
+    (testing "摘要它的段落與上層引言（依文件順序）"
+      (let [rels [(rel "b2" "a2" :summarizes)]]
+        (is (= [["iA" :summary "是它的上層引言"] ["b2" :summary "摘要它"]]
+               (with-intro (tree/dependents nodes rels "a2"))))))
+    (testing "因果、遞進承接下一段；待確認也算"
+      (is (= [["a2" :argument "因果承接"]]
+             (ids (tree/dependents nodes [(rel "a1" "a2" :causal)] "a1")))) 
+      (is (= [["a3" :argument "遞進承接"]]
+             (ids (tree/dependents nodes [(rel "a2" "a3" :progression :relation/pending true)] "a2")))))
+    (testing "方向：被承接的一方不依賴前一段"
+      (is (empty? (ids (tree/dependents nodes [(rel "a1" "a2" :causal)] "a2")))))
+    (testing "依據"
+      (is (= [["b1" :argument "以它為依據"]]
+             (ids (tree/dependents nodes [(rel "b1" "a3" :basis :relation/remote true)] "a3")))))
+    (testing "呼應、對比、舉例不算"
+      (is (empty? (ids (tree/dependents nodes [(rel "a1" "a2" :contrast) (rel "b1" "a3" :echo :relation/remote true)
+                                               (rel "b2" "a3" :contrast :relation/remote true) (rel "a3" "b1" :example)]
+                                        "a3"))))
+      (is (= [["a2" :argument "因果承接"]]
+             (ids (tree/dependents nodes [(rel "a1" "a2" :causal) (rel "a1" "b1" :echo :relation/remote true)] "a1")))))
+    (testing "同一張卡片有多種原因時只留一個：摘要優先於論證"
+      (is (= [["a2" :summary "摘要它"]]
+             (ids (tree/dependents nodes [(rel "a1" "a2" :causal) (rel "a2" "a1" :summarizes)] "a1")))))
+    (testing "上層引言：有引言卡片的標題才算"
+      (is (empty? (tree/dependents nodes [] "b1")))
+      (is (= [{:id "iA" :dependency :summary :reason "是它的上層引言"}] (tree/dependents nodes [] "a1")))
+      (is (= [{:id "iA" :dependency :summary :reason "是它的上層引言"}] (tree/dependents nodes [] "x1")) "x1 的上層標題 A 有引言"))
+    (testing "只有段落有依賴"
+      (is (empty? (tree/dependents nodes [(rel "a1" "a2" :causal)] "A1")))
+      (is (empty? (tree/dependents nodes [] "iA")))
+      (is (empty? (tree/dependents nodes [] "t1"))))))
+
+(defn- rel [from to type] {:relation/from from :relation/to to :relation/type type})
+
+(deftest writing-order-test
+  (testing "沒有關係：前一段先於本段，引言排在整章段落之後"
+    (is (= {:batches [["a1" "x1" "b1"] ["a2" "b2"] ["a3"] ["iA"]] :cycle []}
+           (tree/writing-order nodes []))
+        "批內依文件順序；表格不出現"))
+  (testing "依據：目標先於依據它的段落"
+    (is (= [["a1" "x1" "b1"] ["a2" "b2"] ["a3"] ["iA"]]
+           (:batches (tree/writing-order nodes [(rel "a1" "a3" :causal)]))))
+    (let [{:keys [batches]} (tree/writing-order nodes [(rel "b1" "x1" :basis)])]
+      (is (= [["a1" "x1"] ["a2" "b1"] ["a3" "b2"] ["iA"]] batches))))
+  (testing "摘要：目標先於摘要它的段落"
+    (let [{:keys [batches]} (tree/writing-order nodes [(rel "a1" "b2" :summarizes)])]
+      (is (= [["x1" "b1"] ["b2"] ["a1"] ["a2"] ["a3"] ["iA"]] batches))))
+  (testing "引言：節的引言先於章的引言"
+    (let [n (tree/from-nested
+             [(h "A" "甲" (intro "iA") (h "A1" "甲一" (intro "iA1") (p "a1")))])]
+      (is (= [["a1"] ["iA1"] ["iA"]] (:batches (tree/writing-order n []))))))
+  (testing "限定標題：範圍外不出現也不構成先後"
+    (let [rels [(rel "b1" "a1" :basis)]]
+      (is (= {:batches [["a1"] ["a2"] ["a3"]] :cycle []}
+             (tree/writing-order nodes rels "A1")) "A1 的 a1 依據範圍外的 b1，忽略")
+      (is (= [["a1" "x1"] ["a2"] ["a3"] ["iA"]] (:batches (tree/writing-order nodes [] "A"))))))
+  (testing "環：排不進去的放在最後一批並列在 :cycle"
+    (let [{:keys [batches cycle]} (tree/writing-order nodes [(rel "a1" "a2" :basis) (rel "a2" "a1" :basis)])]
+      (is (= ["iA" "a1" "a2" "a3"] cycle) "環上的卡片與被它們擋住的卡片（a3、章的引言）")
+      (is (= cycle (last batches)))
+      (is (= [["x1" "b1"] ["b2"]] (butlast batches))))))

@@ -215,22 +215,23 @@
   (let [todos (note/open-todos nodes notes)
         questions (note/agent-questions nodes notes)
         open? (:todos-open ui)
-        item (fn [{:note/keys [id node text author at]}]
+        item (fn [{:note/keys [id node text author at] :as n}]
                (menu-item id (when node [[:ui/open-note-card node]]) author
                           (if node (card-where nodes title node) "整份報告")
-                          (list [:span.menu-item-text {:replicant/key "x"} (gist text)]
+                          (list (when (:note/modified-after n) [:span.note-modified {:replicant/key "mod"} "之後已修改"])
+                                [:span.menu-item-text {:replicant/key "x"} (gist text)]
                                 (when at [:span {:replicant/key "at"} (str " · " (time-text at))]))))]
     [:div.menu-wrap
-     (menu-button open? [[:ui/toggle-todos]] "待辦" (+ (count todos) (count questions))
-                  "交代 agent 的待辦、agent 的提問與整份報告的留言")
+     (menu-button open? [[:ui/toggle-todos]] "待辦事項" (+ (count todos) (count questions))
+                  "交代 agent 的待辦事項、agent 的提問與整份報告的留言")
      (when open?
        (list
         [:div.menu-backdrop {:replicant/key "backdrop" :on {:click [[:ui/close-todos]]}}]
         [:div.menu-panel.todos-panel {:replicant/key "panel"}
-         [:div.menu-head "未完成的待辦"]
-         (if (seq todos) (map item todos) [:p.small.muted "沒有未完成的待辦"])
-         [:div.menu-head "agent 的提問"]
+         [:div.menu-head (str "等你回覆（" (count questions) "）")]
          (if (seq questions) (map item questions) [:p.small.muted "沒有待回覆的提問"])
+         [:div.menu-head (str "交給 agent（" (count todos) "）")]
+         (if (seq todos) (map item todos) [:p.small.muted "沒有未完成的待辦事項"])
          [:div.menu-head "整份報告的留言"]
          [:div.threads (note-threads state nil)]
          (note-compose state :report nil "給整份報告的交代或備忘…")]))]))
@@ -319,7 +320,7 @@
 
 (defn- todo-badge [n]
   (when (pos? (or n 0))
-    [:span.todo-count {:title (str n " 則未完成的待辦")} n]))
+    [:span.todo-count {:title (str n " 則未完成的待辦事項")} n]))
 
 (defn- count-span
   "字數小字：class 為基本類別，超出或不足時加上顏色類別並以 title 說明。"
@@ -752,7 +753,7 @@
 
 (def remote-relation-hint
   {:summarizes "本段彙整目標段落的結果"
-   :basis "本段的論點建立在目標段落的結果上；目標改變時，本段會收到待辦"
+   :basis "本段的論點建立在目標段落的結果上；目標改變時，本段會收到待辦事項"
    :echo "前後呼應，不影響論點"
    :contrast "與目標段落比較"})
 
@@ -993,21 +994,26 @@
 ;; 留言與待辦 -----------------------------------------------------------------
 
 (defn- author-tag [author]
-  [:span.by-tag {:class (if (= author :agent) "by-agent" "by-user")} (if (= author :agent) "agent" "使用者")])
+  (case author
+    :agent [:span.by-tag.by-agent "agent"]
+    :knot [:span.by-tag.by-knot "Knot"]
+    [:span.by-tag.by-user "使用者"]))
 
 (defn- note-line
   "一則留言：作者、待辦的勾選框、時間與操作，下面是內容。"
-  [{:keys [ui]} {:note/keys [id author text todo at changeset node] :as n} reply?]
+  [{:keys [ui nodes]} {:note/keys [id author text todo at changeset node triggers] :as n} reply?]
   (let [done? (= :done (:note/state n))]
     [:div.note {:replicant/key id
                 :class [(when reply? "note-reply") (when todo "note-todo") (when done? "note-done")]}
      [:div.note-head
       (when todo
         [:input.note-check {:type "checkbox" :checked done?
-                            :aria-label (if done? "重新打開待辦" "標為完成")
+                            :aria-label (if done? "重新打開待辦事項" "標為完成")
                             :on {:change [[:notes/set-state id (if done? :open :done)]]}}])
       (author-tag author)
-      (when todo [:span.note-kind (if done? "已完成" "待辦")])
+      (when todo [:span.note-kind (if done? "已完成" "待辦事項")])
+      (when (and (:note/modified-after n) (not done?))
+        [:span.note-modified {:title "提醒之後，這一段自己的意圖或本文又被修改過"} "之後已修改"])
       [:span.small.muted (time-text at)]
       [:span.note-actions
        (when (and done? changeset node)
@@ -1016,10 +1022,21 @@
          [:button.text-btn {:type "button" :on {:click [[:ui/start-reply id]]}} "回覆"])
        (when (and (= author :user) (not reply?))
          [:button.text-btn {:type "button" :on {:click [[:notes/set-todo id (not todo)]]}}
-          (if todo "取消待辦" "標為待辦")])
-       (when (= author :user)
+          (if todo "取消待辦事項" "標為待辦事項")])
+       (when (#{:user :knot} author)
          [:button.text-btn.text-danger {:type "button" :on {:click [[:notes/delete id]]}} "刪除"])]]
-     [:p.note-text text]]))
+     [:p.note-text text]
+     ;; Knot 待辦的觸發卡片：放在內容下方，觸發多時自行換行，不擠在標題列
+     (let [tids (filter #(contains? nodes %) (map :id triggers))]
+       (when (seq tids)
+         (let [numbers (tree/numbering nodes)]
+           [:div.note-triggers
+            [:span.small.muted "改了的段落"]
+            (for [tid tids]
+              [:button.note-trigger {:replicant/key (str "trigger-" tid) :type "button"
+                                     :title "開啟這張卡片"
+                                     :on {:click [[:ui/open-note-card tid]]}}
+               (note/card-ref nodes numbers tid)])])))]))
 
 (defn- reply-box [{:keys [ui]} {:note/keys [id]}]
   (let [draft (:reply-draft ui "")]
@@ -1061,7 +1078,7 @@
       [:label.note-todo-toggle
        [:input {:type "checkbox" :checked todo?
                 :on {:change [[:ui/set-note-todo k [:event/target-checked]]]}}]
-       "交代 agent 處理（待辦）"]
+       "交代 agent 處理（待辦事項）"]
       [:button.btn {:type "button" :disabled (str/blank? draft)
                     :on {:click [[:notes/add {:node node-id :text draft :todo todo?} k]]}}
        "留言"]]]))
@@ -1172,8 +1189,8 @@
         {:keys [entries more?]} (when (= h-id id) data)
         items (history/timeline (note/threads (:notes state) id) entries)]
     (zone "notes" "留言與歷程"
-          {:hint "留言、待辦與這張卡片的修改紀錄；不會出現在報告中"
-           :aside (when (pos? n) [:span.tag.tag-warm (str n " 則待辦")])}
+          {:hint "留言、待辦事項與這張卡片的修改紀錄；不會出現在報告中"
+           :aside (when (pos? n) [:span.tag.tag-warm (str n " 則待辦事項")])}
           [:div.tl
            (when more?
              [:div.tl-item.tl-more {:replicant/key "more"}
@@ -1575,6 +1592,25 @@
     (not (:report state))
     [:main.app [:div.loading "載入中…"]]
 
+    (ui/report-setup-needed? state)
+    (let [{:keys [title subtitle]} (ui/report-setup-draft state)
+          input (fn [field label value placeholder]
+                  [:label.field {:replicant/key (name field)}
+                   [:span.small label]
+                   [:input {:type "text" :value value :placeholder placeholder
+                            :on {:input [[:ui/set-report-setup-draft field [:event/target-value]]]
+                                 :compositionend [[:ui/set-report-setup-draft field [:event/target-value]]]
+                                 :keydown [[:report/setup-keydown [:event/key]]]}}]])]
+      [:main.app
+       [:div.empty-state.report-setup
+        [:h2 "為這份報告取個名字"]
+        (input :title "報告名稱" title "")
+        (input :subtitle "副標（選填）" subtitle "例如：成果報告")
+        [:div.add-row
+         [:button.btn.btn-primary {:type "button" :disabled (not (ui/report-setup-valid? state))
+                                   :on {:click [[:report/save-setup]]}}
+          "確定"]]]])
+
     (empty? (:nodes state))
     [:main.app
      [:div.empty-state
@@ -1582,7 +1618,9 @@
       [:p.muted "這份報告還沒有內容"]
       [:div.add-row
        [:button.btn.btn-primary {:type "button" :on {:click [[:ui/add-child nil :heading]]}} "新增第一章"]
-       [:button.btn {:type "button" :on {:click [[:server/import-sample]]}} "匯入範例內容"]]]]
+       ;; 開發模式才有（SPEC：一般模式不提供）
+       (when (:dev? state)
+         [:button.btn {:type "button" :on {:click [[:server/import-sample]]}} "匯入範例內容"])]]]
 
     :else
     (let [nodes (:nodes state)

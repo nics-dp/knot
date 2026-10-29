@@ -72,7 +72,7 @@
   (let [tools (get-in (rpc "tools/list") [:body "result" "tools"])]
     (is (= ["add_card" "add_citation" "add_excerpt" "add_excerpts" "add_fact" "add_facts" "add_note" "add_remote_relation"
             "add_source_table" "build_outline" "complete_todo" "delete_card" "delete_fact" "discard_source_block"
-            "get_card" "get_cards" "get_outline" "get_source_block" "get_style" "get_writing_context" "list_facts"
+            "get_card" "get_cards" "get_outline" "get_source_block" "get_style" "get_writing_context" "get_writing_order" "list_facts"
             "list_todos" "move_card" "remove_citation" "remove_relation" "search_sources" "set_relation"
             "update_card" "update_fact" "update_report" "update_source_block" "update_style" "write_prose" "write_table"]
            (sort (map #(get % "name") tools))))
@@ -183,19 +183,45 @@
       (is (true? (get r "isError")))
       (is (= "只有段落與引言會撰寫本文" (get-in r ["content" 0 "text"]))))))
 
-(deftest writing-context-intent-only-test
+(deftest writing-context-prev-prose-test
   (let [id (card-id "現況問題")
         ctx (structured (call "get_writing_context" {"card_id" id}))
         prev (some #(when (= "前一段" (get % "title")) %) (get ctx "sections"))
         entry (first (get prev "entries"))
         prose (get (structured (call "get_card" {"card_id" (card-id "政策背景")})) "prose")]
-    (testing "前一段已有本文：只帶意圖，has_prose 為 true"
+    (testing "前一段已有本文：帶本文"
       (is (= "政策背景" (get entry "label")))
-      (is (= "intent" (get entry "source")))
-      (is (true? (get entry "has_prose")))
-      (is (not (str/includes? (get entry "text") prose))))
+      (is (= "prose" (get entry "source")))
+      (is (= prose (get entry "text")))
+      (is (not (contains? entry "prose_too_long"))))
     (testing "提示用 get_card 取本文"
       (is (re-find #"get_card" (get ctx "note"))))))
+
+(deftest get-writing-order-test
+  (let [res (structured (call "get_writing_order" {}))
+        batches (get res "batches")
+        ids (mapcat #(map (fn [c] (get c "card_id")) %) batches)]
+    (is (seq batches))
+    (is (= [] (get res "cycle")))
+    (is (= (count ids) (count (set ids))) "每張卡片只出現一次")
+    (is (= #{"paragraph" "intro"} (set (map #(get % "kind") (apply concat batches)))))
+    (is (every? #(= #{"card_id" "number" "title" "kind" "section" "has_prose"} (set (keys %))) (apply concat batches)))
+    (testing "標明所屬標題的編號與名稱"
+      (let [c (some #(when (= (card-id "政策背景") (get % "card_id")) %) (apply concat batches))]
+        (is (= "1.1 計畫緣起" (get c "section")))))
+    (testing "前一段排在本段之前"
+      (let [pos (into {} (apply concat (map-indexed (fn [i b] (for [c b] [(get c "card_id") i])) batches)))]
+        (is (< (pos (card-id "政策背景")) (pos (card-id "現況問題")))))))
+  (testing "限定標題"
+    (let [h (card-id "1.1 計畫緣起")
+          res (structured (call "get_writing_order" {"card_id" h}))
+          titles (set (map #(get % "title") (apply concat (get res "batches"))))]
+      (is (contains? titles "政策背景"))
+      (is (not (contains? titles "引言")) "第一章的引言在範圍外，1.1 沒有引言")
+      (is (< (count (apply concat (get res "batches")))
+             (count (apply concat (get (structured (call "get_writing_order" {})) "batches")))))))
+  (testing "card_id 不是標題"
+    (is (true? (get-in (call "get_writing_order" {"card_id" (card-id "政策背景")}) ["result" "isError"])))))
 
 (deftest errors-test
   (is (= -32602 (get-in (call "no_such_tool" {}) ["error" "code"])))
@@ -554,26 +580,27 @@
         _ (notes/add-note! *conn* {:author :agent :reply-to (:note/id q2) :text "收到"})
         _ (user-note! {:reply-to (:note/id q2) :text "再補充"})
         out (structured (call "list_todos" {}))]
+    (testing "一份 items：使用者已回答的提問 → 使用者的待辦（依時間）；沒人回覆的提問不列"
+      (is (= ["answered_question" "answered_question" "user_todo" "user_todo"] (map #(get % "kind") (get out "items"))))
+      (is (= ["預算是哪一年？" "整體風格？" "請寫得更具體" "整份報告的待辦"] (map #(get % "text") (get out "items")))))
     (testing "待辦"
-      (is (= 2 (count (get out "todos"))))
-      (let [todo (first (get out "todos"))]
+      (let [todo (nth (get out "items") 2)]
         (is (= (str (:note/id t)) (get todo "note_id")))
-        (is (= "請寫得更具體" (get todo "text")))
         (is (= {"card_id" c "title" "計畫目標"} (select-keys (get todo "card") ["card_id" "title"])))
         (is (= [["agent" "你要我寫幾年？"]] (map (juxt #(get % "author") #(get % "text")) (get todo "replies"))))
-        (is (string? (get todo "at"))))
-      (is (nil? (get-in out ["todos" 1 "card"]))))
+        (is (string? (get todo "at")))
+        (is (re-find #"complete_todo" (get todo "next_action"))))
+      (is (nil? (get-in out ["items" 3 "card"]))))
     (testing "使用者已回答的提問"
-      (is (= ["預算是哪一年？" "整體風格？"] (map #(get % "question") (get out "questions_answered"))))
-      (is (= "民國 114 年" (get-in out ["questions_answered" 0 "replies" 0 "text"]))))
+      (is (= "民國 114 年" (get-in out ["items" 0 "replies" 0 "text"])))
+      (is (re-find #"add_note" (get-in out ["items" 0 "next_action"]))))
     (testing "依卡片過濾"
       (let [o (structured (call "list_todos" {"card_id" c}))]
-        (is (= 1 (count (get o "todos"))))
-        (is (= 1 (count (get o "questions_answered")))))
+        (is (= ["answered_question" "user_todo"] (map #(get % "kind") (get o "items")))))
       (is (re-find #"找不到卡片" (error-text (call "list_todos" {"card_id" (str (random-uuid))})))))
     (testing "agent 接話後不再列為已回答"
       (notes/add-note! *conn* {:author :agent :reply-to (:note/id q) :text "好的"})
-      (is (= ["整體風格？"] (map #(get % "question") (get (structured (call "list_todos" {})) "questions_answered")))))))
+      (is (= ["整體風格？" "請寫得更具體" "整份報告的待辦"] (map #(get % "text") (get (structured (call "list_todos" {})) "items")))))))
 
 (deftest complete-todo-tool-test
   (let [c (card-id "計畫目標")
@@ -987,3 +1014,72 @@
       (is (= "使用「本計畫」" (get (structured (call "get_style" {})) "text"))))
     (testing "缺少 text"
       (is (re-find #"text" (error-text (call "update_style" {})))))))
+
+(deftest agent-write-creates-knot-todos-mcp-test
+  (let [id (card-id "各場域結果比較")
+        notes-of #(filterv (comp #{:knot} :note/author) (notes/list-notes (d/db *conn*)))]
+    (testing "有本文的依賴段落會留下待辦，回應列出 todos_created；還沒有本文的（主要成果、第三章引言）不留"
+      (let [out (structured (call "write_prose" {"card_id" id "text" "改寫" "summary" "改寫"}))
+            created (get out "todos_created")]
+        (is (= #{["節能效益估算" "3.2" "摘要它"] ["異常狀況說明" "3.1" "因果承接"]}
+               (set (map (juxt #(get % "title") #(get % "number") #(get % "reason")) created))))
+        (is (every? #(string? (get % "card_id")) created))
+        (is (re-find #"已在 2 個相關段落留下待辦：.*3\.1 異常狀況說明（因果承接）" (get out "message")))
+        (is (re-find #"下一輪" (get out "message")))
+        (is (nil? (get out "dependents")))
+        (is (= 2 (count (notes-of))))
+        (testing "同一觸發卡片已有未完成待辦不重複"
+          (is (nil? (get (structured (call "write_prose" {"card_id" id "text" "再改寫"})) "todos_created")))
+          (is (= 2 (count (notes-of)))))))
+    (testing "依賴的段落都沒有本文時不留待辦"
+      (let [out (structured (call "write_prose" {"card_id" (card-id "主要成果") "text" "第一次寫"}))]
+        (is (nil? (get out "todos_created")))
+        (is (not (re-find #"留下待辦" (get out "message"))))
+        (is (= 2 (count (notes-of))))))
+    (testing "update_card 改意圖才留；只改名稱不留"
+      (doseq [n (notes-of)] (notes/set-state! *conn* (:note/id n) :done {}))
+      (is (nil? (get (structured (call "update_card" {"card_id" id "title" "各場域結果"})) "todos_created")))
+      (is (seq (get (structured (call "update_card" {"card_id" id "intent" "新意圖"})) "todos_created"))))
+    (testing "instructions 提到規則"
+      (is (re-find #"下一輪" (get-in (rpc "initialize" {"protocolVersion" "2025-03-26"}) [:body "result" "instructions"]))))))
+
+(deftest knot-todo-mcp-test
+  (let [id (card-id "各場域結果比較")
+        id-a (card-id "異常狀況說明")
+        load #(ui/from-server (db/load-state (d/db *conn*)))
+        before (load)
+        p311 (parse-uuid (card-id "測試方法概述"))
+        ;; p312 與 p311 都改了；異常狀況說明另以依據關係指向 p311（只加在修改後的狀態）
+        after (-> before
+                  (assoc-in [:nodes (parse-uuid id) :node/draft] "使用者改過")
+                  (assoc-in [:nodes p311 :node/prose] {:type "doc" :content [{:type "paragraph"}]})
+                  (update :relations conj {:relation/from (parse-uuid id-a) :relation/to p311
+                                           :relation/type :basis :relation/remote true}))
+        _ (notes/record-change! *conn* before after)
+        out (structured (call "list_todos" {}))
+        items (get out "items")
+        todo (first (filter #(= "異常狀況說明" (get-in % ["card" "title"])) items))]
+    (testing "只有 Knot 待辦：依目標段落的文件順序"
+      (is (every? #(= "knot_todo" (get % "kind")) items))
+      (is (= ["各場域結果比較" "異常狀況說明" "節能效益估算"] (map #(get-in % ["card" "title"]) items))
+          "p312 因 p311 遞進承接也有一則；主要成果與引言還沒有本文，不留"))
+    (testing "同一目標合併成一則，triggers 列出每個觸發與原因"
+      (is (= 1 (count (filter #(= "異常狀況說明" (get-in % ["card" "title"])) items))))
+      (is (= [["測試方法概述" "argument" "以它為依據"] ["各場域結果比較" "argument" "因果承接"]]
+             (map (juxt #(get % "title") #(get % "dependency") #(get % "reason")) (get todo "triggers"))))
+      (is (= {"card_id" id "number" "3.1"} (select-keys (second (get todo "triggers")) ["card_id" "number"])))
+      (is (re-find #"改了，本段以它們為依據、因果承接它們" (get todo "text")))
+      (is (re-find #"get_card" (get todo "next_action")))
+      (is (nil? (get todo "modified_after"))))
+    (testing "提醒之後目標段落又被修改：modified_after"
+      (Thread/sleep 5)
+      (call "update_card" {"card_id" id-a "intent" "改了意圖"})
+      (let [todo' (first (filter #(= "異常狀況說明" (get-in % ["card" "title"])) (get (structured (call "list_todos" {})) "items")))]
+        (is (true? (get todo' "modified_after")))
+                (is (true? (:note/modified-after (first (filter #(= (parse-uuid id-a) (:note/node %)) (notes/list-notes (d/db *conn*)))))))))
+    (testing "complete_todo 完成 Knot 待辦，可附回覆"
+      (let [n (count (get (structured (call "list_todos" {})) "items"))
+            res (call "complete_todo" {"note_id" (get todo "note_id") "reply" "不需要修改"})]
+        (is (not (get-in res ["result" "isError"])))
+        (is (= (dec n) (count (get (structured (call "list_todos" {})) "items"))))
+        (is (= "不需要修改" (:note/text (last (notes/list-notes (d/db *conn*))))))))))

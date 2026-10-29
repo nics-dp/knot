@@ -141,19 +141,21 @@
   [doc]
   (str/join "\n" (render-blocks doc inline->markup)))
 
-(defn- display-inline [facts {:keys [type text attrs]}]
+(defn- display-inline [facts ref-fn {:keys [type text attrs]}]
   (case type
     "text" text
     "fact" (let [f (get facts (:key attrs))]
              (if (:fact/value f) (sources/fact-display f) (str "{" (:key attrs) "}")))
-    "ref" (str "{" (:label attrs) "}")
+    "ref" (or (some-> ref-fn (#(% (:label attrs)))) (str "{" (:label attrs) "}"))
     ""))
 
 (defn doc->text
   "doc → 顯示用純文字：事實換成值與單位（facts 為 key → 事實；查不到時為 {key}）、
-  ref 顯示 {label}、cite 不輸出；清單項目前加「- 」或「1. 」。"
-  [facts doc]
-  (str/join "\n" (render-blocks doc #(display-inline facts %))))
+  ref 顯示 {label}、cite 不輸出；清單項目前加「- 」或「1. 」。
+  選填 ref-fn：label → 顯示字串或 nil；回傳 nil 時 ref 仍顯示 {label}。"
+  ([facts doc] (doc->text facts doc nil))
+  ([facts doc ref-fn]
+   (str/join "\n" (render-blocks doc #(display-inline facts ref-fn %)))))
 
 (def ^:private whitespace-re #"[\s\u3000\u00a0]+")
 
@@ -163,7 +165,7 @@
   查不到的事實以「{key}」計（含大括號，與畫面顯示一致）；交互參照同理以「{label}」計；cite 不算。
   doc 為 nil 或沒有內容時為 0。以 UTF-16 單位計，罕用的擴充字集（每字 2 單位）會多算。"
   [facts doc]
-  (->> (render-blocks doc #(display-inline facts %) false)
+  (->> (render-blocks doc #(display-inline facts nil %) false)
        (map #(count (str/replace % whitespace-re "")))
        (reduce + 0)))
 

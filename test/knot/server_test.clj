@@ -90,8 +90,13 @@
         (is (= "編輯意圖" (get-in res [:body :label])))
         (is (not= "改過的意圖" (some #(when (= para (:node/id %)) (:node/draft %))
                                   (get-in res [:body :state :nodes]))))))
-    (testing "已有內容時不能匯入範例"
-      (is (= 409 (:status (request :post "/api/dev/sample")))))))
+    (testing "一般模式沒有匯入範例的 API，報告也不帶 :dev?"
+      (is (= 404 (:status (*handler* {:request-method :post :uri "/api/dev/sample"}))))
+      (is (not (contains? (:body (request :get "/api/report")) :dev?))))
+    (testing "開發模式：報告帶 :dev?；已有內容時不能匯入範例"
+      (binding [*handler* (server/handler *conn* nil {:dev? true})]
+        (is (true? (:dev? (:body (request :get "/api/report")))))
+        (is (= 409 (:status (request :post "/api/dev/sample"))))))))
 
 (deftest notes-api-test
   (seed/seed! *conn* (edn/read-string (slurp (io/resource "fixtures/reports/streetlight.edn"))))
@@ -162,3 +167,41 @@
     (is (= {:updated-by :user} (select-keys (:style-info (:body (request :get "/api/report"))) [:updated-by])))
     (is (= 400 (:status (request :post "/api/report/changes"
                                  {:changes {:style {:upsert [{:style/key "other" :style/text "x"}]}}}))))))
+
+(deftest knot-todos-api-test
+  (seed/seed! *conn* (edn/read-string (slurp (io/resource "fixtures/reports/streetlight.edn"))))
+  (let [loaded (:body (request :get "/api/report"))
+        state {:nodes (into {} (map (juxt :node/id identity)) (:nodes loaded))
+               :relations (:relations loaded) :ui {} :history []}
+        id-of (fn [t] (some #(when (= t (:node/title %)) (:node/id %)) (:nodes loaded)))
+        p312 (id-of "各場域結果比較")
+        knot-notes #(filterv (comp #{:knot} :note/author) (:notes (:body (request :get "/api/report"))))
+        edit (fn [s field v] (let [res (request :post "/api/report/changes"
+                                                {:label "編輯" :changes (sync/diff s (ui/set-node-field s p312 field v))})]
+                               (is (= 200 (:status res)))
+                               (update s :nodes assoc-in [p312 field] v)))]
+    (testing "使用者改意圖：已有本文的摘要與因果承接段落各一則 Knot 待辦"
+      (edit state :node/draft "新的意圖")
+      (let [ns (knot-notes)]
+        (is (= #{(id-of "節能效益估算") (id-of "異常狀況說明")} ; 主要成果與第三章引言還沒有本文，不留
+               (set (map :note/node ns))))
+        (is (every? #(and (= [p312] (map :id (:note/triggers %))) (:note/todo %) (= :open (:note/state %))) ns))
+        (is (every? #(re-find #"「3.1 各場域結果比較」的意圖改了，本段" (:note/text %)) ns))
+        (is (= #{:summary :argument} (set (map (comp :dependency first :note/triggers) ns))))))
+    (testing "連續修改不重複"
+      (let [s2 (assoc-in state [:nodes p312 :node/version] 2)
+            s2 (assoc-in s2 [:nodes p312 :node/draft] "新的意圖")]
+        (edit s2 :node/draft "再改一次")
+        (is (= 2 (count (knot-notes))))))
+    (testing "使用者修改目標段落：回應附留言清單，待辦標示之後已修改"
+      (Thread/sleep 5)
+      (let [p313 (id-of "異常狀況說明")
+            s3 (assoc-in state [:nodes p313 :node/version] 1)
+            res (request :post "/api/report/changes"
+                         {:label "編輯" :changes (sync/diff s3 (ui/set-node-field s3 p313 :node/draft "目標段落自己改了"))})
+            n (first (filter #(= p313 (:note/node %)) (:notes (:body res))))]
+        (is (= 200 (:status res)))
+        (is (true? (:note/modified-after n)))))
+    (testing "復原不產生待辦"
+      (request :post "/api/report/undo")
+      (is (= 2 (count (knot-notes)))))))

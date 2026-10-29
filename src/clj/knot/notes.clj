@@ -4,7 +4,8 @@
   所有寫入函式在 conn 的鎖內檢查並寫入；成功回傳留言（刪除為 {:deleted ids}），失敗回傳 {:error 中文原因}。"
   (:require [clojure.string :as str]
             [datalevin.core :as d]
-            [knot.db :as db]))
+            [knot.db :as db]
+            [knot.note :as note]))
 
 (defn list-notes
   "所有留言（含所屬卡片已刪除而隱藏的），依時間由舊到新。"
@@ -116,14 +117,40 @@
           note (some #(when (= id (:note/id %)) %) notes)]
       (cond
         (nil? note) (error "找不到留言")
-        (not= author (:note/author note)) (error "只能刪除自己的留言")
+        (not (or (= author (:note/author note))
+                 (and (= :user author) (= :knot (:note/author note)))))
+        (error "只能刪除自己的留言")
         :else
         (let [ids (into [id] (map :note/id) (replies-of notes id))]
           (d/transact! conn (for [i ids] [:db/retractEntity [:note/id i]]))
           {:deleted ids})))))
 
+(defn record-change!
+  "修改（使用者或 agent，before → after，前端形式的狀態）之後，為依賴被改段落的段落留下 Knot 待辦（SPEC 5.6）；
+  每個目標段落最多一則未完成的：已有時把新的觸發卡片附加上去（文字重寫、:note/updated-at 記下時間）。
+  規則見 knot.note/knot-todos。復原與匯入不呼叫它。不屬於修改組。
+  回傳新增或附加的留言（可能是空的；帶 :reason 與 :merged? 供回報，不寫入資料庫）。"
+  [conn before after]
+  (locking conn
+    (let [ops (note/knot-todos before after (list-notes (d/db conn)))
+          at (now)
+          txs (for [{:keys [op] :as o} ops
+                    :let [base {:note/triggers (pr-str (:note/triggers o)) :note/text (:note/text o)}]]
+                (if (= :update op)
+                  (assoc base :note/id (:note/id o) :note/updated-at at)
+                  (assoc base :note/id (random-uuid) :note/node (:note/node o) :note/author :knot
+                         :note/todo true :note/state :open :note/at at)))]
+      (when (seq txs) (d/transact! conn (vec txs)))
+      (let [db (d/db conn)
+            by-id (into {} (map (juxt :note/id identity)) (list-notes db))]
+        (vec (for [[o tx] (map vector ops txs)]
+               (assoc (get by-id (:note/id tx)) :reason (:reason o) :merged? (= :update (:op o)))))))))
+
 ;; ---------------------------------------------------------------------------
 ;; 查詢（只含可見的留言）
+
+(defn open-todo? [n]
+  (and (:note/todo n) (= :open (:note/state n))))
 
 (defn open-todos
   "未完成的待辦，依時間由舊到新。"

@@ -334,6 +334,44 @@
 (defn- adjacent-relation? [r]
   (not (remote-relation? r)))
 
+(def ^:private dependency-reasons
+  "依賴的原因：優先順序由前到後；同一張卡片有多種原因時只取最前面的一個。"
+  [[:summary "摘要它"] [:summary "是它的上層引言"]
+   [:argument "因果承接"] [:argument "遞進承接"] [:argument "以它為依據"]])
+
+(defn dependents
+  "依賴段落 id 的卡片（SPEC 5.6）：依文件順序的 [{:id :dependency :reason}]。
+  摘要依賴（:summary）：以摘要關係指向它的段落、它所有上層標題的引言（有引言卡片才算）；
+  論證依賴（:argument）：下一段（相鄰關係為因果或遞進，方向為它到下一段；待確認的也算）、
+  以依據關係指向它的段落。呼應與對比不算。只有段落有依賴，其他卡片回傳空。
+  同一張卡片有多種原因時只留一個，依 :summary 優先、再依 :argument 的順序。"
+  [nodes relations id]
+  (if-not (paragraph? nodes id)
+    []
+    (let [reasons (fn [r]
+                    (let [t (:relation/type r)]
+                      (cond
+                        (and (= id (:relation/to r)) (= :summarizes t)) [(:relation/from r) "摘要它"]
+                        (and (= id (:relation/to r)) (= :basis t)) [(:relation/from r) "以它為依據"]
+                        (and (= id (:relation/from r)) (adjacent-relation? r) (= :causal t)) [(:relation/to r) "因果承接"]
+                        (and (= id (:relation/from r)) (adjacent-relation? r) (= :progression t)) [(:relation/to r) "遞進承接"])))
+          pairs (concat (keep reasons relations)
+                        (for [a (ancestor-ids nodes id)
+                              :when (heading? nodes a)
+                              :let [i (intro-id nodes a)] :when i]
+                          [i "是它的上層引言"]))
+          order (zipmap (map second dependency-reasons) (range))
+          kind-of (into {} (map (fn [[k r]] [r k])) dependency-reasons)
+          best (reduce (fn [m [dep reason]]
+                         (if (and (not= dep id) (contains? nodes dep)
+                                  (or (not (contains? m dep)) (< (order reason) (order (m dep)))))
+                           (assoc m dep reason)
+                           m))
+                       {} pairs)]
+      (vec (for [dep (document-order nodes) :when (contains? best dep)
+                 :let [reason (best dep)]]
+             {:id dep :dependency (kind-of reason) :reason reason})))))
+
 (defn remote-relations
   "與 id 有關的不相鄰關係：{:outgoing [...] :incoming [...]}。"
   [relations id]
@@ -432,3 +470,41 @@
   [state id]
   (get (char-counts state) id))
 
+
+;; ---------------------------------------------------------------------------
+;; 撰寫順序（SPEC 5.4「撰寫流程」）
+
+(defn writing-order
+  "段落與引言的撰寫順序，分層的拓撲排序（Kahn）。nodes、relations 同其他 tree 函式；
+  heading-id 選填：只排該標題底下的段落與引言，範圍外的卡片不出現也不構成先後。
+  先後關係（A 要在 B 之前寫）：前一段 → 本段；依據的目標 → 依據它的段落；
+  摘要的目標 → 摘要它的段落；標題底下所有後代的段落與引言 → 該標題的引言。
+  回傳 {:batches [[id ...] ...] :cycle [id ...]}：同一批彼此沒有先後，批內依 document-order；
+  有環時，排不進去的卡片全部放在最後一批並列在 :cycle（沒有環時 :cycle 為 []）。"
+  ([nodes relations] (writing-order nodes relations nil))
+  ([nodes relations heading-id]
+   (let [order (document-order nodes heading-id)
+         ids (filterv #(#{:paragraph :intro} (kind nodes %)) order)
+         in-scope (set ids)
+         edges (set
+                (concat
+                 (for [id ids :let [p (prev-paragraph nodes id)] :when p] [p id])
+                 (for [r relations
+                       :when (#{:basis :summarizes} (:relation/type r))]
+                   [(:relation/to r) (:relation/from r)])
+                 (for [h (cons heading-id (filter #(heading? nodes %) order))
+                       :when h
+                       :let [intro (intro-id nodes h)]
+                       :when intro
+                       d (descendant-ids nodes h)
+                       :when (and (not= d intro) (#{:paragraph :intro} (kind nodes d)))]
+                   [d intro])))
+         edges (filterv (fn [[a b]] (and (in-scope a) (in-scope b) (not= a b))) edges)
+         preds (reduce (fn [m [a b]] (update m b (fnil conj #{}) a)) {} edges)]
+     (loop [remaining ids, done #{}, batches []]
+       (let [ready (filterv #(every? done (get preds % #{})) remaining)]
+         (cond
+           (empty? remaining) {:batches batches :cycle []}
+           (empty? ready) {:batches (conj batches remaining) :cycle remaining}
+           :else (let [rs (set ready)]
+                   (recur (filterv (complement rs) remaining) (into done ready) (conj batches ready)))))))))
