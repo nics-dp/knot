@@ -489,7 +489,7 @@ M0 時建立，至少包含：兩個 nREPL 的 port 與啟動方式、`clj-nrepl
 
 | 類別 | 工具 |
 |---|---|
-| 讀取 | `get_outline`（卡片樹：id、類型、編號、名稱、意圖摘要、狀態、待辦數）、`get_card`、`get_writing_context`、`find_issues` |
+| 讀取 | `get_outline`（卡片樹：id、類型、編號、名稱、意圖摘要、狀態、待辦數；`full_intent` 時帶完整意圖）、`get_card`、`get_cards`（一次多張，最多 30 張）、`get_writing_context`、`find_issues` |
 | 報告 | `update_report`（名稱、副標） |
 | 卡片 | `add_card`（標題、段落、引言、表格、圖）、`build_outline`（一次建立巢狀骨架）、`update_card`（名稱、意圖）、`move_card`、`delete_card`（連同下層卡片）、`set_relation`、`add_remote_relation`、`remove_relation`、依據的新增與移除 |
 | 本文 | `write_prose`（段落與引言的本文，5.4）、`write_table`（表格卡片的內容） |
