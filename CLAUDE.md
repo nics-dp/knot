@@ -66,6 +66,16 @@
 - **遇到待定事項就停下**，列出選項請使用者決定；疑問記在 `docs/QUESTIONS.md`。
 - 每個里程碑開一個分支，測試通過且使用者確認畫面後再合併。
 
+## 分工：主對話規劃，Sonnet 實作
+
+- **主對話用 Opus，負責規劃與把關：** 讀 SPEC、設計資料與介面、拆工作、寫給 subagent 的說明、審查程式碼、在 REPL 與瀏覽器驗證（截圖對照）、更新文件、commit。
+- **實作盡量交給 Sonnet subagent**（Agent 工具指定 `model: sonnet`），後端與前端都是。說明裡寫清楚：要改的檔案、函式名稱與資料格式、錯誤處理、要補的測試、完成條件（`bb test`、`bb cljs-test`、`bb lint`、shadow-cljs 沒有 warning）。
+  - 前端另外寫明：放在哪個 view 函式、用哪些既有的 CSS token 與元件樣式、nexus action 與 `knot.ui` 純函式的分工（狀態變化寫成 `ui.cljc` 的純函式並補測試）、畫面上的文字。
+  - subagent 完成後，主對話審查 diff，並在瀏覽器實際操作、截圖確認；畫面不對時把具體問題（截圖位置、預期樣子）交回同一個 subagent 修改（SendMessage），一兩行的小修正由主對話直接改。
+- **subagent 一次只派一個：** nREPL 與 port 只有一套（見下方「REPL 與開發的坑」），不平行派多個會重新載入程式的 subagent。
+- **subagent 遇到重新載入失敗就停下回報，** 不要自己重啟或修 REPL；由主對話處理。
+- **subagent 不 commit、不碰 `local/` 與真實資料。**
+
 ## REPL 與開發的坑
 
 - **不要用 `(require 'x :reload-all)`。** 它會重新載入 Datalevin 的類別，之後出現 ClassCastException，只能重啟 nREPL。改用 `(require 'knot.xxx :reload)` 逐一重新載入，或 `(user/reset)`。
