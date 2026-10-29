@@ -6,7 +6,8 @@
   純文字格式：每一行一段（空行忽略）；「- 」「* 」「• 」開頭的連續行是項目清單，
   「1. 」這類數字加句點開頭的連續行是編號清單（編號依順序產生）；
   標記為 {{fact:key}}、{{ref:label}}、[[cite:block-id]]。"
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [knot.sources :as sources]))
 
 ;; ---------------------------------------------------------------------------
 ;; 純文字 → doc
@@ -143,8 +144,8 @@
 (defn- display-inline [facts {:keys [type text attrs]}]
   (case type
     "text" text
-    "fact" (let [{:fact/keys [value unit]} (get facts (:key attrs))]
-             (if value (str value unit) (str "{" (:key attrs) "}")))
+    "fact" (let [f (get facts (:key attrs))]
+             (if (:fact/value f) (sources/fact-display f) (str "{" (:key attrs) "}")))
     "ref" (str "{" (:label attrs) "}")
     ""))
 

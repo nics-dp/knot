@@ -168,7 +168,7 @@
   {:block/id "b3" :block/kind :para :block/status :confirmed
    :block/title "場域 C 異常斷線原因討論" :block/source "第 5 次工作會議紀錄.docx"
    :block/text "會議討論場域 C 多次斷線的可能原因，初判與控制器韌體版本有關。"}
-  {:block/id "b4" :block/kind :para :block/status :candidate :block/ai-split true
+  {:block/id "b4" :block/kind :para :block/status :confirmed
    :block/title "控制器韌體更新說明" :block/source "廠商測試報告.pdf" :block/location "p.3"
    :block/text "廠商說明控制器韌體更新內容與更新排程。"}
   {:block/id "b5" :block/kind :table :table/kind :entity :block/status :confirmed
@@ -179,7 +179,7 @@
   {:block/id "b6" :block/kind :para :block/status :confirmed
    :block/title "節能減碳政策摘要" :block/source "期中報告.pdf" :block/location "p.4"
    :block/text "中央節能減碳政策對地方公共照明用電的要求。"}
-  {:block/id "b7" :block/kind :table :block/status :candidate
+  {:block/id "b7" :block/kind :table :block/status :confirmed
    :block/title "年用電量推估" :block/source "量測紀錄.xlsx" :block/location "工作表 3"
    :table/columns ["場域" "年用電 (kWh)"]
    :table/rows [["場域 A" "192920"] ["場域 B" "156000"]]}

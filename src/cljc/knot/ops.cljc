@@ -312,11 +312,13 @@
                   (str "撰寫「" (:node/name (get nodes (:node/parent node))) "」的引言")
                   (str "撰寫「" (:node/title node) "」"))}))))
 
-(defn- cell-text [cell]
+(defn cell-text
+  "儲存格轉成字串（字串或數字），其他型別為 nil。"
+  [cell]
   (cond (string? cell) cell
         (number? cell) (str cell)))
 
-(defn- table-content-error
+(defn table-content-error
   "columns 與 rows 不合法時的說明；合法時為 nil。"
   [columns rows]
   (cond

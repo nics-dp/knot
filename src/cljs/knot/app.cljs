@@ -1,6 +1,7 @@
 (ns knot.app
   (:require [cljs.reader :as reader]
             [knot.prose-editor :as prose-editor]
+            [knot.sources :as sources]
             [knot.sync :as sync]
             [knot.tree :as tree]
             [knot.ui :as ui]
@@ -60,8 +61,10 @@
    :ui/set-picker-query ui/set-picker-query
    :ui/set-picker-filter ui/set-picker-filter
    :ui/select-block ui/select-block
+   :ui/open-block ui/open-block
    :ui/toggle-source-file ui/toggle-source-file
    :ui/set-block-status ui/set-block-status
+   :ui/toggle-show-discarded ui/toggle-show-discarded
    :ui/open-paragraph ui/open-paragraph
    :ui/add-remote-relation ui/add-remote-relation
    :ui/remove-remote-relation ui/remove-remote-relation
@@ -281,8 +284,8 @@
              :editable? editable?
              :on-change #(dispatch! {} [[:ui/set-prose id %]])
              :fact-text (fn [k]
-                          (let [{:fact/keys [value unit]} (get-in @store [:facts k])]
-                            (if value (str value unit) k)))
+                          (let [f (get-in @store [:facts k])]
+                            (if (:fact/value f) (sources/fact-display f) k)))
              :ref-text views/xref-text
              :cite-text #(views/cite-text (:blocks @store) %)})))
 

@@ -5,6 +5,7 @@
   編輯區的預覽與 MCP 的 get_writing_context 共用這份結果。"
   (:require [clojure.string :as str]
             [knot.prose :as prose]
+            [knot.sources :as sources]
             [knot.tree :as tree]))
 
 (def relation-label
@@ -88,15 +89,16 @@
                     "；" (count (:table/rows b)) " 列"
                     (when where (str "（" where "）")))
                (:block/text b))
-             :warn (= :candidate (:block/status b))))))
+             :warn (= :discarded (:block/status b))
+             :discarded (= :discarded (:block/status b))))))
 
 (defn- cited-facts
   "只帶引用素材上的事實，控制提示詞長度。"
   [{:keys [nodes facts]} id]
   (let [cited (cited-block-ids nodes id)]
-    (for [{:fact/keys [key label value unit block]} (sort-by :fact/key (vals facts))
+    (for [{:fact/keys [key label block] :as f} (sort-by :fact/key (vals facts))
           :when (cited block)]
-      (entry label (str value unit) :key key))))
+      (entry label (sources/fact-display f) :key key))))
 
 (defn- relation-text [rel]
   (cond

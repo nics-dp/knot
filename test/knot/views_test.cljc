@@ -514,3 +514,120 @@
   (testing "標題的編輯區顯示整章合計"
     (let [view (views/app (-> count-state (assoc-in [:ui :editor-collapsed] false) (assoc-in [:ui :selected] "H")))]
       (is (= ["整章合計 16／1,000 字"] (spans-with "target-total" view))))))
+
+;; ---------------------------------------------------------------------------
+;; 素材庫
+
+(def lib-state
+  (-> (ui/init-state
+       {:report/title "測試報告"
+        :ui/selected "a1"
+        :tree [{:node/id "A" :node/kind :heading :node/name "甲"
+                :children [{:node/id "a1" :node/kind :paragraph :node/title "一"
+                            :node/citations [{:block "b1"} {:block "b3"}]}]}]
+        :blocks [{:block/id "b1" :block/kind :para :block/status :confirmed :block/title "節電成果"
+                  :block/source "期中報告.pdf" :block/location "p.3" :block/note "引用節電率"
+                  :block/text "全年節電率達 12.5%。"}
+                 {:block/id "b2" :block/kind :table :block/status :confirmed :block/title "站點人次"
+                  :block/source "統計.xlsx" :block/location "工作表 1"
+                  :table/columns ["站點" "人次"] :table/rows [["甲站" "1,200"] ["乙站" "800"]]}
+                 {:block/id "b3" :block/kind :para :block/status :discarded :block/title "舊說明"
+                  :block/source "期中報告.pdf" :block/text "已廢止的節電說明。"}]
+        :facts [{:fact/key "saving.rate" :fact/label "節電率" :fact/value "12.5" :fact/unit "%" :fact/block "b1"}
+                {:fact/key "ridership.b" :fact/label "乙站人次" :fact/value "800" :fact/block "b2"
+                 :fact/row 1 :fact/column "人次"}]})
+      (ui/set-page :library)))
+
+(defn- block-ids [blocks] (mapv :block/id blocks))
+
+(deftest filter-blocks-test
+  (let [bs (:blocks lib-state)]
+    (is (= ["b1" "b2"] (block-ids (views/filter-blocks bs :all ""))) "預設排除已捨棄")
+    (is (= ["b1" "b2" "b3"] (sort (block-ids (views/filter-blocks bs :all "" {:include-discarded? true})))))
+    (is (= ["b2"] (block-ids (views/filter-blocks bs :table ""))))
+    (is (= ["b1"] (block-ids (views/filter-blocks bs :para ""))))
+    (is (= ["b1"] (block-ids (views/filter-blocks bs :all "節電 期中"))) "多詞")
+    (is (= ["b2"] (block-ids (views/filter-blocks bs :all "ＸＬＳＸ 甲站"))) "全形與多詞（NFKC）" )
+    (is (= ["b1"] (block-ids (views/filter-blocks bs :all "" {:source "期中報告.pdf"}))))))
+
+(deftest fact-cell-text-test
+  (is (= "第 2 列・人次" (views/fact-cell-text {:fact/row 1 :fact/column "人次"})))
+  (is (nil? (views/fact-cell-text {:fact/key "x"}))))
+
+(deftest library-list-test
+  (let [html (render lib-state)]
+    (testing "類型標籤用「節錄」，沒有候選／確認"
+      (is (str/includes? html "節錄"))
+      (is (not (str/includes? html "未確認")))
+      (is (not (str/includes? html "AI 自動切出")))
+      (is (not (str/includes? html "已確認"))))
+    (testing "已捨棄的預設不列出；來源檔顯示素材數（不含已捨棄）"
+      (is (not (str/includes? html "舊說明")))
+      (is (str/includes? html "1 筆")))
+    (testing "事實數與被引用數"
+      (is (str/includes? html "1 個事實"))
+      (is (str/includes? html "被 1 個段落引用"))))
+  (testing "顯示已捨棄：淡化並標「已捨棄」"
+    (let [html (render (ui/toggle-show-discarded lib-state))]
+      (is (str/includes? html "舊說明"))
+      (is (str/includes? html "block-discarded"))
+      (is (str/includes? html "已捨棄"))))
+  (testing "搜尋與類型篩選"
+    (let [html (render (-> lib-state (ui/set-source-query "人次") (ui/set-source-filter :table)))]
+      (is (str/includes? html "站點人次"))
+      (is (not (str/includes? html "節電成果")))))
+  (testing "沒有素材時的說明"
+    (is (str/includes? (render (assoc lib-state :blocks [])) views/empty-library-text))))
+
+(deftest library-detail-test
+  (testing "節錄詳情：用途說明、原文、事實、引用它的段落、捨棄"
+    (let [html (render (ui/select-block lib-state "b1"))]
+      (is (str/includes? html "用途說明"))
+      (is (str/includes? html "引用節電率"))
+      (is (str/includes? html "全年節電率達 12.5%。"))
+      (is (str/includes? html "saving.rate"))
+      (is (str/includes? html "引用它的段落"))
+      (is (str/includes? html "[:ui/open-paragraph \"a1\"]"))
+      (is (str/includes? html "[:ui/set-block-status \"b1\" :discarded]"))))
+  (testing "表格詳情：事實指向的儲存格標出，並說明第 N 列・欄名"
+    (let [v (views/app (ui/select-block lib-state "b2"))
+          marked (filter #(= "cell-mark" (:class (second %))) (find-all :span v))]
+      (is (= ["800"] (map #(nth % 2) marked)))
+      (is (str/includes? (pr-str v) "第 2 列・人次"))))
+  (testing "已捨棄的素材：顯示「恢復」"
+    (let [html (render (-> lib-state ui/toggle-show-discarded (ui/select-block "b3")))]
+      (is (str/includes? html "[:ui/set-block-status \"b3\" :confirmed]"))
+      (is (str/includes? html "恢復")))))
+
+(deftest picker-test
+  (let [open (-> lib-state (ui/set-page :tree) (ui/select "a1") ui/open-editor ui/open-picker)
+        picker #(pr-str (find-el :div.picker (views/app %)))]
+    (is (str/includes? (picker open) "站點人次"))
+    (is (not (str/includes? (picker open) "舊說明")) "選取器排除已捨棄")
+    (let [p (picker (ui/set-picker-query open "站點"))]
+      (is (str/includes? p "站點人次"))
+      (is (not (str/includes? p "節電成果"))))))
+
+(deftest citation-discarded-test
+  (let [html (render (-> lib-state (ui/set-page :tree) (ui/select "a1") ui/open-editor))]
+    (is (str/includes? html "已捨棄"))
+    (is (not (str/includes? html "未確認素材")))))
+
+(deftest citation-jump-to-library-test
+  (testing "編輯區依據列的名稱帶 :ui/open-block"
+    (let [s (-> lib-state (ui/set-page :tree) (assoc-in [:ui :editor-collapsed] false) (assoc-in [:ui :selected] "a1"))
+          html (render s)]
+      (is (str/includes? html "[:ui/open-block \"b1\"]"))
+      (is (str/includes? html "[:ui/open-block \"b3\"]") "已捨棄的也能跳")))
+  (testing "跳到素材庫後詳情顯示該素材（已捨棄的清單也列出）"
+    (let [s (ui/open-block (ui/set-page lib-state :tree) "b3")
+          html (render s)]
+      (is (= :library (get-in s [:ui :page])))
+      (is (str/includes? html "已廢止的節電說明"))
+      (is (str/includes? html "[:ui/set-block-status \"b3\" :confirmed]")))))
+
+(deftest fact-chip-display-test
+  (let [s (-> lib-state (assoc-in [:facts "n"] {:fact/key "n" :fact/label "人次" :fact/value "3760" :fact/unit "人次" :fact/block "b1"}))
+        html (render (ui/select-block s "b1"))]
+    (is (not (str/includes? (render (ui/select-block lib-state "b1")) "3,760")))
+    (is (str/includes? html "3,760 人次") "素材庫的事實清單")))

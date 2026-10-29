@@ -515,3 +515,52 @@
       (is (= 400 (target)))
       (db/undo! c)
       (is (nil? (target))))))
+
+(deftest source-fields-test
+  (let [[_ c loaded] (seeded)
+        state (client-state loaded)
+        table (some #(when (= "各場域量測結果" (:block/title %)) %) (:blocks loaded))
+        tid (:block/id table)
+        blocks #(by :block/id (:blocks (db/load-state (d/db c))))
+        fact #(get (by :fact/key (:facts (db/load-state (d/db c)))) "saving-rate.site-b")]
+    (testing "舊資料：:candidate 讀成 :confirmed，:block/ai-split 不讀出"
+      (let [old-id (random-uuid)]
+        (d/transact! c [{:block/id old-id :block/kind :para :block/status :candidate :block/ai-split true
+                         :block/title "舊素材" :block/text "舊內容"}])
+        (let [b (get (blocks) old-id)]
+          (is (= :confirmed (:block/status b)))
+          (is (not (contains? b :block/ai-split))))))
+    (testing "素材的用途說明 :block/note 寫入、讀回、清除、復原"
+      (let [with-note (update (get (blocks) tid) :block/note (constantly "看各場域節電率"))
+            s1 (assoc state :blocks (mapv #(if (= tid (:block/id %)) with-note %) (:blocks (db/load-state (d/db c)))))]
+        (db/apply-changes! c {:label "加用途說明" :changes (sync/diff (client-state (db/load-state (d/db c))) s1)})
+        (is (= "看各場域節電率" (:block/note (get (blocks) tid))))
+        (db/apply-changes! c {:label "清除"
+                              :changes {:blocks {:upsert [(dissoc (get (blocks) tid) :block/note)]}}})
+        (is (nil? (:block/note (get (blocks) tid))))
+        (db/undo! c)
+        (is (= "看各場域節電率" (:block/note (get (blocks) tid))))))
+    (testing "事實指向表格儲存格：列（索引）與欄寫入、讀回、修改、清除、復原"
+      (is (nil? (:fact/row (fact))))
+      (let [f (fact)
+            bound (assoc f :fact/block tid :fact/row 1 :fact/column "節電率")]
+        (db/apply-changes! c {:label "綁定儲存格" :changes {:facts {:upsert [bound]}}})
+        (is (= [tid 1 "節電率"] ((juxt :fact/block :fact/row :fact/column) (fact))))
+        (db/apply-changes! c {:label "改列" :changes {:facts {:upsert [(assoc bound :fact/row 0)]}}})
+        (is (= 0 (:fact/row (fact))) "列索引 0 也要存下來")
+        (db/apply-changes! c {:label "解除" :changes {:facts {:upsert [(dissoc bound :fact/row :fact/column)]}}})
+        (is (nil? (:fact/row (fact))))
+        (is (nil? (:fact/column (fact))))
+        (testing "復原一步步回到先前"
+          (db/undo! c)
+          (is (= [0 "節電率"] ((juxt :fact/row :fact/column) (fact))))
+          (db/undo! c)
+          (is (= [1 "節電率"] ((juxt :fact/row :fact/column) (fact))))
+          (db/undo! c)
+          (is (nil? (:fact/row (fact)))))))
+    (testing "捨棄素材可復原"
+      (let [b (get (blocks) tid)]
+        (db/apply-changes! c {:label "捨棄" :changes {:blocks {:upsert [(assoc b :block/status :discarded)]}}})
+        (is (= :discarded (:block/status (get (blocks) tid))))
+        (db/undo! c)
+        (is (= :confirmed (:block/status (get (blocks) tid))))))))
