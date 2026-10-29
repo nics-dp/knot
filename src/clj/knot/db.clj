@@ -44,11 +44,13 @@
    :node/prose string
    :node/status kw
    :node/version long*
+   :node/target-chars long*
    :node/label (assoc string :db/unique :db.unique/value)
    :node/facts refs
    :node/rows refs
    :node/table ref-one
    :node/table-view string
+   :node/table-content string ; 表格卡片自己的內容（EDN），前端形式為 {:columns [...] :rows [[...]]}
    :node/figure-file string
    :node/caption string
    :node/contract-items refs
@@ -227,7 +229,7 @@
 
 (def ^:private node-scalars
   [:node/kind :node/order-key :node/name :node/title :node/draft :node/status
-   :node/label :node/figure-file :node/caption :node/table-view])
+   :node/label :node/figure-file :node/caption :node/table-view :node/target-chars])
 
 (defn- read-json [s]
   (when s (json/read-value s json/keyword-keys-object-mapper)))
@@ -255,7 +257,7 @@
                                            (seq where) (assoc :where where)))))])))))
 
 (def ^:private node-pattern
-  (into [:node/id :node/prose :node/version
+  (into [:node/id :node/prose :node/table-content :node/version
          {:node/parent [:node/id]}
          {:node/contract-items [:contract/code]}]
         node-scalars))
@@ -266,6 +268,7 @@
     (cond-> (select-keys e (concat [:node/id :node/version] node-scalars))
       true (assoc :node/parent (get-in e [:node/parent :node/id]))
       (:node/prose e) (assoc :node/prose (read-json (:node/prose e)))
+      (:node/table-content e) (assoc :node/table-content (read-edn (:node/table-content e)))
       (seq (:node/contract-items e)) (assoc :node/contract-items (vec (sort (map :contract/code (:node/contract-items e)))))
       (seq cites) (assoc :node/citations cites))))
 
@@ -386,7 +389,7 @@
         version (if (= (dissoc before :node/version) (dissoc node :node/version))
                   (:node/version before 1)
                   (inc (or (:node/version before) 0)))
-        removed (for [a (concat node-scalars [:node/prose :node/parent])
+        removed (for [a (concat node-scalars [:node/prose :node/table-content :node/parent])
                       :when (and existed? (some? (get before a)) (nil? (get node a)))]
                   [:db/retract eid a])
         old-cites (when existed?
@@ -403,6 +406,7 @@
                      (into {} (keep (fn [a] (when-some [v (get node a)] [a v]))) node-scalars))
         (:node/parent node) (assoc :node/parent (ref :node (:node/parent node)))
         (:node/prose node) (assoc :node/prose (write-json (:node/prose node)))
+        (:node/table-content node) (assoc :node/table-content (pr-str (:node/table-content node)))
         (seq fact-keys) (assoc :node/facts (mapv #(ref :fact %) fact-keys)))]
      (for [code (:node/contract-items node)]
        {:db/id (str "contract-" code) :contract/code code})

@@ -447,3 +447,71 @@
   (is (= ["新名" "副標"] ((juxt :report/title :report/subtitle) (db/report-info (d/db *conn*)))))
   (db/update-report! *conn* {:report/subtitle nil})
   (is (= ["新名" nil] ((juxt :report/title :report/subtitle) (db/report-info (d/db *conn*))))))
+
+(deftest table-content-test
+  (let [[_ c loaded] (seeded)
+        t2 (some #(when (= "各場域量測結果" (:node/title %)) (:node/id %)) (:nodes loaded))
+        node #(some (fn [n] (when (= t2 (:node/id n)) n)) (:nodes (db/load-state (d/db c))))
+        content {:columns ["場域" "節電率"] :rows [["A" "47%"] ["B" "40%"]]}
+        upsert (fn [m] (db/apply-changes! c {:origin :manual :label "表格內容"
+                                             :changes {:nodes {:upsert [(merge (dissoc (node) :node/version) m)]}}}))]
+    (is (nil? (:node/table-content (node))) "沒寫入時沒有這個欄位")
+    (testing "寫入後讀回前端形式（map）"
+      (upsert {:node/table-content content})
+      (is (= content (:node/table-content (node)))))
+    (testing "修改"
+      (upsert {:node/table-content {:columns ["甲"] :rows []}})
+      (is (= {:columns ["甲"] :rows []} (:node/table-content (node)))))
+    (testing "清除：欄位從資料庫移除"
+      (db/apply-changes! c {:origin :manual :label "清除"
+                            :changes {:nodes {:upsert [(dissoc (node) :node/version :node/table-content)]}}})
+      (is (nil? (:node/table-content (node)))))
+    (testing "復原一步步回到先前的內容"
+      (is (= "清除" (db/undo! c)))
+      (is (= {:columns ["甲"] :rows []} (:node/table-content (node))))
+      (db/undo! c)
+      (is (= content (:node/table-content (node))))
+      (db/undo! c)
+      (is (nil? (:node/table-content (node)))))))
+
+(deftest list-prose-extracts-facts-test
+  (let [[_ c loaded] (seeded)
+        p (some #(when (= "各場域結果比較" (:node/title %)) %) (:nodes loaded))
+        item (fn [& content] {:type "listItem" :content [{:type "paragraph" :content (vec content)}]})
+        doc {:type "doc"
+             :content [{:type "paragraph" :content [{:type "text" :text "如下："}]}
+                       {:type "bulletList" :content [(item {:type "fact" :attrs {:key "saving-rate.site-a"}})
+                                                     (item {:type "text" :text "乙"})]}
+                       {:type "orderedList" :content [(item {:type "fact" :attrs {:key "saving-rate.site-c"}}
+                                                            {:type "cite" :attrs {:block "ignored"}})]}]}]
+    (db/apply-changes! c {:origin :manual :label "清單"
+                          :changes {:nodes {:upsert [(assoc (dissoc p :node/version) :node/prose doc)]}}})
+    (is (= #{"saving-rate.site-a" "saving-rate.site-c"}
+           (set (d/q '[:find [?k ...] :in $ ?id
+                       :where [?n :node/id ?id] [?n :node/facts ?f] [?f :fact/key ?k]]
+                     (d/db c) (:node/id p))))
+        "清單中的事實引用也寫入 :node/facts")
+    (is (= doc (:node/prose (some #(when (= (:node/id p) (:node/id %)) %) (:nodes (db/load-state (d/db c)))))))))
+
+(deftest target-chars-test
+  (let [[_ c loaded] (seeded)
+        state (client-state loaded)
+        para (some #(when (= "節能效益估算" (:node/title %)) (:node/id %)) (:nodes loaded))
+        target #(:node/target-chars (some (fn [n] (when (= para (:node/id n)) n)) (:nodes (db/load-state (d/db c)))))
+        set400 (ui/set-target-chars state para "400")]
+    (is (nil? (target)))
+    (testing "寫入並讀回"
+      (db/apply-changes! c {:label "設定目標字數" :changes (sync/diff state set400)})
+      (is (= 400 (target))))
+    (testing "改值再清除"
+      (db/apply-changes! c {:label "改" :changes (sync/diff set400 (ui/set-target-chars set400 para "800"))})
+      (is (= 800 (target)))
+      (db/apply-changes! c {:label "清除" :changes (sync/diff (ui/set-target-chars set400 para "800") state)})
+      (is (nil? (target)) "清除後欄位移除"))
+    (testing "復原：清除復原回 800、再復原回 400、再復原回沒有"
+      (db/undo! c)
+      (is (= 800 (target)))
+      (db/undo! c)
+      (is (= 400 (target)))
+      (db/undo! c)
+      (is (nil? (target))))))

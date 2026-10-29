@@ -1,9 +1,39 @@
 (ns knot.tree
   "卡片樹的純函式：查詢、編號、合法性判斷與移動。
   nodes 是 {id node} 的 map，node 以 :node/parent 與 :node/order-key 構成樹。"
-  (:require [knot.order-key :as ok]))
+  (:require [knot.order-key :as ok]
+            [knot.prose :as prose]))
 
 (def max-heading-level 4)
+
+;; ---------------------------------------------------------------------------
+;; 表格與圖的 label
+
+(def label-prefix {:table "tab:" :figure "fig:"})
+
+(def ^:private label-alias-re #"^[a-z0-9]+(-[a-z0-9]+)*$")
+
+(defn- short-id
+  "4 碼 [a-z0-9] 短 id，用於沒有給代稱的 label。"
+  []
+  (apply str (repeatedly 4 #(rand-nth "abcdefghijklmnopqrstuvwxyz0123456789"))))
+
+(defn new-label
+  "表格、圖的 label（SPEC 4：前綴 tab:／fig: 加代稱，沒給代稱時自動產生 4 碼短 id）。
+  nodes 為目前報告（同一批 build_outline 先建的卡片也在其中）；代稱格式不對或 label 重複時回傳 {:error}。"
+  [nodes kind alias]
+  (let [prefix (label-prefix kind)
+        used (into {} (keep #(when-let [l (:node/label %)] [l %])) (vals nodes))]
+    (cond
+      (nil? alias) {:label (first (remove used (repeatedly #(str prefix (short-id)))))}
+      (not (and (string? alias) (re-matches label-alias-re alias)))
+      {:error (str "label 代稱只能用英文小寫字母、數字與連字號（連字號不能在開頭或結尾，也不能連續），例如 ridership、site-a；收到："
+                   (pr-str alias) "。省略 label 時由 Knot 自動產生")}
+      :else
+      (let [label (str prefix alias)]
+        (if-let [n (used label)]
+          {:error (str "label「" label "」已被「" (or (:node/title n) (:node/name n)) "」使用，請換一個代稱")}
+          {:label label})))))
 
 ;; ---------------------------------------------------------------------------
 ;; 查詢
@@ -375,3 +405,30 @@
                     acc
                     (map vector items (ok/initial-keys (count items)))))]
     (walk {} nil tree)))
+
+;; ---------------------------------------------------------------------------
+;; 字數（SPEC 5.3「字數」）
+
+(defn char-counts
+  "整棵樹的字數 {id 字數}：段落與引言是本文的字數（knot.prose/char-count），
+  標題是底下所有段落與引言的合計（含更深的標題）；表格與圖沒有字數（不在結果中）。
+  state 需有 :nodes 與 :facts；一次走完整棵樹，看板與全文頁共用。"
+  [{:keys [nodes facts]}]
+  (let [by-parent (group-by :node/parent (vals nodes))
+        total (fn total [acc id]
+                (let [n (get nodes id)]
+                  (case (:node/kind n)
+                    (:paragraph :intro) (assoc acc id (prose/char-count facts (:node/prose n)))
+                    :heading (let [acc (reduce total acc (map :node/id (get by-parent id)))]
+                               (assoc acc id (reduce + 0 (keep #(when (#{:paragraph :intro :heading} (:node/kind %))
+                                                                  (get acc (:node/id %)))
+                                                               (get by-parent id)))))
+                    acc)))]
+    (reduce total {} (map :node/id (get by-parent nil)))))
+
+(defn subtree-chars
+  "id 底下（含自己）的字數合計：段落與引言為本文字數，標題為整章／整節合計，其他為 nil。
+  只要一張卡片的字數用這個；要整棵樹用 char-counts。"
+  [state id]
+  (get (char-counts state) id))
+

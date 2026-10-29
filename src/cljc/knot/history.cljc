@@ -24,6 +24,7 @@
     (:node/name :node/title) :name
     :node/draft :intent
     :node/prose :prose
+    :node/table-content :table
     :node/citations :basis
     (:node/parent :node/order-key) :position
     :node/status :status
@@ -127,7 +128,7 @@
    :at inst :label str :by kw :origin kw
    :kind kw                   ; :create :import :delete :undo :change
    :undone? bool              ; 合併的項目任一個被復原就算
-   :fields #{:name :intent :prose :basis :relations :position :status :settings}
+   :fields #{:name :intent :prose :table :basis :relations :position :status :settings}
    :text-changes {:name {:before :after} :intent {:before :after}}  ; 只有名稱、意圖有變時
    :merged n}                 ; 合併了幾個修改組
   連續的逐字輸入（同一人、「編輯文字」、相隔 10 分鐘內）合併成一筆；在這張卡片的歷程上相鄰、

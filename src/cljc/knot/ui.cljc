@@ -405,8 +405,15 @@
     [id (assoc-in state [:nodes id]
                   (assoc node :node/id id :node/parent parent-id :node/order-key k))]))
 
+;; 表格與圖的 label 由 knot.tree/new-label 產生（與後端 add_card 同一套規則）
+(defn- new-float [nodes kind]
+  {:node/kind kind
+   :node/title (if (= kind :table) "新表格" "新圖")
+   :node/draft ""
+   :node/label (:label (tree/new-label nodes kind nil))})
+
 (defn add-child
-  "在標題底下新增引言、段落或下層標題；不合法時不變。"
+  "在標題底下新增引言、段落或下層標題，或在段落底下新增表格、圖；不合法時不變。"
   [state parent-id kind]
   (let [{:keys [nodes]} state
         probe-id ::probe
@@ -416,8 +423,9 @@
       (let [node (case kind
                    :intro {:node/kind :intro :node/draft ""}
                    :paragraph {:node/kind :paragraph :node/title "新段落" :node/status :none :node/draft ""}
-                   :heading {:node/kind :heading :node/name "新標題" :node/draft ""})
-            label (str "新增" ({:intro "引言" :paragraph "段落" :heading "下層標題"} kind))
+                   :heading {:node/kind :heading :node/name "新標題" :node/draft ""}
+                   (:table :figure) (new-float nodes kind))
+            label (str "新增" ({:intro "引言" :paragraph "段落" :heading "下層標題" :table "表格" :figure "圖"} kind))
             [id state] (-> state (remember label) (insert-node parent-id node))]
         (update state :ui assoc :selected id :bias {} :focus-title (when-not (= kind :intro) id)
                 :editor-collapsed false
@@ -485,10 +493,10 @@
 ;; ---------------------------------------------------------------------------
 (defn sibling-kind
   "在 id 的層級上新增時的卡片類型：標題、段落照原類型；選取引言時為段落（接在引言後面，
-  段落一律排在下層標題之前）。表格與圖待 label 命名方式定案（回傳 nil）。"
+  段落一律排在下層標題之前）。表格與圖新增同類卡片。"
   [nodes id]
   (case (tree/kind nodes id)
-    (:heading :paragraph) (tree/kind nodes id)
+    (:heading :paragraph :table :figure) (tree/kind nodes id)
     :intro :paragraph
     nil))
 
@@ -498,12 +506,13 @@
   (let [{:keys [nodes]} state
         k (sibling-kind nodes id)
         p (tree/parent nodes id)]
-    (if-not (#{:heading :paragraph} k)
+    (if-not (#{:heading :paragraph :table :figure} k)
       state
-      (let [[new-id state] (new-id (remember state (if (= k :heading) "新增同層標題" "新增段落")))
-            node (if (= k :heading)
-                   {:node/kind :heading :node/name "新標題" :node/draft ""}
-                   {:node/kind :paragraph :node/title "新段落" :node/status :none :node/draft ""})
+      (let [[new-id state] (new-id (remember state (case k :heading "新增同層標題" :paragraph "新增段落" :table "新增表格" :figure "新增圖")))
+            node (case k
+                   :heading {:node/kind :heading :node/name "新標題" :node/draft ""}
+                   :paragraph {:node/kind :paragraph :node/title "新段落" :node/status :none :node/draft ""}
+                   (new-float (:nodes state) k))
             nodes' (assoc (:nodes state) new-id
                           (assoc node :node/id new-id :node/parent p
                                  :node/order-key (tree/key-after (:nodes state) id)))
@@ -515,7 +524,7 @@
                                   (tree/mark-pending % nodes' [next-para] {next-para id})
                                   %))
             (update :ui assoc :selected new-id :bias {} :focus-title new-id :editor-collapsed false
-                    :toast (if (= k :heading) "已新增同層標題" "已新增段落")))))))
+                    :toast (case k :heading "已新增同層標題" :paragraph "已新增段落" :table "已新增表格" :figure "已新增圖")))))))
 
 (defn delete-node
   "刪除卡片與其所有下層卡片；可以復原。"
@@ -557,6 +566,22 @@
   (if (and (editable-fields field) (contains? (:nodes state) id))
     (assoc-in state [:nodes id field] (or value ""))
     state))
+
+(defn set-target-chars
+  "設定或清除卡片的目標字數：value 為正整數時設定；nil 或空白字串時清除；
+  其他（0、負數、無法解析的字串）不改。value 可以是輸入框的字串。
+  只有標題、段落、引言有字數。與意圖欄位一樣不進復原紀錄。"
+  [state id value]
+  (let [kind (get-in state [:nodes id :node/kind])
+        n (cond (integer? value) value
+                (string? value) (when (re-matches #"\s*\d+\s*" value)
+                                  #?(:clj (parse-long (str/trim value))
+                                     :cljs (js/parseInt value 10))))]
+    (cond
+      (not (#{:heading :paragraph :intro} kind)) state
+      (or (nil? value) (and (string? value) (str/blank? value))) (update-in state [:nodes id] dissoc :node/target-chars)
+      (and n (pos? n)) (assoc-in state [:nodes id :node/target-chars] n)
+      :else state)))
 
 (defn set-prose
   "在本文編輯器修改本文（逐字輸入，不進復原紀錄；編輯器有自己的復原）。

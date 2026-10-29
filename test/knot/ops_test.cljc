@@ -99,7 +99,7 @@
       (is (str/includes? (error-of (ops/add-card s {:kind :paragraph :parent-id "A1" :title "x" :after-id "nope"}))
                          "找不到 after_id")))
     (testing "其他錯誤"
-      (is (str/includes? (error-of (ops/add-card s {:kind :table :parent-id "A1" :title "x"})) "kind 只接受"))
+      (is (str/includes? (error-of (ops/add-card s {:kind :bogus :parent-id "A1" :title "x"})) "kind 只接受"))
       (is (str/includes? (error-of (ops/add-card s {:kind :paragraph :parent-id "A1" :title "  "})) "需要 title"))
       (is (str/includes? (error-of (ops/add-card s {:kind :paragraph :parent-id "nope" :title "x"})) "找不到 parent_id")))))
 
@@ -170,7 +170,7 @@
                                                                                  :children [{:kind :heading :title "e"}]}]}]}]}]})]
         (is (str/starts-with? (:error r) "items[0].children[0].children[0].children[0].children[0]："))
         (is (str/includes? (:error r) "第四層")))
-      (let [r (ops/build-outline s {:parent-id nil :items [{:kind :paragraph :title "x" :children [{:kind :paragraph :title "y"}]}]})]
+      (let [r (ops/build-outline s {:parent-id "B" :items [{:kind :intro :children [{:kind :paragraph :title "y"}]}]})]
         (is (str/includes? (:error r) "不能有 children")))
       (is (= "items 不可為空" (:error (ops/build-outline s {:parent-id nil :items []}))))
       (is (= "items 必須是陣列" (:error (ops/build-outline s {:parent-id nil :items nil})))))))
@@ -324,3 +324,175 @@
       (is (str/includes? (:error (ops/remove-relation s {:from-id "a1" :to-id "a2" :type :causal})) "沒有類型為 causal"))
       (is (str/includes? (:error (ops/remove-relation s {:from-id "a2" :to-id "a1"})) "沒有任何關係"))
       (is (str/includes? (:error (ops/remove-relation s {:from-id "a1" :to-id "nope"})) "找不到 to_id")))))
+
+;; ---------------------------------------------------------------------------
+;; 表格與圖、本文、表格內容（M6）
+
+(defn- label-of [r id] (get-in r [:state :nodes id :node/label]))
+
+(deftest add-table-and-figure-test
+  (let [s (state)]
+    (testing "表格掛在段落底下：標題、意圖、label 代稱"
+      (let [r (ops/add-card s {:kind :table :parent-id "a1" :title "騎乘量" :intent "每月人次" :label "ridership"})
+            id (first (:created r))]
+        (is (nil? (:error r)))
+        (is (= {:node/kind :table :node/title "騎乘量" :node/draft "每月人次" :node/label "tab:ridership" :node/parent "a1"}
+               (select-keys (get-in r [:state :nodes id]) [:node/kind :node/title :node/draft :node/label :node/parent])))
+        (is (= "新增表格「騎乘量」" (:label r)))))
+    (testing "圖：fig: 前綴；沒給代稱時自動產生 4 碼"
+      (let [r (ops/add-card s {:kind :figure :parent-id "a1" :title "趨勢圖"})
+            l (label-of r (first (:created r)))]
+        (is (re-matches #"fig:[a-z0-9]{4}" l))))
+    (testing "表格與圖的 label 前綴不同，代稱可以相同"
+      (let [r1 (ops/add-card s {:kind :table :parent-id "a1" :title "T" :label "x"})
+            r2 (ops/add-card (:state r1) {:kind :figure :parent-id "a1" :title "F" :label "x"})]
+        (is (nil? (:error r2)))))
+    (testing "只能放在段落底下"
+      (is (str/includes? (:error (ops/add-card s {:kind :table :parent-id "A1" :title "T"})) "底下不能放表格"))
+      (is (str/includes? (:error (ops/add-card s {:kind :figure :parent-id nil :title "F"})) "只能放標題")))
+    (testing "必須有 title"
+      (is (str/includes? (:error (ops/add-card s {:kind :table :parent-id "a1"})) "需要 title")))
+    (testing "label 代稱格式錯誤，說明規則並舉例"
+      (doseq [bad ["Ridership" "a_b" "-a" "a-" "a--b" "" "中文" "a b"]]
+        (let [e (:error (ops/add-card s {:kind :table :parent-id "a1" :title "T" :label bad}))]
+          (is (and e (str/includes? e "ridership")) (pr-str bad)))))
+    (testing "label 重複：拒絕並指出已使用的卡片"
+      (let [s2 (:state (ops/add-card s {:kind :table :parent-id "a1" :title "第一張" :label "dup"}))
+            e (:error (ops/add-card s2 {:kind :table :parent-id "a2" :title "第二張" :label "dup"}))]
+        (is (str/includes? e "tab:dup"))
+        (is (str/includes? e "第一張"))))
+    (testing "標題、段落、引言不能給 label"
+      (is (str/includes? (:error (ops/add-card s {:kind :paragraph :parent-id "A1" :title "P" :label "x"})) "只用於表格與圖")))
+    (testing "自動產生的 label 避開既有的"
+      (let [r (ops/add-card (assoc-in s [:nodes "a1" :node/label] "tab:aaaa")
+                            {:kind :table :parent-id "a1" :title "T"})]
+        (is (not= "tab:aaaa" (label-of r (first (:created r)))))))))
+
+(deftest build-outline-with-tables-test
+  (let [s (state)
+        items [{:kind :paragraph :title "新段" :children [{:kind :table :title "表一" :label "t1"}
+                                                           {:kind :figure :title "圖一" :label "t1"}]}]
+        r (ops/build-outline s {:parent-id "A1" :after-id "a3" :items items})]
+    (testing "段落的 children 可以是表格與圖"
+      (is (nil? (:error r)))
+      (is (= 3 (count (:created r))))
+      (is (= #{"tab:t1" "fig:t1"} (set (keep #(get-in r [:state :nodes % :node/label]) (:created r))))))
+    (testing "同一批裡重複的 label 被拒絕"
+      (let [e (:error (ops/build-outline s {:parent-id "A1" :items [{:kind :paragraph :title "P"
+                                                                    :children [{:kind :table :title "甲表" :label "same"}
+                                                                               {:kind :table :title "乙表" :label "same"}]}]}))]
+        (is (str/includes? e "items[0].children[1]"))
+        (is (str/includes? e "甲表"))))
+    (testing "段落底下只能放表格與圖；標題底下不能直接放表格"
+      (is (str/includes? (:error (ops/build-outline s {:parent-id "A1" :items [{:kind :paragraph :title "P" :children [{:kind :paragraph :title "Q"}]}]}))
+                         "只能放表格與圖"))
+      (is (str/includes? (:error (ops/build-outline s {:parent-id nil :items [{:kind :heading :title "H" :children [{:kind :table :title "T"}]}]}))
+                         "底下不能放表格")))
+    (testing "表格與圖不能有 children"
+      (is (str/includes? (:error (ops/build-outline s {:parent-id "A1" :items [{:kind :paragraph :title "P"
+                                                                               :children [{:kind :table :title "T" :children [{:kind :figure :title "F"}]}]}]}))
+                         "不能有 children")))))
+
+(def ^:private doc-a {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "新的本文"}]}]})
+
+(deftest write-prose-test
+  (let [s (state)]
+    (testing "段落：寫入本文、狀態轉為 ai（含原本 human 的段落）"
+      (let [r (ops/write-prose s {:id "b2" :doc doc-a})]
+        (is (nil? (:error r)))
+        (is (= doc-a (get-in r [:state :nodes "b2" :node/prose])))
+        (is (= :ai (get-in r [:state :nodes "b2" :node/status])))
+        (is (= ["b2"] (:touched r)))
+        (is (= "撰寫「b2」" (:label r)))))
+    (testing "引言：不改狀態，名稱為標題的引言"
+      (let [r (ops/write-prose s {:id "iA" :doc doc-a})]
+        (is (= doc-a (get-in r [:state :nodes "iA" :node/prose])))
+        (is (not (contains? (get-in r [:state :nodes "iA"]) :node/status)))
+        (is (= "撰寫「甲」的引言" (:label r)))))
+    (testing "cite：依序加入依據，已有的保留、不重複"
+      (let [s1 (assoc-in s [:nodes "a1" :node/citations] [{:block "x"}])
+            r (ops/write-prose s1 {:id "a1" :doc doc-a :cite-blocks ["y" "x" "z" "y"]})]
+        (is (= [{:block "x"} {:block "y"} {:block "z"}] (get-in r [:state :nodes "a1" :node/citations])))))
+    (testing "版本衝突"
+      (is (str/includes? (:error (ops/write-prose s {:id "a1" :doc doc-a :version 9})) "已被修改"))
+      (is (nil? (:error (ops/write-prose s {:id "a1" :doc doc-a :version 1})))))
+    (testing "拒絕表格、標題與圖"
+      (let [s2 (:state (ops/add-card s {:kind :table :parent-id "a1" :title "T"}))
+            s3 (:state (ops/add-card s {:kind :figure :parent-id "a1" :title "F"}))
+            tid (first (filter #(= :table (:node/kind (get (:nodes s2) %))) (keys (:nodes s2))))
+            fid (first (filter #(= :figure (:node/kind (get (:nodes s3) %))) (keys (:nodes s3))))]
+        (is (str/includes? (:error (ops/write-prose s2 {:id tid :doc doc-a})) "write_table"))
+        (is (str/includes? (:error (ops/write-prose s3 {:id fid :doc doc-a})) "沒有本文"))
+        (is (str/includes? (:error (ops/write-prose s {:id "A1" :doc doc-a})) "沒有本文"))))
+    (testing "找不到卡片"
+      (is (str/includes? (:error (ops/write-prose s {:id "nope" :doc doc-a})) "找不到卡片")))))
+
+(deftest write-table-test
+  (let [s (:state (ops/add-card (state) {:kind :table :parent-id "a1" :title "指標總表"}))
+        tid (first (filter #(= :table (:node/kind (get (:nodes s) %))) (keys (:nodes s))))
+        write #(ops/write-table s (merge {:id tid} %))]
+    (testing "寫入：數字轉字串、狀態 ai"
+      (let [r (write {:columns ["指標" "數值"] :rows [["人次" 2871] ["達成率" "95.7%"] ["比率" 1.5]]})]
+        (is (nil? (:error r)))
+        (is (= {:columns ["指標" "數值"] :rows [["人次" "2871"] ["達成率" "95.7%"] ["比率" "1.5"]]}
+               (get-in r [:state :nodes tid :node/table-content])))
+        (is (= :ai (get-in r [:state :nodes tid :node/status])))
+        (is (= "填寫表格「指標總表」" (:label r)))))
+    (testing "rows 可為空"
+      (is (= [] (get-in (write {:columns ["甲"] :rows []}) [:state :nodes tid :node/table-content :rows]))))
+    (testing "各種錯誤"
+      (is (str/includes? (:error (write {:columns [] :rows []})) "columns"))
+      (is (str/includes? (:error (write {:columns nil :rows []})) "columns"))
+      (is (str/includes? (:error (write {:columns ["甲" " "] :rows []})) "欄名"))
+      (is (str/includes? (:error (write {:columns ["甲" 1] :rows []})) "欄名"))
+      (is (str/includes? (:error (write {:columns ["甲"] :rows nil})) "rows"))
+      (is (str/includes? (:error (write {:columns ["甲" "乙"] :rows [["1" "2"] ["3"]]})) "第 2 列有 1 個儲存格"))
+      (is (str/includes? (:error (write {:columns ["甲"] :rows [["1"] "x"]})) "第 2 列"))
+      (is (str/includes? (:error (write {:columns ["甲" "乙"] :rows [["1" nil]]})) "第 1 列第 2 格"))
+      (is (str/includes? (:error (write {:columns ["甲"] :rows [[true]]})) "字串或數字")))
+    (testing "版本衝突、非表格卡片、找不到"
+      (is (str/includes? (:error (write {:columns ["甲"] :rows [] :version 99})) "已被修改"))
+      (is (str/includes? (:error (ops/write-table s {:id "a1" :columns ["甲"] :rows []})) "不是表格"))
+      (is (str/includes? (:error (ops/write-table s {:id "nope" :columns ["甲"] :rows []})) "找不到卡片")))))
+
+(deftest target-chars-test
+  (let [s (state)
+        target #(get-in % [:state :nodes %2 :node/target-chars])]
+    (testing "update-card 設定與清除"
+      (let [r (ops/update-card s {:id "a1" :target-chars 400})]
+        (is (= 400 (target r "a1")))
+        (is (= :none (get-in r [:state :nodes "a1" :node/status])) "不影響狀態")
+        (is (nil? (target (ops/update-card (:state r) {:id "a1" :target-chars nil}) "a1"))
+            "傳 nil 清除")
+        (is (not (contains? (get-in (ops/update-card (:state r) {:id "a1" :target-chars nil}) [:state :nodes "a1"])
+                            :node/target-chars))))
+      (is (= 5000 (target (ops/update-card s {:id "A" :target-chars 5000}) "A")) "標題")
+      (is (= 300 (target (ops/update-card s {:id "iA" :target-chars 300}) "iA")) "引言")
+      (testing "同時改其他欄位；沒給 target-chars 不動它"
+        (let [r (ops/update-card (:state (ops/update-card s {:id "a1" :target-chars 400})) {:id "a1" :intent "新"})]
+          (is (= 400 (target r "a1"))))))
+    (testing "只給 target-chars 不算「沒有要修改的欄位」"
+      (is (nil? (:error (ops/update-card s {:id "a1" :target-chars 10})))))
+    (testing "非正整數是錯誤"
+      (doseq [bad [0 -5 1.5 "400" true]]
+        (is (str/includes? (:error (ops/update-card s {:id "a1" :target-chars bad})) "正整數") (pr-str bad))))
+    (testing "表格與圖沒有字數"
+      (let [s2 (:state (ops/add-card s {:kind :table :parent-id "a1" :title "表"}))
+            id (first (tree/child-ids (:nodes s2) "a1"))]
+        (is (str/includes? (:error (ops/update-card s2 {:id id :target-chars 100})) "沒有字數"))
+        (is (str/includes? (:error (ops/add-card s {:kind :table :parent-id "a1" :title "表" :target-chars 100})) "沒有字數"))))
+    (testing "add-card 可帶目標字數"
+      (let [r (ops/add-card s {:kind :paragraph :parent-id "A1" :title "新" :target-chars 250})
+            id (first (:created r))]
+        (is (= 250 (get-in r [:state :nodes id :node/target-chars]))))
+      (is (str/includes? (:error (ops/add-card s {:kind :paragraph :parent-id "A1" :title "新" :target-chars 0})) "正整數")))
+    (testing "build-outline 的 item 可帶目標字數；錯誤指出位置"
+      (let [r (ops/build-outline s {:parent-id nil
+                                    :items [{:kind :heading :title "丙" :target-chars 2000
+                                             :children [{:kind :paragraph :title "p" :target-chars 300}]}]})
+            [h p] (:created r)]
+        (is (= [2000 300] [(get-in r [:state :nodes h :node/target-chars])
+                           (get-in r [:state :nodes p :node/target-chars])])))
+      (is (str/starts-with? (:error (ops/build-outline s {:parent-id nil
+                                                          :items [{:kind :heading :title "丙" :children [{:kind :paragraph :title "p" :target-chars -1}]}]}))
+                            "items[0].children[0]")))))

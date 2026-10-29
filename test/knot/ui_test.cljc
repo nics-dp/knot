@@ -378,3 +378,49 @@
   (let [off (ui/toggle-fulltext-intents state)]
     (is (false? (ui/fulltext-intents? off)))
     (is (true? (ui/fulltext-intents? (ui/toggle-fulltext-intents off))))))
+
+(deftest add-table-and-figure-test
+  (testing "段落底下新增表格：label 自動產生、選取並進入名稱編輯"
+    (let [s (ui/add-child state "a1" :table)
+          id (get-in s [:ui :selected])
+          n (get-in s [:nodes id])]
+      (is (= :table (:node/kind n)))
+      (is (= "a1" (:node/parent n)))
+      (is (re-matches #"tab:[a-z0-9]{4}" (:node/label n)))
+      (is (= id (get-in s [:ui :focus-title])))
+      (is (= 1 (count (:history s))) "可復原")
+      (testing "再新增圖，label 前綴為 fig:"
+        (let [s2 (ui/add-child s "a1" :figure)
+              fid (get-in s2 [:ui :selected])]
+          (is (re-matches #"fig:[a-z0-9]{4}" (get-in s2 [:nodes fid :node/label])))
+          (is (= [id fid] (tree/child-ids (:nodes s2) "a1")))))))
+  (testing "標題底下不能新增表格"
+    (is (= (:nodes state) (:nodes (ui/add-child state "A" :table)))))
+  (testing "選取表格時，新增是在它後面加一張同類卡片"
+    (let [s (ui/add-child state "a1" :table)
+          t (get-in s [:ui :selected])
+          s2 (ui/add-sibling s t)
+          t2 (get-in s2 [:ui :selected])]
+      (is (= :table (ui/sibling-kind (:nodes s) t)))
+      (is (not= t t2))
+      (is (= :table (tree/kind (:nodes s2) t2)))
+      (is (not= (get-in s2 [:nodes t :node/label]) (get-in s2 [:nodes t2 :node/label])))
+      (is (= [t t2] (tree/child-ids (:nodes s2) "a1"))))))
+
+(deftest set-target-chars-test
+  (let [t #(get-in % [:nodes %2 :node/target-chars])
+        s (ui/set-target-chars state "a1" "400")]
+    (testing "正整數（字串或數字）設定"
+      (is (= 400 (t s "a1")))
+      (is (= 250 (t (ui/set-target-chars state "a1" 250) "a1")))
+      (is (= 12 (t (ui/set-target-chars state "a1" " 12 ") "a1"))))
+    (testing "標題也可以"
+      (is (= 3000 (t (ui/set-target-chars state "A" "3000") "A"))))
+    (testing "空白或 nil 清除（key 移除）"
+      (is (not (contains? (get-in (ui/set-target-chars s "a1" "") [:nodes "a1"]) :node/target-chars)))
+      (is (not (contains? (get-in (ui/set-target-chars s "a1" nil) [:nodes "a1"]) :node/target-chars))))
+    (testing "0、負數、非整數、非數字不改"
+      (doseq [bad ["0" "-3" "1.5" "abc" 0 -1]]
+        (is (= s (ui/set-target-chars s "a1" bad)) (pr-str bad))))
+    (testing "不存在的卡片不改"
+      (is (= state (ui/set-target-chars state "nope" "10"))))))

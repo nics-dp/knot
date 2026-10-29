@@ -31,11 +31,14 @@
              (mapv (juxt :label :text) (:entries (section ctx "章節路徑"))))))
     (testing "所屬標題沒有引言時不列出"
       (is (nil? (section ctx "所屬標題的引言"))))
-    (testing "鄰段有本文就帶本文，沒有就帶意圖"
-      (is (= {:label "一" :text "很長的本文" :source :prose :relation "因果"}
-             (select-keys (first (:entries (section ctx "前一段"))) [:label :text :source :relation])))
+    (testing "鄰段一律只帶意圖與關係類型；對方已有本文時標 :has-prose"
+      (is (= {:label "一" :text "前段意圖" :source :intent :relation "因果" :has-prose true}
+             (select-keys (first (:entries (section ctx "前一段"))) [:label :text :source :relation :has-prose])))
       (is (= {:text "後段意圖" :source :intent :relation "遞進，待確認"}
-             (select-keys (first (:entries (section ctx "下一段"))) [:text :source :relation]))))
+             (select-keys (first (:entries (section ctx "下一段"))) [:text :source :relation :has-prose]))
+          "沒有本文時沒有 :has-prose"))
+    (testing "周邊卡片的本文不會出現在任何一節"
+      (is (not-any? #(= "很長的本文" (:text %)) (mapcat :entries (:sections ctx)))))
     (testing "只帶引用素材上的事實"
       (is (= ["k"] (mapv :key (:entries (section ctx "可用事實"))))))
     (testing "每一節都有分組"
@@ -49,7 +52,12 @@
 (deftest intro-context-test
   (let [ctx (context/generation-context state "iA")]
     (is (= ["引言意圖"] (mapv :text (:entries (section ctx "引言的意圖")))))
-    (is (= ["節的意圖"] (mapv :text (:entries (section ctx "這一層的下層內容")))))))
+    (is (= ["節的意圖"] (mapv :text (:entries (section ctx "這一層的下層內容"))))))
+  (testing "引言的下層內容有本文時帶本文（引言的例外）"
+    (let [s (assoc-in state [:nodes "A1" :node/prose]
+                      {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "節的本文"}]}]})
+          e (first (:entries (section (context/generation-context s "iA") "這一層的下層內容")))]
+      (is (= {:text "節的本文" :source :prose} (select-keys e [:text :source]))))))
 
 (deftest mixed-structure-context-test
   (let [s (ui/add-child state "A" :paragraph)           ; 接在引言後面、下層標題 1.1 之前
@@ -72,9 +80,9 @@
         s (update s :nodes assoc "a0" {:node/id "a0" :node/kind :paragraph :node/parent "A"
                                        :node/order-key "z" :node/title "零" :node/draft "x"})
         ctx (context/generation-context s "a0")]
-    (is (= [{:label "引言" :text "引言本文" :source :prose}]
+    (is (= [{:label "引言" :text "引言意圖" :source :intent :has-prose true}]
            (:entries (section ctx "所屬標題的引言")))
-        "所屬標題的引言有本文時帶本文")))
+        "所屬標題的引言只帶意圖，已有本文時標示")))
 
 (deftest other-kinds-test
   (is (nil? (context/generation-context state "A")))
@@ -85,10 +93,10 @@
               (ui/add-remote-relation "a3" "a1" :basis)
               (ui/add-remote-relation "a3" "a1" :echo))
         ctx (context/generation-context s "a3")]
-    (is (= [["一" "很長的本文"]] (mapv (juxt :label :text) (:entries (section ctx "本段依據的段落"))))
-        "依據帶目標段落的本文")
-    (is (= [["一" "前段意圖"]] (mapv (juxt :label :text) (:entries (section ctx "本段呼應的段落"))))
-        "呼應只帶意圖")
+    (is (= [{:label "一" :text "前段意圖" :source :intent :has-prose true}]
+           (:entries (section ctx "本段依據的段落")))
+        "依據也只帶意圖，標示對方已有本文")
+    (is (= [["一" "前段意圖"]] (mapv (juxt :label :text) (:entries (section ctx "本段呼應的段落")))))
     (is (nil? (section ctx "本段對比的段落")) "沒有的類型不列出")))
 
 (deftest prose-text-test
@@ -102,3 +110,37 @@
                                                    {:type "ref" :attrs {:label "tab:x"}}
                                                    {:type "text" :text "。"}]}
                                         {:type "paragraph" :content [{:type "text" :text "第二段"}]}]}))))
+
+(deftest prose-text-lists-test
+  (is (= "如下：\n- 甲\n- 乙\n1. 一\n2. 二"
+         (context/prose-text {} {:type "doc"
+                                 :content [{:type "paragraph" :content [{:type "text" :text "如下："}]}
+                                           {:type "bulletList"
+                                            :content (mapv (fn [t] {:type "listItem" :content [{:type "paragraph" :content [{:type "text" :text t}]}]}) ["甲" "乙"])}
+                                           {:type "orderedList"
+                                            :content (mapv (fn [t] {:type "listItem" :content [{:type "paragraph" :content [{:type "text" :text t}]}]}) ["一" "二"])}]}))))
+
+(deftest table-content-in-context-test
+  (let [s (assoc-in state [:nodes "t1" :node/table-content] {:columns ["指標" "數值"] :rows [["人次" "2871"] ["達成率" "95.7%"]]})
+        e (first (:entries (section (context/generation-context s "a2") "下層表格與圖")))]
+    (testing "label 在項目名稱，意圖之後接欄名與各列（每列一行、以「｜」分隔）"
+      (is (= "tab:x 表一" (:label e)))
+      (is (= "表的意圖\n指標｜數值\n人次｜2871\n達成率｜95.7%" (:text e)))
+      (is (= :prose (:source e))))))
+
+(deftest target-chars-context-test
+  (let [st (-> state
+               (ui/set-target-chars "a2" "400")
+               (ui/set-target-chars "A" "2000"))
+        ctx (context/generation-context st "a2")
+        entries (fn [title] (:entries (section ctx title)))]
+    (testing "本段帶目標字數 entry"
+      (let [e (some #(when (= "目標字數" (:label %)) %) (entries "本段"))]
+        (is (= 400 (:target-chars e)))
+        (is (= :target (:source e)))
+        (is (= "約 400 字（撰寫時控制篇幅）" (:text e)))))
+    (testing "上層標題的目標一併帶上"
+      (is (= [2000] (keep :target-chars (entries "章節路徑")))))
+    (testing "沒設定時沒有"
+      (is (not-any? #(= "目標字數" (:label %))
+                    (mapcat :entries (:sections (context/generation-context state "a2"))))))))
