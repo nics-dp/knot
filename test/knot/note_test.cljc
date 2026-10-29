@@ -37,6 +37,11 @@
     (is (= 1 (note/subtree-todo-count nodes counts "A")))
     (is (= 0 (note/subtree-todo-count nodes counts "a2")))))
 
+(deftest question-counts-test
+  (let [counts (note/question-counts nodes notes)]
+    (is (= {"a2" 1} counts) "只算還沒有人回覆、卡片仍存在的 agent 提問")
+    (is (= 1 (note/subtree-todo-count nodes counts "A")) "標題為含下層的合計")))
+
 (deftest open-todos-and-questions-test
   (is (= ["t1" "g1"] (map :note/id (note/open-todos nodes notes))))
   (is (= ["q1"] (map :note/id (note/agent-questions nodes notes)))

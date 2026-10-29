@@ -318,16 +318,25 @@
 
 (def role-opacity {:active 1 :path 1 :related 1 :sibling 0.7 :other 0.35})
 
-(defn- todo-badge [n]
-  (when (pos? (or n 0))
-    [:span.todo-count {:title (str n " 則未完成的待辦事項")} n]))
+(defn- note-badges
+  "卡片與大綱標題旁的數字：等你回覆的 agent 提問（醒目）與交給 agent 的待辦事項（淡色），
+  與頂部列「待辦事項」的兩組對應。subtree? 為真時是含下層的合計。"
+  [todos questions subtree?]
+  (let [todos (or todos 0) questions (or questions 0)
+        scope (when subtree? "（含下層）")]
+    (when (pos? (+ todos questions))
+      [:span.note-badges
+       (when (pos? questions)
+         [:span.question-count {:title (str questions " 則 agent 的提問等你回覆" scope)} questions])
+       (when (pos? todos)
+         [:span.todo-count {:title (str todos " 則待辦事項交給 agent" scope)} todos])])))
 
 (defn- count-span
   "字數小字：class 為基本類別，超出或不足時加上顏色類別並以 title 說明。"
   [base {:keys [text class title]}]
   [:span {:class (cond-> [base] class (conj class)) :title title} text])
 
-(defn- tree-card [{:keys [nodes title role drag over agent todos counts]} {:keys [id top height]}]
+(defn- tree-card [{:keys [nodes title role drag over agent todos questions counts]} {:keys [id top height]}]
   (let [node (get nodes id)
         k (:node/kind node)
         dragging? (= id drag)
@@ -359,7 +368,7 @@
           [:span.card-title (title id)]
           (when (and (= k :table) (not (table-filled? node)))
             [:span.pill.pill-none "尚未填寫"])
-          (todo-badge (get todos id))]
+          (note-badges (get todos id) (get questions id) false)]
          [:span.mono.muted.small {:replicant/key "l"} (:node/label node)])
 
         (list
@@ -369,7 +378,7 @@
             (count-span "card-count" info))
           (when-let [{:keys [label class]} (status-pill (:node/status node))]
             [:span.pill {:class class} label])
-          (todo-badge (get todos id))]
+          (note-badges (get todos id) (get questions id) false)]
          [:span.card-gist {:replicant/key "g"}
           (if (and (= k :intro) (str/blank? (:node/draft node)))
             "（由 agent 依下層內容撰寫）"
@@ -457,6 +466,7 @@
         roles (memoize #(card-role selected anc desc related nodes %))
         sel-depth (tree/depth nodes selected)
         todos (note/todo-counts nodes (:notes state))
+        questions (note/question-counts nodes (:notes state))
         ;; agent 剛修改的卡片：兩個相同的動畫交替使用，同一張卡片再被修改時才會重新播放
         agent (when-let [{:keys [ids n]} (:agent-change ui)]
                 {:ids (set ids) :class (if (even? n) "card-agent-a" "card-agent-b")})
@@ -504,7 +514,7 @@
            [:div.tree-inner {:style {:transform (str "translateY(" translate "px)")}}
             (relation-chips state col roles)
             (for [c col]
-              (tree-card {:nodes nodes :title title :role (roles (:id c)) :drag drag :over over :agent agent :todos todos :counts counts} c))
+              (tree-card {:nodes nodes :title title :role (roles (:id c)) :drag drag :over over :agent agent :todos todos :questions questions :counts counts} c))
             (when (and over (some #(= (:id over) (:id %)) col))
               (insert-marker col over))]]])])]]]))
 
@@ -513,10 +523,11 @@
 
 (defn- outline
   "全文頁左側的大綱：所有標題依層級縮排；選取的卡片所在的章節標為目前位置。
-  標題旁是這一章節（含下層）未完成的待辦數。"
+  標題旁是這一章節（含下層）等你回覆的提問數與未完成的待辦事項數。"
   [{:keys [nodes notes ui]} title]
   (let [selected (:selected ui)
         todos (note/todo-counts nodes notes)
+        questions (note/question-counts nodes notes)
         here (set (cons selected (tree/ancestor-ids nodes selected)))]
     [:nav.outline {:aria-label "大綱"}
      [:div.outline-head "大綱"]
@@ -532,8 +543,9 @@
                                         (when (= id selected) "outline-selected")]
                                 :aria-current (when (= id selected) "true")
                                 :on {:click [[:ui/select id]]}}
-          (title id)
-          (todo-badge (note/subtree-todo-count nodes todos id))]])]]))
+          [:span.outline-text (title id)]
+          (note-badges (note/subtree-todo-count nodes todos id)
+                       (note/subtree-todo-count nodes questions id) true)]])]]))
 
 (defn- ft-plan
   "全文頁中還沒有本文的部分：第一行說明是什麼，下面是意圖（UI 字體，與本文區分）。"
@@ -1185,12 +1197,16 @@
   "編輯區最後的「留言與歷程」：這張卡片的留言串與修改紀錄依時間穿插成一條時間軸（最新的在下方），最後是新增留言。"
   [state id]
   (let [n (get (note/todo-counts (:nodes state) (:notes state)) id 0)
+        q (get (note/question-counts (:nodes state) (:notes state)) id 0)
         {h-id :id :keys [data]} (get-in state [:ui :history])
         {:keys [entries more?]} (when (= h-id id) data)
         items (history/timeline (note/threads (:notes state) id) entries)]
     (zone "notes" "留言與歷程"
           {:hint "留言、待辦事項與這張卡片的修改紀錄；不會出現在報告中"
-           :aside (when (pos? n) [:span.tag.tag-warm (str n " 則待辦事項")])}
+           :aside (when (pos? (+ n q))
+                    [:span.note-tags
+                     (when (pos? q) [:span.tag.tag-warm (str q " 則等你回覆")])
+                     (when (pos? n) [:span.tag (str n " 則待辦事項")])])}
           [:div.tl
            (when more?
              [:div.tl-item.tl-more {:replicant/key "more"}
@@ -1348,7 +1364,13 @@
            (empty? (tree/child-ids nodes id)))
       (conj [:button.menu-item {:replicant/key "to-intro" :type "button"
                                 :on {:click [[:ui/paragraph->intro id]]}}
-             "改為引言"]))))
+             "改為引言"])
+      ;; 全文頁沒有看板的工具列，刪除也放在這裡（與工具列的「刪除」相同，可以復原）
+      id
+      (conj [:button.menu-item.text-danger {:replicant/key "delete" :type "button"
+                                            :title "刪除這張卡片與其下層卡片；可以復原"
+                                            :on {:click [[:ui/delete-node id]]}}
+             "刪除"]))))
 
 (defn- editor-pane
   "編輯區。卡片頁是覆蓋看板的抽屜，可收合；docked? 為真時（全文頁）固定在右側、不收合。"

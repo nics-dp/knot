@@ -42,8 +42,17 @@
        (map :note/node)
        frequencies))
 
+(declare agent-questions)
+
+(defn question-counts
+  "每張卡片還沒有人回覆的 agent 提問數 {卡片 id n}；整份報告的提問不列。"
+  [nodes notes]
+  (->> (agent-questions nodes notes)
+       (keep :note/node)
+       frequencies))
+
 (defn subtree-todo-count
-  "卡片與其所有下層卡片的待辦數，供全文大綱的標題使用。"
+  "卡片與其所有下層卡片的數量合計（counts 為 todo-counts 或 question-counts），供全文大綱的標題使用。"
   [nodes counts id]
   (reduce + (map #(get counts % 0) (cons id (tree/descendant-ids nodes id)))))
 

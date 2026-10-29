@@ -57,6 +57,9 @@
 
 (deftest fulltext-page-test
   (let [html (render (ui/set-page state :fulltext))]
+    (testing "全文頁沒有看板工具列，編輯區的「⋯」選單可以刪除選取的卡片"
+      (is (str/includes? html "more-menu"))
+      (is (str/includes? html (str "[:ui/delete-node \"" (get-in state [:ui :selected]) "\"]"))))
     (testing "全文頁有大綱，列出標題"
       (is (str/includes? html "outline"))
       (is (str/includes? html "第一章 甲")))
@@ -199,12 +202,12 @@
       (is (str/includes? html "[:notes/delete \"t1\"]"))
       (is (not (str/includes? html "[:notes/delete \"r1\"]"))))
     (testing "卡片上的待辦數"
-      (is (str/includes? html "1 則未完成的待辦事項")))))
+      (is (str/includes? html "1 則待辦事項交給 agent")))))
 
 (deftest todos-menu-test
   (is (str/includes? (render note-state) "[:span.count-badge 2]") "未完成的待辦與 agent 的提問")
   (let [html (render (ui/toggle-todos note-state))]
-    (is (str/includes? html "未完成的待辦事項"))
+    (is (str/includes? html "交給 agent（1）"))
     (is (str/includes? html "[:ui/open-note-card \"a2\"]") "agent 的提問")
     (is (str/includes? html "整份報告的留言"))
     (is (str/includes? html "compose-:report"))))
@@ -691,7 +694,8 @@
         (is (str/includes? html "之後已修改")))
       (is (not (str/includes? html "標為待辦事項")) "Knot 的待辦不能取消待辦"))
     (testing "卡片的待辦數"
-      (is (str/includes? html "1 則未完成的待辦事項"))))
+      (is (str/includes? html "1 則待辦事項交給 agent"))))
+
   (testing "頂部列待辦清單列出 Knot 待辦"
     (let [html (render (ui/toggle-todos knot-state))]
       (is (str/includes? html "[:ui/open-note-card \"a1\"]"))
@@ -701,6 +705,17 @@
         (is (str/includes? html "交給 agent（2）"))
         (is (< (str/index-of html "等你回覆") (str/index-of html "交給 agent")))
         (is (str/includes? html "[:span.count-badge 3]"))))))
+
+(deftest note-badges-test
+  (let [html (render knot-state)]
+    (testing "等你回覆的提問與交給 agent 的待辦事項分成兩個數字"
+      (is (str/includes? html "question-count"))
+      (is (str/includes? html "1 則 agent 的提問等你回覆"))
+      (is (str/includes? html "1 則待辦事項交給 agent"))))
+  (testing "全文大綱的標題是含下層的合計"
+    (let [html (render (ui/set-page knot-state :fulltext))]
+      (is (str/includes? html "1 則 agent 的提問等你回覆（含下層）"))
+      (is (str/includes? html "2 則待辦事項交給 agent（含下層）")))))
 
 (deftest report-setup-view-test
   (let [s (ui/init-state {:report/title "目錄名" :tree []})
