@@ -32,14 +32,12 @@
              (mapv (juxt :label :text) (:entries (section ctx "章節路徑"))))))
     (testing "所屬標題沒有引言時不列出"
       (is (nil? (section ctx "所屬標題的引言"))))
-    (testing "鄰段一律只帶意圖與關係類型；對方已有本文時標 :has-prose"
-      (is (= {:label "一" :text "前段意圖" :source :intent :relation "因果" :has-prose true}
+    (testing "前一段有本文時帶本文與關係類型；下一段只帶意圖"
+      (is (= {:label "一" :text "很長的本文" :source :prose :relation "因果"}
              (select-keys (first (:entries (section ctx "前一段"))) [:label :text :source :relation :has-prose])))
       (is (= {:text "後段意圖" :source :intent :relation "遞進，待確認"}
              (select-keys (first (:entries (section ctx "下一段"))) [:text :source :relation :has-prose]))
           "沒有本文時沒有 :has-prose"))
-    (testing "周邊卡片的本文不會出現在任何一節"
-      (is (not-any? #(= "很長的本文" (:text %)) (mapcat :entries (:sections ctx)))))
     (testing "只帶引用素材上的事實"
       (is (= ["k"] (mapv :key (:entries (section ctx "可用事實"))))))
     (testing "每一節都有分組"
@@ -50,15 +48,77 @@
       (is (= "表的意圖" (:text (first (:entries (section ctx "下層表格與圖")))))))
     (is (pos? (:chars ctx)))))
 
+(defn- doc [text]
+  {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text text}]}]})
+
 (deftest intro-context-test
   (let [ctx (context/generation-context state "iA")]
     (is (= ["引言意圖"] (mapv :text (:entries (section ctx "引言的意圖")))))
-    (is (= ["節的意圖"] (mapv :text (:entries (section ctx "這一層的下層內容"))))))
-  (testing "引言的下層內容有本文時帶本文（引言的例外）"
-    (let [s (assoc-in state [:nodes "A1" :node/prose]
-                      {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "節的本文"}]}]})
-          e (first (:entries (section (context/generation-context s "iA") "這一層的下層內容")))]
-      (is (= {:text "節的本文" :source :prose} (select-keys e [:text :source]))))))
+    (testing "下層是標題、沒有引言：帶底下所有段落，有本文帶本文，否則意圖，label 標明所屬標題"
+      (is (= [["1.1 甲一／一" "很長的本文" :prose]
+              ["1.1 甲一／二" "本段意圖" :intent]
+              ["1.1 甲一／三" "後段意圖" :intent]]
+             (mapv (juxt :label :text :source) (:entries (section ctx "這一層的下層內容")))))))
+  (testing "下層標題的引言有本文時只帶引言本文"
+    (let [s (ui/init-state
+             {:tree [{:node/id "A" :node/kind :heading :node/name "甲"
+                      :children [{:node/id "iA" :node/kind :intro}
+                                 {:node/id "A1" :node/kind :heading :node/name "甲一"
+                                  :children [{:node/id "iA1" :node/kind :intro :node/prose (doc "節引言本文")}
+                                             {:node/id "a1" :node/kind :paragraph :node/title "一" :node/prose (doc "不該出現")}]}]}]})
+          es (:entries (section (context/generation-context s "iA") "這一層的下層內容"))]
+      (is (= [["1.1 甲一 引言" "節引言本文" :prose]] (mapv (juxt :label :text :source) es))))))
+
+(deftest intro-children-limit-test
+  (let [big (apply str (repeat 6001 "字"))
+        s (assoc-in state [:nodes "a2" :node/prose] (doc big))
+        es (:entries (section (context/generation-context s "iA") "這一層的下層內容"))]
+    (testing "超過上限：標題底下的段落改帶意圖並標已有本文，另加提示"
+      (is (every? #(= :intent (:source %)) (butlast es)))
+      (is (= [true true nil] (mapv :has-prose (butlast es))) "a1、a2 有本文")
+      (is (:prose-too-long (first es)))
+      (is (= {:label "提示" :source :note} (select-keys (last es) [:label :source])))
+      (is (re-find #"get_cards" (:text (last es)))))
+    (testing "直接下層的段落不受影響"
+      (let [s2 (ui/init-state
+                {:tree [{:node/id "A" :node/kind :heading :node/name "甲"
+                         :children [{:node/id "iA" :node/kind :intro}
+                                    {:node/id "p0" :node/kind :paragraph :node/title "直屬" :node/prose (doc big)}
+                                    {:node/id "A1" :node/kind :heading :node/name "甲一"
+                                     :children [{:node/id "a1" :node/kind :paragraph :node/title "一" :node/prose (doc big)}]}]}]})
+            es2 (:entries (section (context/generation-context s2 "iA") "這一層的下層內容"))]
+        (is (= :prose (:source (first es2))))
+        (is (= :intent (:source (second es2))))))))
+
+(deftest ref-display-test
+  (let [ref-doc {:type "doc" :content [{:type "paragraph"
+                                        :content [{:type "text" :text "見"}
+                                                  {:type "ref" :attrs {:label "tab:x"}}
+                                                  {:type "ref" :attrs {:label "fig:y"}}
+                                                  {:type "ref" :attrs {:label "tab:none"}}]}]}
+        s (assoc-in state [:nodes "a1" :node/prose] ref-doc)
+        s (assoc-in s [:nodes "t1" :node/kind] :table)
+        s (update s :nodes assoc "f1" {:node/id "f1" :node/kind :figure :node/title "趨勢圖" :node/label "fig:y"})
+        e (first (:entries (section (context/generation-context s "a2") "前一段")))]
+    (is (= "見表「表一」（tab:x）圖「趨勢圖」（fig:y）{tab:none}" (:text e)))
+    (testing "context/prose-text 與 prose/doc->text 維持原樣"
+      (is (= "見{tab:x}{fig:y}{tab:none}" (context/prose-text {} ref-doc))))))
+
+(deftest cited-table-rows-test
+  (let [tbl {:block/id "bt" :block/kind :table :block/title "指標表" :table/columns ["指標" "值"]
+             :table/rows [["人次" "2871"] ["達成率" "95.7%"]]}
+        mk (fn [t where]
+             (-> state
+                 (update :blocks (fnil conj []) t)
+                 (assoc-in [:nodes "a2" :node/citations] [{:block "bt" :where where}])))
+        entry (fn [s] (first (:entries (section (context/generation-context s "a2") "依據"))))]
+    (testing "合計不超過上限：欄位與全部列，where 照附"
+      (is (= "指標｜值\n人次｜2871\n達成率｜95.7%\n（第一列）" (:text (entry (mk tbl "第一列"))))))
+    (testing "超過上限：只帶欄位與列數，提示 get_source_block"
+      (let [big (assoc tbl :table/rows [[(apply str (repeat 3001 "字")) "1"]])
+            t (:text (entry (mk big "第一列")))]
+        (is (str/starts-with? t "欄位：指標、值；1 列（第一列）"))
+        (is (re-find #"get_source_block" t))))))
 
 (deftest mixed-structure-context-test
   (let [s (ui/add-child state "A" :paragraph)           ; 接在引言後面、下層標題 1.1 之前
@@ -72,7 +132,7 @@
       (is (nil? (section (context/generation-context s "a1") "前一段"))))
     (testing "引言的下層內容包含這一層直接的段落與下層標題"
       (let [ictx (context/generation-context s "iA")]
-        (is (= [["章的段落" "章段意圖"] ["1.1 甲一" "節的意圖"]]
+        (is (= [["章的段落" "章段意圖"] ["1.1 甲一／一" "很長的本文"] ["1.1 甲一／二" "本段意圖"] ["1.1 甲一／三" "後段意圖"]]
                (mapv (juxt :label :text) (:entries (section ictx "這一層的下層內容")))))))))
 
 (deftest parent-intro-test
@@ -94,11 +154,54 @@
               (ui/add-remote-relation "a3" "a1" :basis)
               (ui/add-remote-relation "a3" "a1" :echo))
         ctx (context/generation-context s "a3")]
-    (is (= [{:label "一" :text "前段意圖" :source :intent :has-prose true}]
+    (is (= [{:label "一" :text "很長的本文" :source :prose}]
            (:entries (section ctx "本段依據的段落")))
-        "依據也只帶意圖，標示對方已有本文")
+        "依據的目標有本文時帶本文")
     (is (= [["一" "前段意圖"]] (mapv (juxt :label :text) (:entries (section ctx "本段呼應的段落")))))
     (is (nil? (section ctx "本段對比的段落")) "沒有的類型不列出")))
+
+(defn- prose-of [text]
+  {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text text}]}]})
+
+(deftest prev-and-basis-prose-test
+  (testing "前一段不論關係類型都帶本文；沒有關係或待確認也一樣"
+    (doseq [rel [{:relation/type :contrast} {:relation/type :example}
+                 {:relation/type :causal :relation/pending true} nil]]
+      (let [s (assoc state :relations (when rel [(merge {:relation/from "a1" :relation/to "a2"} rel)]))
+            e (first (:entries (section (context/generation-context s "a2") "前一段")))]
+        (is (= [:prose "很長的本文"] [(:source e) (:text e)])))))
+  (testing "前一段沒有本文時維持意圖與 has-prose 標記（無本文時沒有標記）"
+    (let [e (first (:entries (section (context/generation-context state "a3") "前一段")))]
+      (is (= {:source :intent :text "本段意圖"} (select-keys e [:source :text])))
+      (is (not (:has-prose e)))))
+  (testing "摘要、呼應、對比的目標與摘要本段的段落仍只帶意圖"
+    (let [s (-> state
+                (ui/add-remote-relation "a3" "a1" :summarizes)
+                (ui/add-remote-relation "a3" "a1" :echo)
+                (ui/add-remote-relation "a3" "a1" :contrast))
+          ctx (context/generation-context s "a3")]
+      (doseq [t ["本段摘要的段落" "本段呼應的段落" "本段對比的段落"]]
+        (is (= [:intent true] ((juxt :source :has-prose) (first (:entries (section ctx t))))) t))
+      (is (= [:intent "後段意圖"] ((juxt :source :text)
+                                  (first (:entries (section (context/generation-context s "a1") "摘要本段的段落"))))))))
+  (testing "前一段與依據目標合計超過 2000 字：全部改帶意圖並標示過長"
+    (let [long (apply str (repeat 1500 "字"))
+          s (-> state
+                (assoc-in [:nodes "a1" :node/prose] (prose-of long))
+                (ui/add-remote-relation "a3" "a2" :basis)
+                (assoc-in [:nodes "a2" :node/prose] (prose-of long)))
+          ctx (context/generation-context s "a3")
+          es (concat (:entries (section ctx "前一段")) (:entries (section ctx "本段依據的段落")))]
+      (is (= 2 (count es)))
+      (is (every? #(= [:intent true true] ((juxt :source :has-prose :prose-too-long) %)) es))
+      (is (not-any? #(= long (:text %)) es))))
+  (testing "未超過時前一段與依據目標都帶本文"
+    (let [s (-> state
+                (ui/add-remote-relation "a3" "a1" :basis)
+                (assoc-in [:nodes "a2" :node/prose] (prose-of "二的本文")))
+          ctx (context/generation-context s "a3")]
+      (is (= [:prose "二的本文"] ((juxt :source :text) (first (:entries (section ctx "前一段"))))))
+      (is (= [:prose "很長的本文"] ((juxt :source :text) (first (:entries (section ctx "本段依據的段落")))))))))
 
 (deftest prose-text-test
   (is (= "保留 31,405 筆，見{tab:x}。\n第二段"

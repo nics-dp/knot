@@ -229,12 +229,36 @@
                                                 :source (some-> (:source e) name)}
                                          (:relation e) (assoc :relation (:relation e))
                                          (:has-prose e) (assoc :has_prose true)
+                                         (:prose-too-long e) (assoc :prose_too_long true)
                                          (:warn e) (assoc :warn true)
                                          (:discarded e) (assoc :discarded true)
                                          (:target-chars e) (assoc :target_chars (:target-chars e))
                                          (:key e) (assoc :key (:key e)))))}))
      :context_chars (:chars ctx)
-     :note "周邊卡片只帶意圖（has_prose 為 true 表示對方已有本文）；需要銜接或用到某段的結果時，用 get_card 取該卡片的本文。"}))
+     :note "周邊卡片只帶意圖（has_prose 為 true 表示對方已有本文）；前一段與依據的目標有本文時帶本文（source 為 prose），合計超過 2000 字時改帶意圖並標 prose_too_long；需要銜接或用到某段的結果時，用 get_card 取該卡片的本文。引言的下層是標題時帶該標題引言的本文或其底下段落的本文（合計超過 6000 字改帶意圖，用 get_cards 取本文）。引用的表格帶全部列（儲存格合計超過 3000 字只帶欄位，用 get_source_block 取得）；本文中的交互參照顯示為類型、名稱與 label；需要其他事實用 list_facts。"}))
+
+;; ---------------------------------------------------------------------------
+;; get_writing_order
+
+(defn- get-writing-order [conn args]
+  (let [{:keys [nodes relations] :as state} (current-state conn)
+        heading (when (some? (get args "card_id"))
+                  (let [id (card-id state args)]
+                    (when-not (tree/heading? nodes id) (tool-error! "card_id 必須是標題"))
+                    id))
+        {:keys [batches cycle]} (tree/writing-order nodes relations heading)
+        numbers (tree/numbering nodes)
+        item (fn [id]
+               (let [n (get nodes id)]
+                 {:card_id (str id)
+                  :number (ops/heading-number nodes numbers id)
+                  :title (card-title nodes numbers id)
+                  :kind (name (:node/kind n))
+                  :section (let [h (some #(when (tree/heading? nodes %) %) (tree/ancestor-ids nodes id))]
+                             (when h (str (get numbers h) " " (:node/name (get nodes h)))))
+                  :has_prose (has-prose? n)}))]
+    {:batches (mapv #(mapv item %) batches)
+     :cycle (mapv item cycle)}))
 
 ;; ---------------------------------------------------------------------------
 ;; 寫入工具：讀目前狀態 → knot.ops（與畫面相同的規則）→ 一個修改組
@@ -305,14 +329,27 @@
             nodes (:nodes state)
             numbers (tree/numbering nodes)]
         (when (:conflicts res) (tool-error! "卡片剛被修改，請重新讀取後再試"))
-        (cond-> {:changeset_id (str (:changeset/id res))
+        ;; 相關段落的待辦（SPEC 5.6）：agent 的寫入和使用者的修改一樣，在依賴的段落留下 Knot 待辦
+        (let [after (current-state conn)
+              created (notes/record-change! conn old after)
+              todos (vec (for [{id :note/node reason :reason} created]
+                           (assoc (select-keys (card-summary (:nodes after) (tree/numbering (:nodes after)) id) [:card_id :title])
+                                  :number (tree/position-label (:nodes after) (tree/numbering (:nodes after)) id)
+                                  :reason reason)))]
+         (cond-> {:changeset_id (str (:changeset/id res))
                  :cards (vec (for [id (distinct touched) :when (contains? nodes id)]
                                (card-summary nodes numbers id)))
-                 :message (or message (str "已" label "；所有修改都記錄在 Knot，可在畫面上檢視與復原"))}
+                 :message (str (or message (str "已" label "；所有修改都記錄在 Knot，可在畫面上檢視與復原"))
+                               (when (seq todos)
+                                 (str "；已在 " (count todos) " 個相關段落留下待辦："
+                                      (str/join "、" (for [{:keys [number title reason]} todos]
+                                                       (str (when number (str number " ")) title "（" reason "）")))
+                                      "。這些待辦等使用者下一輪指示時再處理，不要在同一輪自行接著改")))}
+          (seq todos) (assoc :todos_created todos)
           (seq blocks) (assoc :blocks (vec (for [id blocks :let [b (block-by-id state id)] :when b] (block-summary b))))
           (seq facts) (assoc :facts (vec (for [k facts :let [f (get (:facts state) k)] :when f] (fact-entry state f))))
           (seq citing) (assoc :cited_cards (vec (for [id citing] (card-summary nodes numbers id))))
-          (seq fact-problems) (assoc :fact_problems (vec (for [{:keys [key error]} fact-problems] {:key key :error error}))))))))
+          (seq fact-problems) (assoc :fact_problems (vec (for [{:keys [key error]} fact-problems] {:key key :error error})))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; 風格（SPEC 5.7）
@@ -670,27 +707,51 @@
   (when-let [id (:note/node note)]
     (when (contains? nodes id) (card-summary nodes numbers id))))
 
+(defn- trigger-entry
+  "Knot 待辦的一個觸發卡片：{card_id number title reason dependency}；卡片已刪除時只有 card_id 與 deleted。"
+  [nodes numbers {:keys [id reason dependency]}]
+  (if (contains? nodes id)
+    (cond-> {:card_id (str id) :number (tree/position-label nodes numbers id)
+             :title (card-title nodes numbers id)}
+      reason (assoc :reason reason)
+      dependency (assoc :dependency (name dependency)))
+    {:card_id (str id) :deleted true}))
+
 (defn- list-todos [conn args]
   (let [{:keys [nodes] :as state} (current-state conn)
         numbers (tree/numbering nodes)
         db (d/db conn)
         only (when (some? (get args "card_id"))
                (card-id state args))
-        wanted? #(or (nil? only) (= only (:note/node %)))]
-    {:todos (vec (for [t (notes/open-todos db) :when (wanted? t)]
-                   {:note_id (str (:note/id t))
-                    :card (note-card nodes numbers t)
-                    :text (:note/text t)
-                    :at (inst-str (:note/at t))
-                    :replies (reply-entries (notes/thread db (:note/id t)))}))
-     :questions_answered
-     (vec (for [q (notes/agent-threads db) :when (wanted? q)
-                :let [replies (notes/thread db (:note/id q))]
-                :when (= :user (:note/author (last replies)))]
-            {:note_id (str (:note/id q))
-             :card (note-card nodes numbers q)
-             :question (:note/text q)
-             :replies (reply-entries replies)}))}))
+        wanted? #(or (nil? only) (= only (:note/node %)))
+        order (zipmap (tree/document-order nodes) (range))
+        base (fn [kind n text replies next-action]
+               {:note_id (str (:note/id n))
+                :kind kind
+                :card (note-card nodes numbers n)
+                :text text
+                :at (inst-str (:note/at n))
+                :replies (reply-entries replies)
+                :next_action next-action})]
+    {:items
+     (vec (concat
+           ;; 1. 使用者已回覆、等 agent 接話的提問
+           (for [q (notes/agent-threads db) :when (wanted? q)
+                 :let [replies (notes/thread db (:note/id q))]
+                 :when (= :user (:note/author (last replies)))]
+             (base "answered_question" q (:note/text q) replies
+                   "依使用者的回覆處理後，用 add_note（reply_to 指向這則提問）在同串接一句說明怎麼處理"))
+           ;; 2. 使用者的待辦（依時間）
+           (for [t (notes/open-todos db) :when (and (wanted? t) (= :user (:note/author t)))]
+             (base "user_todo" t (:note/text t) (notes/thread db (:note/id t))
+                   "照做後 complete_todo（附 reply 說明做了什麼，與 changeset_id）；做不到或有疑問就用 add_note 回覆詢問"))
+           ;; 3. Knot 待辦（依目標段落的文件順序，上游先處理）
+           (for [t (sort-by #(get order (:note/node %) Long/MAX_VALUE)
+                            (filter #(and (wanted? %) (= :knot (:note/author %))) (notes/open-todos db)))]
+             (cond-> (assoc (base "knot_todo" t (:note/text t) (notes/thread db (:note/id t))
+                                "用 get_card 看 triggers 各卡片的 history 判斷；要改就改並 complete_todo（附 reply 與 changeset_id），不改也 complete_todo 說明原因")
+                            :triggers (mapv #(trigger-entry nodes numbers %) (:note/triggers t)))
+               (:note/modified-after t) (assoc :modified_after true)))))}))
 
 (defn- add-note [conn args]
   (when-not (contains? args "card_id") (tool-error! "缺少參數 card_id（整份報告的留言為 null）"))
@@ -750,15 +811,21 @@
                   :additionalProperties false}
     :handler get-cards}
    {:name "get_writing_context"
-    :description "取得撰寫某段本文時應參考的內容（章節路徑、本段意圖、依據的素材與事實、前後段、有關係的段落、風格、本段的目標字數 target_chars），與 Knot 編輯區的「撰寫時參考的內容」相同。周邊卡片（上層、前後段、有關係的段落）只帶意圖，has_prose 為 true 表示對方已有本文，需要銜接或用到其結果時用 get_card 取它的本文；引言例外，下層內容有本文時帶本文。撰寫本文時以它為依據，並參考目標字數控制篇幅；只有段落與引言適用。context_chars 是這份參考內容本身的長度，不是本文的字數。"
+    :description "取得撰寫某段本文時應參考的內容（章節路徑、本段意圖、依據的素材與事實、前後段、有關係的段落、風格、本段的目標字數 target_chars），與 Knot 編輯區的「撰寫時參考的內容」相同。周邊卡片（上層、後一段、有關係的段落）只帶意圖，has_prose 為 true 表示對方已有本文，需要用到其結果時用 get_card 取它的本文；例外：引言的下層內容有本文時帶本文，下層是標題時帶該標題引言的本文，沒有引言本文就帶它底下各段落的本文（合計超過 6000 字改帶意圖，請用 get_cards 取本文）；前一段與依據的目標有本文時帶本文（source 為 prose），合計超過 2000 字時改帶意圖並標 prose_too_long，請用 get_card 取本文。引用的表格帶欄位與全部列（儲存格合計超過 3000 字只帶欄位與列數，請用 get_source_block 取得）；本文中的交互參照顯示為「表「名稱」（tab:x）」或「圖「名稱」（fig:y）」；可用事實只含引用素材上的，需要其他事實用 list_facts 查。撰寫本文時以它為依據，並參考目標字數控制篇幅；只有段落與引言適用。context_chars 是這份參考內容本身的長度，不是本文的字數。"
     :inputSchema id-schema
     :handler get-writing-context}
+   {:name "get_writing_order"
+    :description "取得一次撰寫多段時的撰寫順序：段落與引言分批（batches，每批是 [{card_id, number, title, kind, has_prose}]）。先後關係：前一段先於本段；依據的目標先於依據它的段落；摘要的目標先於摘要它的段落；標題底下所有段落與引言先於該標題的引言（節的引言先於章的引言）。同一批彼此沒有先後，可以並行撰寫；下一批要等前一批寫完（寫完再用 get_writing_context，才會帶到前一段與依據目標的本文）；同一批內依文件順序。has_prose 為 true 的段落已有本文，可以跳過。cycle 是先後關係繞成一圈而排不進順序的卡片（同樣格式，也放在最後一批）：非空時請告訴使用者調整關係（例如依據指向後面的段落），不要自行硬寫。card_id 選填，為標題 id，只排該標題底下的段落與引言。"
+    :inputSchema {:type "object"
+                  :properties {:card_id {:type "string" :description "標題 id（選填，UUID）；只排這個標題底下的卡片"}}
+                  :additionalProperties false}
+    :handler get-writing-order}
    {:name "get_style"
     :description "取得整份報告共用的風格描述（使用者在 Knot「風格」頁寫的，或你用 update_style 整理的）：text 是全文，chars 是字數，updated_at（ISO 時間）與 updated_by（user 或 agent）是最後修改。開始撰寫前讀一次，之後撰寫每一段都依這份風格；get_writing_context 只帶一行提示（字數與最後修改時間），不重複帶全文。尚未設定時 text 為空字串、並在 message 說明。"
     :inputSchema {:type "object" :properties {} :additionalProperties false}
     :handler get-style}
    {:name "list_todos"
-    :description "列出使用者交代的待辦與使用者的回覆。todos＝尚未完成的待辦（含所屬卡片，整份報告的待辦 card 為 null，以及討論串中的回覆）；questions_answered＝你先前用 add_note 提問、使用者已回答但你尚未接話的討論串：討論串最後一則是使用者的回覆就算沒接話，處理完要用 add_note（reply_to 指向那則提問）在同一串回一句說明你怎麼處理，之後它才不會再出現。開始工作時先呼叫；處理完待辦用 complete_todo。card_id 選填，只列出某張卡片的。待辦與提問各以 note_id 識別。"
+    :description "列出等你處理的事項，一份清單 items，依建議的處理順序排好：先是 answered_question（你先前用 add_note 提問、使用者已回覆但你還沒接話的討論串；處理完用 add_note 的 reply_to 在同串接一句說明怎麼處理，之後它才不會再出現）；再來是 user_todo（使用者交代的待辦，依時間）；最後是 knot_todo（使用者或你修改某一段後，Knot 在依賴它的段落留下的提醒，依目標段落的文件順序，上游先處理）。每筆有 note_id、kind、card（所屬卡片 card_id、number、title，整份報告的為 null）、text、at、replies（討論串回覆）與 next_action（建議的下一步）。knot_todo 另有 triggers（觸發的卡片：card_id、number、title、reason 為依賴原因、dependency 為 summary 或 argument；同一個目標段落的提醒合併成一則）與 modified_after（有才出現，表示提醒之後目標段落自己的意圖或本文又被修改過，先用 get_card 的 history 確認再決定）。處理 knot_todo：用 get_card 看 triggers 各卡片的 history 了解改了什麼；需要改就修改並 complete_todo（附 reply 與 changeset_id），不需要就直接 complete_todo 在 reply 說明原因。還沒有人回覆的 agent 提問不列（在等使用者）。Knot 待辦等使用者下一輪指示時再處理，不要在同一輪寫完上一段就接著處理；處理待辦所做的修改也可能在下一層留下新的待辦，同樣留到下一輪。開始工作時先呼叫；處理完待辦用 complete_todo。card_id 選填，只列出某張卡片的。"
     :inputSchema {:type "object"
                   :properties {:card_id {:type "string" :description "只列出這張卡片的（選填，UUID）"}}
                   :additionalProperties false}
@@ -812,7 +879,7 @@
                   :additionalProperties false}
     :handler build-outline}
    {:name "write_prose"
-    :description "寫入段落或引言的本文（表格請用 write_table；標題與圖沒有本文）。text 的格式：每一行是一段（空行忽略）；以「- 」（或「* 」「• 」）開頭的連續行是項目清單，以「1. 」這類數字加半形句點開頭的連續行是編號清單（編號由 Knot 依順序產生），清單只有一層。引用用標記：{{fact:事實key}}（事實，畫面顯示值與單位）、{{ref:label}}（交互參照表格或圖，label 如 tab:ridership）、[[cite:區塊id]]（引用素材區塊，同時加入這段的依據）；標記中不存在的事實、label、區塊會一次全部列出並拒絕寫入。本文中不在標記內的數字會回傳在 unbound_numbers，並在畫面上提醒使用者；有事實可用時請用 {{fact:key}}。寫入後狀態轉為 ai（引言不套用狀態）。不論目標原本是不是使用者寫的（human）都會直接覆寫，但使用者可以比較與復原，所以修改既有本文前先用 get_card 看 prose 與 history，在原本的基礎上改。傳入 get_card 的 version 可避免蓋掉使用者剛做的修改。"
+    :description "寫入段落或引言的本文（表格請用 write_table；標題與圖沒有本文）。text 的格式：每一行是一段（空行忽略）；以「- 」（或「* 」「• 」）開頭的連續行是項目清單，以「1. 」這類數字加半形句點開頭的連續行是編號清單（編號由 Knot 依順序產生），清單只有一層。引用用標記：{{fact:事實key}}（事實，畫面顯示值與單位）、{{ref:label}}（交互參照表格或圖，label 如 tab:ridership）、[[cite:區塊id]]（引用素材區塊，同時加入這段的依據）；標記中不存在的事實、label、區塊會一次全部列出並拒絕寫入。本文中不在標記內的數字會回傳在 unbound_numbers，並在畫面上提醒使用者；有事實可用時請用 {{fact:key}}。寫入後狀態轉為 ai（引言不套用狀態）。不論目標原本是不是使用者寫的（human）都會直接覆寫，但使用者可以比較與復原，所以修改既有本文前先用 get_card 看 prose 與 history，在原本的基礎上改。傳入 get_card 的 version 可避免蓋掉使用者剛做的修改。修改段落的意圖或本文後，Knot 會在依賴它的段落（摘要它的段落、上層引言、因果或遞進承接的下一段、以它為依據的段落；已有本文的才算）留下待辦，回應的 todos_created 列出這些段落（card_id、number、title、reason）。這些待辦等使用者下一輪指示時再處理，不要在同一輪自行接著改；處理時用 list_todos。處理一則待辦所做的修改也可能在下一層留下新的待辦，同樣留到下一輪。"
     :inputSchema {:type "object"
                   :properties {:card_id uuid-property
                                :text {:type "string" :description "本文，格式如上（get_card 的 prose 就是同樣的格式）"}
@@ -836,7 +903,7 @@
                   :additionalProperties false}
     :handler write-table}
    {:name "update_card"
-    :description "修改卡片的名稱、意圖或目標字數（標題的名稱、段落的標題、卡片的意圖、target_chars）；不修改本文。傳入 get_card 取得的 version 可避免覆蓋使用者剛做的修改：版本不同時不會寫入。引言沒有名稱。"
+    :description "修改卡片的名稱、意圖或目標字數（標題的名稱、段落的標題、卡片的意圖、target_chars）；不修改本文。傳入 get_card 取得的 version 可避免覆蓋使用者剛做的修改：版本不同時不會寫入。引言沒有名稱。改了意圖時：修改段落的意圖或本文後，Knot 會在依賴它的段落（摘要它的段落、上層引言、因果或遞進承接的下一段、以它為依據的段落；已有本文的才算）留下待辦，回應的 todos_created 列出這些段落（card_id、number、title、reason）。這些待辦等使用者下一輪指示時再處理，不要在同一輪自行接著改；處理時用 list_todos。處理一則待辦所做的修改也可能在下一層留下新的待辦，同樣留到下一輪。"
     :inputSchema {:type "object"
                   :properties {:card_id uuid-property
                                :title {:type "string" :description "新的標題名稱（標題）或段落標題（段落）"}
@@ -908,7 +975,7 @@
                   :additionalProperties false}
     :handler delete-card}
    {:name "add_note"
-    :description "在卡片上留言給使用者，或回覆討論串。意圖不清楚、素材互相矛盾、需要使用者決定時用它提問，而不是自己猜；也用於回覆使用者的留言。reply_to 給被回覆的留言 note_id 時，留言會接在該討論串且沿用它的卡片（card_id 可省略但若給了必須相同）；card_id 為 null 表示整份報告的留言。留言不是內容修改，不會產生修改組，也不能建立待辦。之後可用 list_todos 的 questions_answered 看使用者的回答。"
+    :description "在卡片上留言給使用者，或回覆討論串。意圖不清楚、素材互相矛盾、需要使用者決定時用它提問，而不是自己猜；也用於回覆使用者的留言。reply_to 給被回覆的留言 note_id 時，留言會接在該討論串且沿用它的卡片（card_id 可省略但若給了必須相同）；card_id 為 null 表示整份報告的留言。留言不是內容修改，不會產生修改組，也不能建立待辦。之後可用 list_todos 的 items（kind 為 answered_question）看使用者的回答。"
     :inputSchema {:type "object"
                   :properties {:card_id {:type ["string" "null"] :description "留言所屬卡片的 id；null 表示整份報告"}
                                :text {:type "string" :description "留言內容"}
@@ -917,7 +984,7 @@
                   :additionalProperties false}
     :handler add-note}
    {:name "complete_todo"
-    :description "把使用者的待辦標為完成。changeset_id 選填：省略時 Knot 會連結待辦建立之後、你對該卡片所做的最近一個修改組（沒有則不連結）。reply 選填，會以你的身分回覆在該待辦底下，用來說明做了什麼。不是待辦或已完成時回錯誤。完成待辦本身不是內容修改，不會產生修改組。"
+    :description "把使用者的待辦標為完成。changeset_id 選填：省略時 Knot 會連結待辦建立之後、你對該卡片所做的最近一個修改組（沒有則不連結）。reply 選填，會以你的身分回覆在該待辦底下，用來說明做了什麼。不是待辦或已完成時回錯誤。可以完成使用者的待辦，也可以完成 Knot 留下的相關段落待辦（kind 為 knot_todo）：有修改就傳 changeset_id，不需要修改就在 reply 說明原因；處理待辦的修改可能在下一層留下新的待辦，留到下一輪指示再處理。完成待辦本身不是內容修改，不會產生修改組。"
     :inputSchema {:type "object"
                   :properties {:note_id {:type "string" :description "待辦的留言 id（由 list_todos 的 note_id 取得）"}
                                :reply {:type "string" :description "完成後的說明（選填）"}
@@ -1143,7 +1210,7 @@
 (def supported-versions ["2025-11-25" "2025-06-18" "2025-03-26"])
 
 (def instructions
-  "Knot 是撰寫結構化報告的本機工具。報告是一棵卡片樹：標題（heading，最多四層，編號由位置決定）、引言（intro，每個標題至多一張）、段落（paragraph，要撰寫本文的單位）、表格（table）與圖（figure）。每張卡片有意圖（要寫什麼）、狀態（none：尚無本文、ai：agent 撰寫、human：使用者改過）與選填的本文。卡片以 card_id 識別、留言以 note_id 識別，都是 UUID 字串；指定要操作或查詢的卡片一律用參數 card_id、留言一律用 note_id。卡片名稱（title）不含編號：編號由位置決定、隨移動重新計算，只出現在 number 欄位，不要把編號寫進名稱。請先呼叫 get_outline 了解整體結構，再用 get_card 看單張卡片（連續看多張用 get_cards；要整份大綱的完整意圖時 get_outline 傳 full_intent: true），撰寫某段前用 get_writing_context 取得應參考的內容（周邊卡片只帶意圖，has_prose 為 true 的表示對方已有本文；需要銜接或用到其結果時用 get_card 取本文），寫好後用 write_prose 交回：本文每一行一段，「- 」開頭是項目清單、「1. 」開頭是編號清單，引用用 {{fact:key}}、{{ref:label}}、[[cite:區塊id]]，不存在的標記會被拒絕。表格與圖先用 add_card 建在段落底下（取得 label），本文再以 {{ref:label}} 引用，表格內容用 write_table 填寫。規劃結構與整理關係可用 add_card、build_outline、update_card、move_card、delete_card、set_relation、add_remote_relation、remove_relation；報告的名稱與副標用 update_report。整份報告共用一份風格：開始撰寫前先用 get_style 讀一次並遵守（get_writing_context 的「風格」只帶字數與最後修改時間的提示）；使用者給範例請你整理風格時用 update_style。卡片可設定目標字數（target_chars）；get_outline 與 get_card 回傳每張卡片目前的字數 chars（標題為整章／整節合計，空白不算），get_writing_context 的本段會帶目標字數，撰寫時參考目標字數控制篇幅（大約即可，不必精確）。素材與事實：原始資料（PDF、Excel、會議紀錄等）由你自己讀取，挑出要引用的部分存進素材庫。流程：讀原始資料 → search_sources 看已經有哪些素材（避免重複）→ add_excerpt（一段原文，照抄、不改字不改數字、一段只講一件事）或 add_source_table（數據表照原樣）→ add_fact（要在本文寫到的數字；值必須出現在素材中，表格可指定 row 與 column）→ 撰寫時以 {{fact:key}} 引用事實、[[cite:block_id]] 引用素材（也可用 add_citation）。素材以 block_id 識別（UUID）；重新整理或自己計算的表與數字不是素材與事實，直接寫在本文或用 write_table。一次新增多筆節錄或事實時用批次工具 add_excerpts、add_facts（全部合法才寫入，整批一個修改組）。素材與事實的寫入工具有 add_excerpt、add_excerpts、add_source_table、update_source_block、discard_source_block、add_fact、add_facts、update_fact、delete_fact，讀取用 search_sources、get_source_block、list_facts；依據用 add_citation、remove_citation。使用者可以捨棄素材，已捨棄的素材搜尋不到、不能再引用。使用者會在卡片上留言與交代待辦：開始工作時先用 list_todos 查看。處理待辦或修改卡片前先用 get_card 看 history：使用者改過的內容不要蓋掉，有疑問就用 add_note 留言詢問，而不是自行猜測。完成待辦一律用 complete_todo 並附 reply 說明做了什麼。使用者回覆你的提問後，處理完要用 add_note（reply_to 指向那則提問）在同一串回一句說明你怎麼處理；沒有接話的討論串會一直出現在 list_todos 的 questions_answered。一次工作有多次寫入時，每次寫入都傳相同的 group（例如「依審查意見調整大綱」），Knot 的歷程會顯示為一筆，使用者可以一次復原。所有修改都會記錄，使用者可以在 Knot 畫面上檢視與復原。")
+  "Knot 是撰寫結構化報告的本機工具。報告是一棵卡片樹：標題（heading，最多四層，編號由位置決定）、引言（intro，每個標題至多一張）、段落（paragraph，要撰寫本文的單位）、表格（table）與圖（figure）。每張卡片有意圖（要寫什麼）、狀態（none：尚無本文、ai：agent 撰寫、human：使用者改過）與選填的本文。卡片以 card_id 識別、留言以 note_id 識別，都是 UUID 字串；指定要操作或查詢的卡片一律用參數 card_id、留言一律用 note_id。卡片名稱（title）不含編號：編號由位置決定、隨移動重新計算，只出現在 number 欄位，不要把編號寫進名稱。請先呼叫 get_outline 了解整體結構，再用 get_card 看單張卡片（連續看多張用 get_cards；要整份大綱的完整意圖時 get_outline 傳 full_intent: true），撰寫某段前用 get_writing_context 取得應參考的內容（周邊卡片只帶意圖，has_prose 為 true 的表示對方已有本文；前一段與依據的目標有本文時帶本文；引言的下層是標題時帶該標題引言或其底下段落的本文，超過 6000 字改帶意圖；引用的表格帶全部列，超過 3000 字只帶欄位與列數，用 get_source_block 取得；本文中的交互參照顯示為類型、名稱與 label；需要其他事實用 list_facts；需要用到其他段落的結果時用 get_card 取本文；一次撰寫多段先用 get_writing_order 取得分批的順序），寫好後用 write_prose 交回：本文每一行一段，「- 」開頭是項目清單、「1. 」開頭是編號清單，引用用 {{fact:key}}、{{ref:label}}、[[cite:區塊id]]，不存在的標記會被拒絕。表格與圖先用 add_card 建在段落底下（取得 label），本文再以 {{ref:label}} 引用，表格內容用 write_table 填寫。規劃結構與整理關係可用 add_card、build_outline、update_card、move_card、delete_card、set_relation、add_remote_relation、remove_relation；報告的名稱與副標用 update_report。整份報告共用一份風格：開始撰寫前先用 get_style 讀一次並遵守（get_writing_context 的「風格」只帶字數與最後修改時間的提示）；使用者給範例請你整理風格時用 update_style。卡片可設定目標字數（target_chars）；get_outline 與 get_card 回傳每張卡片目前的字數 chars（標題為整章／整節合計，空白不算），get_writing_context 的本段會帶目標字數，撰寫時參考目標字數控制篇幅（大約即可，不必精確）。素材與事實：原始資料（PDF、Excel、會議紀錄等）由你自己讀取，挑出要引用的部分存進素材庫。流程：讀原始資料 → search_sources 看已經有哪些素材（避免重複）→ add_excerpt（一段原文，照抄、不改字不改數字、一段只講一件事）或 add_source_table（數據表照原樣）→ add_fact（要在本文寫到的數字；值必須出現在素材中，表格可指定 row 與 column）→ 撰寫時以 {{fact:key}} 引用事實、[[cite:block_id]] 引用素材（也可用 add_citation）。素材以 block_id 識別（UUID）；重新整理或自己計算的表與數字不是素材與事實，直接寫在本文或用 write_table。一次新增多筆節錄或事實時用批次工具 add_excerpts、add_facts（全部合法才寫入，整批一個修改組）。素材與事實的寫入工具有 add_excerpt、add_excerpts、add_source_table、update_source_block、discard_source_block、add_fact、add_facts、update_fact、delete_fact，讀取用 search_sources、get_source_block、list_facts；依據用 add_citation、remove_citation。使用者可以捨棄素材，已捨棄的素材搜尋不到、不能再引用。使用者會在卡片上留言與交代待辦：開始工作時先用 list_todos 查看（一份 items，依建議順序：使用者已回覆的提問、使用者的待辦、Knot 待辦；每筆有 next_action）。處理待辦或修改卡片前先用 get_card 看 history：使用者改過的內容不要蓋掉，有疑問就用 add_note 留言詢問，而不是自行猜測。完成待辦一律用 complete_todo 並附 reply 說明做了什麼。list_todos 裡 kind 為 knot_todo 的是某一段（使用者或你）改了之後，Knot 為依賴它的段落留下的提醒（同一段落的合併成一則，triggers 列出觸發的卡片；modified_after 表示提醒後目標段落又被改過）：用 get_card 看 triggers 各卡片的 history 了解改了什麼，需要跟著改就修改並 complete_todo，不需要就 complete_todo 回覆原因。你寫入意圖或本文後，回應的 todos_created 列出 Knot 在哪些相關段落留了待辦；這些待辦等使用者下一輪指示時再處理，不要在同一輪自行接著改。處理待辦所做的修改也可能在下一層留下新的待辦，同樣留到下一輪。使用者回覆你的提問後，處理完要用 add_note（reply_to 指向那則提問）在同一串回一句說明你怎麼處理；沒有接話的討論串會一直出現在 list_todos 的 items（answered_question）。一次工作有多次寫入時，每次寫入都傳相同的 group（例如「依審查意見調整大綱」），Knot 的歷程會顯示為一筆，使用者可以一次復原。所有修改都會記錄，使用者可以在 Knot 畫面上檢視與復原。")
 
 (defn- result [id res] {:jsonrpc "2.0" :id id :result res})
 (defn- rpc-error [id code msg] {:jsonrpc "2.0" :id id :error {:code code :message msg}})

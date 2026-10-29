@@ -133,14 +133,6 @@
    :revision/before string
    :revision/after string
 
-   ;; 修改建議（M5）
-   :proposal/trigger ref-one
-   :proposal/target ref-one
-   :proposal/base-version long*
-   :proposal/dependency kw
-   :proposal/new-prose string
-   :proposal/state kw
-
    ;; 留言與待辦（SPEC 4、5.11）：不屬於修改組
    :note/id (id-attr)
    :note/node {:db/valueType :db.type/uuid}
@@ -151,7 +143,13 @@
    :note/reply-to {:db/valueType :db.type/uuid}
    :note/at {:db/valueType :db.type/instant}
    :note/done-at {:db/valueType :db.type/instant}
-   :note/changeset {:db/valueType :db.type/uuid}})
+   :note/changeset {:db/valueType :db.type/uuid}
+   ;; Knot 為相關段落留下的待辦（5.6）：觸發的卡片與依賴類型
+   :note/trigger {:db/valueType :db.type/uuid}   ; 舊欄位：讀取時轉成 :note/triggers 的一個元素
+   :note/dependency kw
+   ;; 觸發的段落們：[{:id uuid :dependency :summary|:argument :reason string :fields #{:draft :prose}}]，以 pr-str 存成字串
+   :note/triggers string
+   :note/updated-at {:db/valueType :db.type/instant}}) ; 最後一次附加觸發的時間
 
 ;; ---------------------------------------------------------------------------
 ;; Datalog 規則
@@ -353,7 +351,24 @@
 
 (def ^:private note-attrs
   [:note/id :note/node :note/author :note/text :note/todo :note/state
-   :note/reply-to :note/at :note/done-at :note/changeset])
+   :note/reply-to :note/at :note/done-at :note/changeset :note/trigger :note/dependency
+   :note/triggers :note/updated-at])
+
+(declare content-modified-since?)
+
+(defn- note->client
+  "Knot 待辦：:note/triggers 讀成向量（舊的單一 :note/trigger 轉成一個元素）；
+  未完成的 Knot 待辦在目標段落之後又被修改意圖或本文時加 :note/modified-after true（算出來的，不存）。"
+  [db n]
+  (let [triggers (cond (:note/triggers n) (read-edn (:note/triggers n))
+                       (:note/trigger n) [(cond-> {:id (:note/trigger n)}
+                                            (:note/dependency n) (assoc :dependency (:note/dependency n)))])
+        n (cond-> (dissoc n :db/id :note/trigger :note/dependency)
+            triggers (assoc :note/triggers (vec triggers)))]
+    (if (and (= :knot (:note/author n)) (= :open (:note/state n)) (:note/node n)
+             (content-modified-since? db (:note/node n) (or (:note/updated-at n) (:note/at n))))
+      (assoc n :note/modified-after true)
+      n)))
 
 (defn list-notes
   "所有留言（含已隱藏的：所屬卡片已刪除者也在內），依時間由舊到新；
@@ -361,7 +376,7 @@
   [db]
   (->> (pull-all db :note/id (into [:db/id] note-attrs))
        (sort-by (juxt :note/at :db/id))
-       (mapv #(dissoc % :db/id))))
+       (mapv #(note->client db %))))
 
 (declare style-info)
 
@@ -780,6 +795,15 @@
                :before (or (some-> (not-empty before) read-edn) {})
                :after (or (read-edn after) {})}))
        (sort-by :at #(compare %2 %1))))
+
+(defn content-modified-since?
+  "卡片的意圖或本文在 since 之後被修改過（建立卡片不算）。"
+  [db node-id since]
+  (boolean (some (fn [{:keys [at before after]}]
+                   (and (pos? (compare at since)) (seq before)
+                        (or (not= (:node/draft before) (:node/draft after))
+                            (not= (:node/prose before) (:node/prose after)))))
+                 (node-revisions db node-id))))
 
 (defn- field-previous [revs field]
   ;; 建立卡片（匯入、新增）的修訂沒有修改前的內容，不算一次修改

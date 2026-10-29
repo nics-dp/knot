@@ -199,12 +199,12 @@
       (is (str/includes? html "[:notes/delete \"t1\"]"))
       (is (not (str/includes? html "[:notes/delete \"r1\"]"))))
     (testing "卡片上的待辦數"
-      (is (str/includes? html "1 則未完成的待辦")))))
+      (is (str/includes? html "1 則未完成的待辦事項")))))
 
 (deftest todos-menu-test
   (is (str/includes? (render note-state) "[:span.count-badge 2]") "未完成的待辦與 agent 的提問")
   (let [html (render (ui/toggle-todos note-state))]
-    (is (str/includes? html "未完成的待辦"))
+    (is (str/includes? html "未完成的待辦事項"))
     (is (str/includes? html "[:ui/open-note-card \"a2\"]") "agent 的提問")
     (is (str/includes? html "整份報告的留言"))
     (is (str/includes? html "compose-:report"))))
@@ -547,7 +547,7 @@
     (is (= ["b2"] (block-ids (views/filter-blocks bs :table ""))))
     (is (= ["b1"] (block-ids (views/filter-blocks bs :para ""))))
     (is (= ["b1"] (block-ids (views/filter-blocks bs :all "節電 期中"))) "多詞")
-    (is (= ["b2"] (block-ids (views/filter-blocks bs :all "ＸＬＳＸ 甲站"))) "全形與多詞（NFKC）" )
+    (is (= ["b2"] (block-ids (views/filter-blocks bs :all "ＸＬＳＸ 甲站"))) "全形與多詞（NFKC）")
     (is (= ["b1"] (block-ids (views/filter-blocks bs :all "" {:source "期中報告.pdf"}))))))
 
 (deftest fact-cell-text-test
@@ -660,3 +660,63 @@
           html (pr-str (views/app s))]
       (is (not (str/includes? html "使用「本計畫」")))
       (is (not (str/includes? html "context-style"))))))
+
+(def knot-state
+  (ui/set-notes (ui/open-editor state)
+                [{:note/id "k1" :note/node "a1" :note/author :knot :note/todo true :note/state :open
+                  :note/text "「甲 二」的本文改了，本段摘要它，可能需要跟著更新。"
+                  :note/triggers [{:id "a2" :dependency :summary :reason "摘要它"} {:id "A" :dependency :argument :reason "因果承接"}]
+                  :note/modified-after true :note/at 1}
+                 {:note/id "q2" :note/node "a2" :note/author :agent :note/text "要寫幾年？" :note/at 2}
+                 {:note/id "u1" :note/node "a2" :note/author :user :note/text "補數據" :note/todo true :note/state :open :note/at 3}]))
+
+(deftest knot-todo-view-test
+  (let [html (render knot-state)]
+    (testing "作者標籤為 Knot，與 agent、使用者區分"
+      (is (str/includes? html "by-knot"))
+      (is (str/includes? html "\"Knot\""))
+      (is (not (str/includes? html "by-agent"))))
+    (testing "待辦有勾選框，觸發的卡片可以點選跳過去，使用者可以刪除"
+      (is (str/includes? html "[:notes/set-state \"k1\" :done]"))
+      (is (str/includes? html "[:ui/open-note-card \"a2\"]"))
+      (is (str/includes? html "[:notes/delete \"k1\"]"))
+      (testing "多個觸發卡片各有一個連結"
+        (is (str/includes? html "trigger-a2"))
+        (is (str/includes? html "trigger-A"))
+        (is (str/includes? html "改了的段落"))
+        (is (< (str/index-of html "note-text") (str/index-of html "note-triggers"))
+            "放在內容下方，不擠在標題列")
+        (is (not (str/includes? html "看「")) "連結只寫卡片名稱"))
+      (testing "之後已修改的標籤"
+        (is (str/includes? html "之後已修改")))
+      (is (not (str/includes? html "標為待辦事項")) "Knot 的待辦不能取消待辦"))
+    (testing "卡片的待辦數"
+      (is (str/includes? html "1 則未完成的待辦事項"))))
+  (testing "頂部列待辦清單列出 Knot 待辦"
+    (let [html (render (ui/toggle-todos knot-state))]
+      (is (str/includes? html "[:ui/open-note-card \"a1\"]"))
+      (is (str/includes? html "Knot"))
+      (testing "分兩組，組標題帶數量，按鈕數字為合計"
+        (is (str/includes? html "等你回覆（1）"))
+        (is (str/includes? html "交給 agent（2）"))
+        (is (< (str/index-of html "等你回覆") (str/index-of html "交給 agent")))
+        (is (str/includes? html "[:span.count-badge 3]"))))))
+
+(deftest report-setup-view-test
+  (let [s (ui/init-state {:report/title "目錄名" :tree []})
+        html (render s)]
+    (testing "空白報告先顯示名稱表單，不顯示新增第一章與匯入範例"
+      (is (str/includes? html "報告名稱"))
+      (is (str/includes? html "副標（選填）"))
+      (is (str/includes? html ":value \"目錄名\""))
+      (is (str/includes? html "[:report/save-setup]"))
+      (is (not (str/includes? html "新增第一章")))
+      (is (not (str/includes? html "匯入範例內容"))))
+    (testing "名稱空白時確定為 disabled"
+      (is (str/includes? (render (ui/set-report-setup-draft s :title "")) ":disabled true")))
+    (testing "確認後顯示原本的空白畫面；匯入範例只在開發模式"
+      (let [named (assoc-in s [:ui :report-named] true)
+            h (render named)]
+        (is (str/includes? h "新增第一章"))
+        (is (not (str/includes? h "匯入範例內容")))
+        (is (str/includes? (render (assoc named :dev? true)) "匯入範例內容"))))))

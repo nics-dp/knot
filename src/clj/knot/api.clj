@@ -5,6 +5,7 @@
             [knot.db :as db]
             [knot.notes :as notes]
             [knot.seed :as seed]
+            [knot.ui :as ui]
             [malli.core :as m]
             [malli.error :as me]))
 
@@ -81,7 +82,9 @@
       {:entries (subvec entries (- n limit)) :more? true}
       {:entries entries :more? false})))
 
-(defn routes [conn]
+(defn routes
+  "opts：{:dev? true} 時 GET /api/report 帶 :dev? true，並提供 POST /api/dev/sample。"
+  [conn {:keys [dev?]}]
   [["/notes"
     {:post (fn [req]
              (let [body (:body-params req)]
@@ -108,7 +111,7 @@
                               (fn [msg] (case msg "找不到留言" 404 "只能刪除自己的留言" 403 400)))
                  (bad-request "留言 id 格式不正確")))}]
    ["/report"
-    {:get (fn [_] {:status 200 :body (db/load-state (d/db conn))})}]
+    {:get (fn [_] {:status 200 :body (cond-> (db/load-state (d/db conn)) dev? (assoc :dev? true))})}]
    ["/report/info"
     {:post (fn [req]
              (let [body (:body-params req)]
@@ -125,10 +128,21 @@
              (let [body (:body-params req)]
                (if-not (m/validate ChangeSet body)
                  (bad-request "修改內容格式不正確" (me/humanize (m/explain ChangeSet body)))
-                 (let [res (db/apply-changes! conn (assoc body :by :user :check-versions? true))]
+                 (let [before (when (seq (get-in body [:changes :nodes :upsert]))
+                                (ui/from-server (db/load-state (d/db conn))))
+                       res (db/apply-changes! conn (assoc body :by :user :check-versions? true))]
                    (if-let [conflicts (:conflicts res)]
                      {:status 409 :body {:error "卡片已被其他來源修改" :conflicts conflicts}}
-                     {:status 200 :body (or res {:versions {}})})))))}]
+                     (let [created (when (and before res)
+                                     ;; 使用者改了段落的意圖或本文：為依賴它的段落留下 Knot 待辦（SPEC 5.6）
+                                     (notes/record-change! conn before (ui/from-server (db/load-state (d/db conn)))))
+                           touched (into #{} (map :node/id) (get-in body [:changes :nodes :upsert]))
+                           ;; 被修改的段落若有 Knot 待辦，「之後已修改」的標示可能變了：一併回傳留言清單
+                           stale? (and res (or (seq created)
+                                               (some #(and (= :knot (:note/author %)) (notes/open-todo? %)
+                                                           (touched (:note/node %)))
+                                                     (notes/list-notes (d/db conn)))))]
+                       {:status 200 :body (cond-> (or res {:versions {}}) stale? (assoc :notes (notes/list-notes (d/db conn))))}))))))}]
    ["/report/nodes/:id/previous"
     {:get (fn [req]
             (if-let [id (parse-uuid (get-in req [:path-params :id]))]
@@ -154,7 +168,8 @@
     {:post (fn [_]
              (let [label (db/undo! conn)]
                {:status 200 :body {:label label :state (db/load-state (d/db conn))}}))}]
-   ["/dev/sample"
+   (when dev?
+    ["/dev/sample"
     ;; 開發用：把範例報告匯入空白報告（本機測試報告優先）
     {:post (fn [_]
              (cond
@@ -165,4 +180,4 @@
                (if-let [fx (seed/sample-fixture)]
                  (do (seed/seed! conn fx)
                      {:status 200 :body (db/load-state (d/db conn))})
-                 {:status 404 :body {:error "找不到範例報告"}})))}]])
+                 {:status 404 :body {:error "找不到範例報告"}})))}])])
