@@ -1,6 +1,7 @@
 (ns knot.server-test
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [knot.db :as db]
             [knot.notes :as notes]
@@ -21,8 +22,10 @@
         (finally (db/close-report conn))))))
 
 (defn- request [method uri & [body]]
-  (let [res (*handler* (cond-> {:request-method method
-                                :uri uri
+  (let [[path query] (str/split uri #"\?" 2)
+        res (*handler* (cond-> {:request-method method
+                                :uri path
+                                :query-string query
                                 :headers {"accept" "application/edn"}}
                          body (-> (assoc :body (java.io.ByteArrayInputStream. (.getBytes (pr-str body) "UTF-8")))
                                   (assoc-in [:headers "content-type"] "application/edn"))))]
@@ -57,6 +60,23 @@
       (is (= {} (:body (request :get (str "/api/report/nodes/" para "/previous"))))
           "只改了意圖，本文沒有前一版")
       (is (= 400 (:status (request :get "/api/report/nodes/not-a-uuid/previous")))))
+    (testing "卡片歷程"
+      (let [body (:body (request :get (str "/api/report/nodes/" para "/history")))]
+        (is (= [:import :change] (mapv :kind (:entries body))))
+        (is (false? (:more? body)))
+        (is (= #{:intent} (:fields (last (:entries body))))))
+      (let [body (:body (request :get (str "/api/report/nodes/" para "/history?limit=1")))]
+        (is (= 1 (count (:entries body))))
+        (is (= :change (:kind (first (:entries body)))) "最近的一筆")
+        (is (true? (:more? body))))
+      (is (= 2 (count (:entries (:body (request :get (str "/api/report/nodes/" para "/history?limit=all")))))))
+      (is (= {:entries [] :more? false} (:body (request :get (str "/api/report/nodes/" (random-uuid) "/history")))))
+      (is (= 400 (:status (request :get "/api/report/nodes/not-a-uuid/history")))))
+    (testing "某次修改的本文前後：只改意圖時標明沒有改本文，找不到時為 404"
+      (let [cid (first (:changeset-ids (last (:entries (:body (request :get (str "/api/report/nodes/" para "/history")))))))]
+        (is (false? (:prose? (:body (request :get (str "/api/report/nodes/" para "/changes/" cid))))))
+        (is (= 404 (:status (request :get (str "/api/report/nodes/" para "/changes/" (random-uuid))))))
+        (is (= 400 (:status (request :get (str "/api/report/nodes/" para "/changes/xyz")))))))
     (testing "版本已過期：409 並列出衝突"
       (let [stale (sync/diff state (ui/set-node-field state para :node/draft "過期的修改"))
             res (request :post "/api/report/changes" {:label "過期" :changes stale})]

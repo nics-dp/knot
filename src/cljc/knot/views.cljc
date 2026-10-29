@@ -4,6 +4,7 @@
   (:require [clojure.string :as str]
             [knot.context :as context]
             [knot.diff :as diff]
+            [knot.history :as history]
             [knot.layout :as layout]
             [knot.note :as note]
             [knot.tree :as tree]
@@ -786,19 +787,40 @@
           [:span.diff-legend.diff [:del "刪除"] [:ins "新增"]]])
        (diff-entry (text (get-in data [:node/prose :value])) (text (:node/prose node)))])))
 
+(defn- change-view
+  "看某次修改的差異：那次修改前後的本文（不是和目前比較）。"
+  [{:keys [facts ui]} node]
+  (let [{:keys [id data]} (:change ui)
+        text #(some->> % (context/prose-text facts))]
+    (if (or (not= id (:node/id node)) (nil? data))
+      [:span.muted.small "讀取修改…"]
+      (let [{:keys [at label by before after prose?]} data]
+        [:div.diff-list
+         [:div.diff-meta
+          [:span (str (str/join " · " (remove str/blank? [label (time-text at)])) " 的修改"
+                      (when (= :agent by) "（agent 修改）"))]
+          (when prose? [:span.diff-legend.diff [:del "刪除"] [:ins "新增"]])
+          [:button.text-btn {:type "button" :on {:click [[:ui/show-current]]}} "回到目前內容"]]
+         (if prose?
+           (diff-entry (text before) (text after))
+           [:p.muted.small "這次修改沒有改動本文；改了什麼見下方「留言與歷程」。"])]))))
+
 (defn- prose-zone
   "本文區。empty-note：尚未有本文時的說明；actions：本文下方的說明或操作（可省略）。"
   [{:keys [facts ui] :as state} node empty-note & actions]
-  (let [diff? (boolean (:show-previous ui))]
+  (let [change? (some? (:change ui))
+        diff? (and (boolean (:show-previous ui)) (not change?))]
     (zone "prose" "本文"
           {:class "zone-output"
            :aside [:div.segmented.segmented-small {:role "group" :aria-label "本文顯示方式"}
-                   [:button {:type "button" :aria-pressed (str (not diff?))
-                             :on {:click (when diff? [[:ui/toggle-previous]])}} "目前內容"]
+                   [:button {:type "button" :aria-pressed (str (not (or diff? change?)))
+                             :on {:click (when (or diff? change?) [[:ui/show-current]])}} "目前內容"]
                    [:button {:type "button" :aria-pressed (str diff?)
                              :on {:click (when-not diff? [[:ui/toggle-previous]])}} "與前一版比較"]]}
-          (if diff?
-            (previous-view state node)
+          (cond
+            change? (change-view state node)
+            diff? (previous-view state node)
+            :else
             (let [id (:node/id node)]
               (list
                (when (str/blank? (context/prose-text facts (:node/prose node)))
@@ -831,7 +853,7 @@
       [:span.small.muted (time-text at)]
       [:span.note-actions
        (when (and done? changeset node)
-         [:button.text-btn {:type "button" :on {:click [[:ui/open-change node]]}} "看修改"])
+         [:button.text-btn {:type "button" :on {:click [[:ui/open-change node changeset]]}} "看修改"])
        (when-not (or reply? (= id (:reply-to ui)))
          [:button.text-btn {:type "button" :on {:click [[:ui/start-reply id]]}} "回覆"])
        (when (and (= author :user) (not reply?))
@@ -855,13 +877,16 @@
       [:button.btn {:type "button" :disabled (str/blank? draft)
                     :on {:click [[:notes/reply id draft]]}} "回覆"]]]))
 
+(defn- note-thread [state {n :note replies :replies}]
+  [:div.thread {:replicant/key (:note/id n)}
+   (note-line state n false)
+   (for [r replies] (note-line state r true))
+   (when (= (:note/id n) (get-in state [:ui :reply-to]))
+     (reply-box state n))])
+
 (defn- note-threads [state node-id]
-  (for [{n :note replies :replies} (note/threads (:notes state) node-id)]
-    [:div.thread {:replicant/key (:note/id n)}
-     (note-line state n false)
-     (for [r replies] (note-line state r true))
-     (when (= (:note/id n) (get-in state [:ui :reply-to]))
-       (reply-box state n))]))
+  (for [t (note/threads (:notes state) node-id)]
+    (note-thread state t)))
 
 (defn- note-compose
   "新增留言；k 是卡片 id 或 :report。"
@@ -883,14 +908,126 @@
                     :on {:click [[:notes/add {:node node-id :text draft :todo todo?} k]]}}
        "留言"]]]))
 
+;; 歷程（SPEC 5.4 卡片歷程）----------------------------------------------------
+
+(def ^:private field-labels
+  [[:name "名稱"] [:intent "意圖"] [:prose "本文"] [:basis "依據"]
+   [:relations "關係"] [:position "位置"] [:status "狀態"] [:settings "設定"]])
+
+(def ^:private kind-labels
+  {:create "建立卡片" :import "匯入" :delete "刪除" :undo "復原" :change "修改"})
+
+(defn- shown-fields
+  "改了什麼：有本文時不列狀態（本文改了狀態自然跟著變）；依 field-labels 的順序。"
+  [fields]
+  (let [fields (cond-> fields (contains? fields :prose) (disj :status))]
+    (for [[k label] field-labels :when (contains? fields k)] label)))
+
+(defn- icon
+  "時間軸圓形圖示裡的線條圖；path 是 16×16 的 SVG path。"
+  ([path] (icon path 1.6))
+  ([path stroke-width]
+   [:svg {:width 12 :height 12 :viewBox "0 0 16 16" :fill "none" :stroke "currentColor"
+          :stroke-width stroke-width :stroke-linecap "round" :stroke-linejoin "round"
+          :aria-hidden "true"}
+    [:path {:d path}]]))
+
+(def ^:private icon-paths
+  {:create "M8 3v10M3 8h10"
+   :import "M8 2v8M5 7l3 3 3-3M3 13h10"
+   :delete "M4 4l8 8M12 4l-8 8"
+   :undo "M6 3L3 6l3 3M3 6h6.5a3.5 3.5 0 010 7H7"
+   :pen "M3 13l1-3.5L10.5 3 13 5.5 6.5 12z"
+   :link "M6.5 9.5l3-3M7 4.5l1-1a2.8 2.8 0 014 4l-1 1M9 11.5l-1 1a2.8 2.8 0 01-4-4l1-1"
+   :move "M8 2v12M5 5l3-3 3 3M5 11l3 3 3-3"
+   :comment "M3 3.5h10v7H7.5L4.5 13v-2.5H3z"
+   :todo "M3.5 3.5h9v9h-9zM6 8l1.5 1.5L10.5 6"
+   :more "M4 8h.01M8 8h.01M12 8h.01"})
+
+(defn- event-icon-key [kind fields]
+  (cond
+    (#{:create :import :delete :undo} kind) kind
+    (some fields [:prose :name :intent :basis]) :pen
+    (= #{:relations} fields) :link
+    (= #{:position} fields) :move
+    :else :pen))
+
+(defn- event-icon [{:keys [kind fields by]}]
+  [:span.tl-icon {:class (when (= by :agent) "tl-agent")}
+   (icon (icon-paths (event-icon-key kind (or fields #{}))))])
+
+(defn- text-change [label {:keys [before after]}]
+  (let [row (fn [sign cls v]
+              [:p.tl-diff-row {:class cls}
+               [:span.tl-diff-sign sign]
+               (cond
+                 (str/blank? v) [:span.tl-diff-empty "（空）"]
+                 (= "−" sign) [:del.tl-diff-text v]
+                 :else [:span.tl-diff-text v])])]
+    [:div.tl-diff-field {:replicant/key label}
+     [:div.tl-diff-name label]
+     (row "−" "tl-diff-old" before)
+     (row "+" "tl-diff-new" after)]))
+
+(defn- history-event
+  "時間軸上的一筆修改：圖示在左；右邊第一行是時間、操作者、修改名稱、改了什麼，名稱與意圖的變動列在下面。"
+  [id {:keys [changeset-ids at label by kind undone? fields text-changes merged] :as entry}]
+  (let [label (if (str/blank? label) (kind-labels kind) label)]
+    [:div.tl-item.tl-event {:replicant/key (str "h-" (last changeset-ids))
+                            :class [(when (= by :agent) "tl-event-agent") (when undone? "tl-undone")]}
+     (event-icon entry)
+     [:div.tl-body
+      [:div.tl-line
+       [:span.tl-time (time-text at)]
+       [:span.tl-by {:class (if (= by :agent) "tl-by-agent" "tl-by-user")} (if (= by :agent) "agent" "使用者")]
+       [:span.tl-label label]
+       (for [f (shown-fields (or fields #{}))]
+         [:span.tl-field {:replicant/key f} f])
+       (when (and merged (> merged 1)) [:span.tl-merged (str "連續輸入 " merged " 次")])
+       (when undone? [:span.tl-undone-tag "已復原"])
+       (when (contains? fields :prose)
+         [:button.text-btn.tl-show {:type "button"
+                                    :on {:click [[:ui/show-change id (last changeset-ids)]]}} "看差異"])]
+      ;; 已復原的修改與復原本身只留一行，同一個改動不重複列兩次前後文字
+      (when (and (seq text-changes) (not undone?) (not= :undo kind))
+        [:div.tl-diff
+         (for [[k label] [[:name "名稱"] [:intent "意圖"]]
+               :when (contains? text-changes k)]
+           (text-change label (get text-changes k)))])]]))
+
+(defn- thread-icon [{:note/keys [author todo] :as n}]
+  (let [done? (= :done (:note/state n))]
+    [:span.tl-icon {:class [(when (and (= author :agent) (not todo)) "tl-agent")
+                            (when (and todo (not done?)) "tl-todo")]}
+     (icon (icon-paths (if todo :todo :comment)))]))
+
+(defn- timeline-thread [state {n :note :as thread}]
+  [:div.tl-item.tl-thread {:replicant/key (:note/id n)}
+   (thread-icon n)
+   [:div.tl-body (note-thread state thread)]])
+
 (defn- notes-zone
-  "編輯區最後的「留言與待辦」：這張卡片的留言串（最新的在下方）與新增留言。"
+  "編輯區最後的「留言與歷程」：這張卡片的留言串與修改紀錄依時間穿插成一條時間軸（最新的在下方），最後是新增留言。"
   [state id]
-  (let [n (get (note/todo-counts (:nodes state) (:notes state)) id 0)]
-    (zone "notes" "留言與待辦"
-          {:hint "給 agent 的交代與 agent 的提問；不會出現在報告中"
+  (let [n (get (note/todo-counts (:nodes state) (:notes state)) id 0)
+        {h-id :id :keys [data]} (get-in state [:ui :history])
+        {:keys [entries more?]} (when (= h-id id) data)
+        items (history/timeline (note/threads (:notes state) id) entries)]
+    (zone "notes" "留言與歷程"
+          {:hint "留言、待辦與這張卡片的修改紀錄；不會出現在報告中"
            :aside (when (pos? n) [:span.tag.tag-warm (str n " 則待辦")])}
-          [:div.threads (note-threads state id)]
+          [:div.tl
+           (when more?
+             [:div.tl-item.tl-more {:replicant/key "more"}
+              [:span.tl-icon (icon (icon-paths :more) 2.2)]
+              [:div.tl-body
+               [:div.tl-line
+                [:button.text-btn {:type "button" :on {:click [[:history/show-all]]}}
+                 "顯示較早的紀錄"]]]])
+           (for [{:keys [type thread entry]} items]
+             (if (= :thread type)
+               (timeline-thread state thread)
+               (history-event id entry)))]
           (note-compose state id id "交代 agent 的事、或給自己的備忘…"))))
 
 ;; 各類卡片 -------------------------------------------------------------------
@@ -925,7 +1062,7 @@
                                     :title (title k) :on-title [[:ui/select k]]
                                     :meta [:span.mono (get-in nodes [k :node/label])]}))])))
      (context-zone state id)
-     (prose-zone state node "尚未有本文：可直接在下方撰寫，或寫好意圖並加入依據後在「留言與待辦」交代 agent 撰寫。")
+     (prose-zone state node "尚未有本文：可直接在下方撰寫，或寫好意圖並加入依據後在「留言與歷程」交代 agent 撰寫。")
      (notes-zone state id))))
 
 (defn- heading-editor [{:keys [nodes] :as state} title id]
@@ -973,7 +1110,7 @@
      (zone "inputs" "生成依據" {:hint "可留空；agent 會依這一層的下層內容撰寫引言"}
            (intent-field id (:node/draft node) "想強調的重點或語氣寫在這裡，agent 會依下層內容撰寫引言。"))
      (context-zone state id)
-     (prose-zone state node "尚未有本文：可直接撰寫，或在下層內容大致完成後於「留言與待辦」交代 agent 撰寫。"
+     (prose-zone state node "尚未有本文：可直接撰寫，或在下層內容大致完成後於「留言與歷程」交代 agent 撰寫。"
                  [:span.small.muted {:replicant/key "note"} "引言適合在下層內容大致完成後才撰寫"])
      (notes-zone state id))))
 
