@@ -17,7 +17,7 @@
                                    {:node/id "a3" :node/kind :paragraph :node/title "三" :node/draft "後段意圖"}]}]}]
     :relations [{:relation/from "a1" :relation/to "a2" :relation/type :causal}
                 {:relation/from "a2" :relation/to "a3" :relation/type :progression :relation/pending true}]
-    :blocks [{:block/id "b1" :block/kind :para :block/status :candidate :block/title "素材" :block/text "素材內容"}]
+    :blocks [{:block/id "b1" :block/kind :para :block/status :discarded :block/title "素材" :block/text "素材內容"}]
     :facts [{:fact/key "k" :fact/label "事實" :fact/value "1" :fact/unit "%" :fact/block "b1"}
             {:fact/key "other" :fact/label "無關的事實" :fact/value "2" :fact/unit "" :fact/block "b9"}]}))
 
@@ -43,7 +43,7 @@
       (is (= ["k"] (mapv :key (:entries (section ctx "可用事實"))))))
     (testing "每一節都有分組"
       (is (every? :group (:sections ctx))))
-    (testing "依據標示未確認素材"
+    (testing "依據標示已捨棄的素材"
       (is (:warn (first (:entries (section ctx "依據"))))))
     (testing "下層表格帶 label 與意圖"
       (is (= "表的意圖" (:text (first (:entries (section ctx "下層表格與圖")))))))

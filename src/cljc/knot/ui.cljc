@@ -727,14 +727,31 @@
 (defn select-block [state block-id]
   (assoc-in state [:ui :library-selected] block-id))
 
+(defn open-block
+  "從段落的依據跳到素材庫並選取那筆素材：切到素材庫頁面、清掉類型／來源／搜尋的篩選，
+  已捨棄的素材會自動打開「顯示已捨棄」，否則清單裡看不到。"
+  [state block-id]
+  (let [b (some #(when (= block-id (:block/id %)) %) (:blocks state))]
+    (cond-> (-> state
+                (set-page :library)
+                (update :ui assoc :library-selected block-id :source-filter :all :source-query "" :source-file nil))
+      (= :discarded (:block/status b)) (assoc-in [:ui :show-discarded] true))))
+
+(defn toggle-show-discarded
+  "素材庫是否列出已捨棄的素材（預設不列）。"
+  [state]
+  (update-in state [:ui :show-discarded] not))
+
 (defn set-block-status
-  "候選區塊的確認、捨棄或恢復。"
+  "捨棄素材（:discarded）或恢復（:confirmed）；走一般修改組，可 Ctrl+Z 復原。"
   [state block-id status]
-  (-> state
-      (remember ({:confirmed "確認素材" :discarded "捨棄素材" :candidate "恢復素材"} status "變更素材狀態"))
-      (update :blocks
-              (fn [blocks]
-                (mapv #(if (= block-id (:block/id %)) (assoc % :block/status status) %) blocks)))))
+  (if-not (#{:discarded :confirmed} status)
+    state
+    (-> state
+        (remember (if (= :discarded status) "捨棄素材" "恢復素材"))
+        (update :blocks
+                (fn [blocks]
+                  (mapv #(if (= block-id (:block/id %)) (assoc % :block/status status) %) blocks))))))
 
 (defn open-paragraph
   "從素材庫跳回撰寫頁的某張卡片。"

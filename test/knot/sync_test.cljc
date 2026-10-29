@@ -9,7 +9,7 @@
             :children [{:node/id "a1" :node/kind :paragraph :node/title "一"}
                        {:node/id "a2" :node/kind :paragraph :node/title "二"}]}]
     :relations [{:relation/from "a1" :relation/to "a2" :relation/type :causal}]
-    :blocks [{:block/id "b1" :block/kind :para :block/status :candidate}]
+    :blocks [{:block/id "b1" :block/kind :para :block/status :confirmed}]
     :facts [{:fact/key "k" :fact/value "1"}]}))
 
 (deftest diff-test
@@ -27,5 +27,5 @@
     (let [d (sync/diff state (ui/delete-node state "a2"))]
       (is (= ["a2"] (get-in d [:nodes :delete])))))
   (testing "素材狀態"
-    (is (= {:blocks {:upsert [{:block/id "b1" :block/kind :para :block/status :confirmed}]}}
-           (sync/diff state (ui/set-block-status state "b1" :confirmed))))))
+    (is (= {:blocks {:upsert [{:block/id "b1" :block/kind :para :block/status :discarded}]}}
+           (sync/diff state (ui/set-block-status state "b1" :discarded))))))

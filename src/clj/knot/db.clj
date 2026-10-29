@@ -76,7 +76,8 @@
    :block/text (assoc string :db/fulltext true)
    :block/location string
    :block/status kw
-   :block/ai-split bool
+   :block/note string
+   :block/ai-split bool ; 舊欄位：不再使用，保留 schema 以免舊資料出錯
    :block/table ref-one
 
    ;; 表格與事實
@@ -93,7 +94,8 @@
    :fact/label string
    :fact/value string
    :fact/unit string
-   :fact/row ref-one
+   :fact/row ref-one ; 舊欄位：不再使用；指向儲存格的列改存 :fact/row-index
+   :fact/row-index long* ; 0 起算的列索引（前端形式的 :fact/row）
    :fact/column string
    :fact/block ref-one
 
@@ -304,7 +306,7 @@
                  (mapv #(get m (:col/id %) "") columns))))))
 
 (def ^:private block-pattern
-  [:db/id :block/id :block/kind :block/title :block/text :block/location :block/status :block/ai-split
+  [:db/id :block/id :block/kind :block/title :block/text :block/location :block/status :block/note
    {:block/source [:source/file-name]}
    {:block/table [:db/id :table/kind :table/columns]}])
 
@@ -312,8 +314,10 @@
   (let [table (:block/table e)
         columns (some-> (:table/columns table) read-edn)]
     (cond-> (-> (select-keys e [:block/id :block/kind :block/title :block/text :block/location
-                                :block/status :block/ai-split])
-                (assoc :block/source (get-in e [:block/source :source/file-name])))
+                                :block/status :block/note])
+                (assoc :block/source (get-in e [:block/source :source/file-name]))
+                ;; 舊資料的 :candidate（候選）一律視為可引用；:block/ai-split 不再使用，不讀出
+                (update :block/status #(if (= :candidate %) :confirmed %)))
       (:table/kind table) (assoc :table/kind (:table/kind table))
       columns (assoc :table/columns (mapv :col/name columns)
                      :table/rows (table-rows db (:db/id table) columns)))))
@@ -325,10 +329,13 @@
        vec))
 
 (defn- read-facts [db]
-  (->> (pull-all db :fact/key [:fact/key :fact/label :fact/value :fact/unit {:fact/block [:block/id]}])
+  (->> (pull-all db :fact/key [:fact/key :fact/label :fact/value :fact/unit :fact/row-index :fact/column
+                               {:fact/block [:block/id]}])
        (mapv (fn [e]
-               (cond-> (dissoc e :fact/block)
-                 (:fact/block e) (assoc :fact/block (get-in e [:fact/block :block/id])))))
+               ;; 前端形式的 :fact/row 是 0 起算的列索引，資料庫存在 :fact/row-index
+               (cond-> (dissoc e :fact/block :fact/row-index)
+                 (:fact/block e) (assoc :fact/block (get-in e [:fact/block :block/id]))
+                 (some? (:fact/row-index e)) (assoc :fact/row (:fact/row-index e)))))
        (sort-by :fact/key)
        vec))
 
@@ -450,7 +457,7 @@
         old-table (when before (:db/id (:block/table (d/pull db [{:block/table [:db/id]}] eid))))]
     (concat
      (when before
-       (for [a [:block/title :block/text :block/location :block/status :block/ai-split]
+       (for [a [:block/title :block/text :block/location :block/status :block/note]
              :when (and (some? (get before a)) (nil? (get b a)))]
          [:db/retract eid a]))
      (when (and old-table table-changed?)
@@ -463,7 +470,7 @@
           (not (exists? db :source/file-name src)) (assoc :source/id (random-uuid)))])
      [(cond-> (into {:db/id (ref :block id) :block/id id}
                     (keep (fn [a] (when-some [v (get b a)] [a v])))
-                    [:block/kind :block/title :block/text :block/location :block/status :block/ai-split])
+                    [:block/kind :block/title :block/text :block/location :block/status :block/note])
         (:block/source b) (assoc :block/source (str "source-" (:block/source b)))
         (and table? (or table-changed? (not old-table))) (assoc :block/table tid))]
      (when (and table? (or table-changed? (not old-table)))
@@ -481,12 +488,13 @@
   (let [eid [:fact/key (:fact/key f)]]
     (concat
      (when before
-       (for [a [:fact/label :fact/value :fact/unit :fact/block]
+       (for [a [:fact/label :fact/value :fact/unit :fact/column :fact/block :fact/row]
              :when (and (some? (get before a)) (nil? (get f a)))]
-         [:db/retract eid a]))
+         [:db/retract eid (if (= a :fact/row) :fact/row-index a)]))
      [(cond-> (into {:db/id (ref :fact (:fact/key f)) :fact/key (:fact/key f)}
                     (keep (fn [a] (when-some [v (get f a)] [a v])))
-                    [:fact/label :fact/value :fact/unit])
+                    [:fact/label :fact/value :fact/unit :fact/column])
+        (some? (:fact/row f)) (assoc :fact/row-index (:fact/row f))
         (and (:fact/block f) (ref :block (:fact/block f))) (assoc :fact/block (ref :block (:fact/block f))))])))
 
 (defn- delete-tx [db coll k]

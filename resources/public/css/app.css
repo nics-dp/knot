@@ -195,7 +195,16 @@ h3 { margin: 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 }
 .block-selected { border: 2px solid var(--navy); padding: 11px; }
 .block-discarded { opacity: 0.5; }
-.block-candidate { border: 1px dashed var(--amber-dash); }
+.lib-empty { flex: 1 1 auto; }
+.block-note { margin: 0; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; min-height: 32px; }
+.fact-list { display: flex; flex-direction: column; gap: 8px; }
+.fact-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 13px; }
+.fact-label { font-weight: 500; }
+.fact-key { font-size: 12px; color: var(--muted); }
+.fact-cell { font-size: 12px; color: var(--navy); }
+.table-preview .cell-mark { background: var(--amber-bg); outline: 2px solid var(--amber-dash); outline-offset: -2px; font-weight: 500; }
+.table-preview .cell-col { color: var(--navy); }
 .block-meta { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
 .block-meta > span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .block-status { margin-left: auto; flex: none; }

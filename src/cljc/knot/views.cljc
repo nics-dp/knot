@@ -8,6 +8,7 @@
             [knot.layout :as layout]
             [knot.note :as note]
             [knot.prose :as prose]
+            [knot.sources :as sources]
             [knot.tree :as tree]
             [knot.ui :as ui]))
 
@@ -84,41 +85,33 @@
 (defn- block-index [blocks]
   (into {} (map (juxt :block/id identity)) blocks))
 
-(defn- block-matches? [query {:block/keys [title text source] :as block}]
-  (or (str/blank? query)
-      (some #(str/includes? (or % "") query)
-            (concat [title text source] (:table/columns block)))))
+(defn filter-blocks
+  "素材清單：依類型（:all、:para、:table）、來源檔、搜尋字串篩選；預設排除已捨棄。
+  搜尋用 knot.sources/search（多詞、NFKC、相關度排序）。"
+  [blocks kind query & [{:keys [source include-discarded?]}]]
+  (sources/search blocks query
+                  {:kind (when (#{:para :table} kind) kind)
+                   :source source
+                   :include-discarded? include-discarded?}))
 
-(defn- filter-blocks [blocks f query]
-  (->> blocks
-       (filter (case f
-                 :para #(= :para (:block/kind %))
-                 :table #(= :table (:block/kind %))
-                 :candidate #(= :candidate (:block/status %))
-                 any?))
-       (filter #(block-matches? (str/trim (or query "")) %))))
-
-(defn- block-tag [{:block/keys [kind] :as block}]
+(defn- block-tag
+  "類型標籤。介面用語「節錄」對應 :para，以免和段落卡片混淆。"
+  [{:block/keys [kind] :as block}]
   [:span.tag {:class (when (= :table kind) "tag-navy")}
-   (cond (= :entity (:table/kind block)) "實體表" (= :table kind) "表格" :else "段落")])
+   (cond (= :entity (:table/kind block)) "實體表" (= :table kind) "表格" :else "節錄")])
 
-(defn- block-status [{:block/keys [status] :as block}]
-  (when-not (= :entity (:table/kind block))
-    (case status
-      :candidate [:span.block-status.text-amber "未確認"]
-      :discarded [:span.block-status.muted "已捨棄"]
-      [:span.block-status.text-teal "已確認"])))
+(defn- block-status [block]
+  (when (sources/discarded? block)
+    [:span.block-status.muted "已捨棄"]))
 
-(defn- filter-chips [blocks current action]
-  (let [unconfirmed (count (filter #(= :candidate (:block/status %)) blocks))]
-    [:div.chips {:role "group" :aria-label "篩選"}
-     (for [[f label] [[:all "全部"] [:para "段落"] [:table "表格"] [:candidate (str "未確認 " unconfirmed)]]]
-       [:button.chip-btn {:replicant/key f
-                          :type "button"
-                          :class (when (= f :candidate) "chip-btn-amber")
-                          :aria-pressed (str (= f current))
-                          :on {:click [[action f]]}}
-        label])]))
+(defn- filter-chips [current action]
+  [:div.chips {:role "group" :aria-label "篩選"}
+   (for [[f label] [[:all "全部"] [:para "節錄"] [:table "表格"]]]
+     [:button.chip-btn {:replicant/key f
+                        :type "button"
+                        :aria-pressed (str (= f current))
+                        :on {:click [[action f]]}}
+      label])])
 
 ;; ---------------------------------------------------------------------------
 ;; 本文（唯讀）
@@ -134,9 +127,9 @@
 (defn- render-inline [facts blocks {:keys [type text attrs]}]
   (case type
     "text" text
-    "fact" (let [{:fact/keys [label value unit]} (get facts (:key attrs))]
+    "fact" (let [{:fact/keys [label value] :as f} (get facts (:key attrs))]
              (if value
-               [:span.chip.chip-fact {:title (str label "（" (:key attrs) "）")} value unit]
+               [:span.chip.chip-fact {:title (str label "（" (:key attrs) "）")} (sources/fact-display f)]
                [:span.chip.chip-warn {:title "找不到這個事實"} (:key attrs)]))
     "ref" [:span.chip.chip-ref (xref-text (:label attrs))]
     "cite" [:span.chip.chip-cite {:title (str "來源區塊：" (:block attrs))} (cite-text blocks (:block attrs))]
@@ -805,7 +798,7 @@
 (defn- picker [{:keys [blocks ui]} node]
   (let [{:keys [query filter]} (:picker ui)
         linked (set (map :block (:node/citations node)))
-        shown (remove #(= :discarded (:block/status %)) (filter-blocks blocks filter query))
+        shown (filter-blocks blocks filter query)
         more (- (count shown) list-limit)]
     [:div.picker {:role "dialog" :aria-label "選取素材"}
      [:div.picker-head
@@ -816,7 +809,7 @@
                              :on {:input [[:ui/set-picker-query [:event/target-value]]]
                                   :compositionend [[:ui/set-picker-query [:event/target-value]]]}}]
       [:button.btn.btn-small {:type "button" :on {:click [[:ui/close-picker]]}} "完成"]]
-     (filter-chips blocks filter :ui/set-picker-filter)
+     (filter-chips filter :ui/set-picker-filter)
      [:div.picker-list
       (if (seq shown)
         (for [{:block/keys [id title source location] :as b} (take list-limit shown)]
@@ -824,13 +817,12 @@
            (block-tag b)
            [:span.picker-title title]
            [:span.muted.small.picker-source (str source (when location (str " · " location)))]
-           (block-status b)
            (if (linked id)
              [:span.small.text-teal "已加入"]
              [:button.btn.btn-small {:type "button" :on {:click [[:ui/add-citation (:node/id node) id]]}} "加入"])])
-        [:span.muted.small "沒有符合的素材區塊"])]
+        [:span.muted.small "沒有符合的素材"])]
      (when (pos? more)
-       [:span.muted.small (str "還有 " more " 個符合的區塊")])]))
+       [:span.muted.small (str "還有 " more " 個符合的素材")])]))
 
 (defn- citations [{:keys [blocks ui] :as state} node]
   (let [by-id (block-index blocks)
@@ -843,11 +835,12 @@
        [:div.items {:replicant/key "cites"}
         (for [{:keys [block where]} cites
               :let [b (by-id block)
-                    warn? (= :candidate (:block/status b))]]
-          (item-row block {:tag (if (= :table (:block/kind b)) "表格" "段落")
+                    warn? (sources/discarded? b)]]
+          (item-row block {:tag (if (= :table (:block/kind b)) "表格" "節錄")
                            :tag-class (when (= :table (:block/kind b)) "tag-navy")
                            :title (:block/title b)
-                           :meta (if warn? [:span.text-amber "未確認素材"] (or where (:block/source b)))
+                           :on-title [[:ui/open-block block]]
+                           :meta (if warn? [:span.text-amber "已捨棄"] (or where (:block/source b)))
                            :warn? warn?
                            :control (remove-button "移除依據" [[:ui/remove-citation id block]])}))]
        [:span.notice-amber {:replicant/key "empty"} "尚未加入依據：agent 只能依意圖撰寫，無法引用素材。"])
@@ -894,9 +887,10 @@
              (for [{:keys [title entries]} sections]
                [:div.context-section {:replicant/key title}
                 [:h4 title]
-                (for [[i {:keys [label text relation source warn has-prose]}] (map-indexed vector entries)]
+                (for [[i {:keys [label text relation source warn has-prose discarded]}] (map-indexed vector entries)]
                   [:div.context-entry {:replicant/key i :class (when warn "cite-warn")}
                    [:span.context-label label (source-tag source) (has-prose-tag has-prose)
+                    (when discarded [:span.text-amber.small "已捨棄"])
                     (when relation [:span.relation-chip relation])]
                    [:span.context-text (if (str/blank? text) "（未填意圖）" (gist text))]])])]))))
 
@@ -1386,28 +1380,44 @@
   [:div.detail-section [:h3 heading] body])
 
 (defn- table-view
-  "表格區塊的內容；max-cols、max-rows 為 nil 時顯示全部。"
-  [block & [max-cols max-rows]]
-  (let [cols (cond->> (:table/columns block) max-cols (take max-cols))
-        rows (cond->> (:table/rows block) max-rows (take max-rows))]
+  "表格素材的內容；max-cols、max-rows 為 nil 時顯示全部。
+  marked 為 [列索引 欄名] 的集合：標出事實指向的儲存格。"
+  [block & [max-cols max-rows marked]]
+  (let [all-cols (:table/columns block)
+        cols (cond->> all-cols max-cols (take max-cols))
+        rows (cond->> (:table/rows block) max-rows (take max-rows))
+        marked (set marked)
+        mark-cols (set (map second marked))
+        col-at (fn [ci] (nth all-cols ci nil))]
     [:div.table-preview {:style {:grid-template-columns (str "repeat(" (count cols) ", minmax(0, 1fr))")}}
-     (for [c cols] [:span.th {:replicant/key c} c])
+     (for [c cols] [:span.th {:replicant/key c :class (when (mark-cols c) "cell-col")} c])
      (for [[ri row] (map-indexed vector rows)
            [ci cell] (map-indexed vector (take (count cols) row))]
-       [:span {:replicant/key [ri ci]} cell])]))
+       [:span {:replicant/key [ri ci]
+               :class (when (marked [ri (col-at ci)]) "cell-mark")} cell])]))
 
 (defn- citing-nodes [nodes block-id]
   (->> (vals nodes)
        (filter #(some (fn [c] (= block-id (:block c))) (:node/citations %)))
        (map :node/id)))
 
-(defn- library-card [nodes selected {:block/keys [id status title text source location ai-split] :as block}]
-  (let [n (count (citing-nodes nodes id))]
+(defn block-facts
+  "素材上的事實，依 key 排序。"
+  [facts block-id]
+  (sort-by :fact/key (filter #(= block-id (:fact/block %)) (vals facts))))
+
+(defn fact-cell-text
+  "事實指向表格儲存格時的說明「第 N 列・欄名」（N 從 1 算）；沒有指定時為 nil。"
+  [{:fact/keys [row column]}]
+  (when (some? row) (str "第 " (inc row) " 列・" column)))
+
+(defn- library-card [nodes facts selected {:block/keys [id title text source location] :as block}]
+  (let [n (count (citing-nodes nodes id))
+        nf (count (block-facts facts id))]
     [:button.block {:replicant/key id
                     :type "button"
                     :class (cond-> []
-                             (= :candidate status) (conj "block-candidate")
-                             (= :discarded status) (conj "block-discarded")
+                             (sources/discarded? block) (conj "block-discarded")
                              (= id selected) (conj "block-selected"))
                     :on {:click [[:ui/select-block id]]}}
      [:span.block-meta
@@ -1416,37 +1426,50 @@
       (block-status block)]
      [:span.block-title title]
      (cond
-       (and (= :table (:block/kind block)) (not= :entity (:table/kind block)))
+       (sources/table? block)
        (list (table-view block 3 2)
              [:span.muted.small {:replicant/key "dims"}
               (str (count (:table/columns block)) " 欄 × " (count (:table/rows block)) " 列")])
        text [:span.block-text text])
-     [:span.small {:class (if (pos? n) "text-navy" "muted")}
-      (if (pos? n) (str "被 " n " 個段落引用") "尚未被引用")
-      (when ai-split [:span.text-amber " · AI 自動切出"])]]))
+     [:span.small
+      [:span {:class (if (pos? nf) "text-navy" "muted")} (str nf " 個事實")]
+      [:span.muted " · "]
+      [:span {:class (if (pos? n) "text-navy" "muted")}
+       (if (pos? n) (str "被 " n " 個段落引用") "尚未被引用")]]]))
 
+(defn- fact-row [{:fact/keys [key label] :as fact}]
+  [:div.fact-row {:replicant/key key}
+   [:span.fact-label label]
+   [:span.chip.chip-fact (sources/fact-display fact)]
+   [:code.fact-key key]
+   (when-let [cell (fact-cell-text fact)] [:span.fact-cell cell])])
 
-(defn- library-detail [{:keys [nodes] :as _state} title block]
+(defn- library-detail [{:keys [nodes facts]} title block]
   (if-not block
-    [:aside.lib-detail [:p.muted "選取左側的素材區塊查看內容。"]]
-    (let [{:block/keys [id status source location text]} block
-          citing (citing-nodes nodes id)]
+    [:aside.lib-detail [:p.muted "選取左側的素材查看內容。"]]
+    (let [{:block/keys [id source location note]} block
+          citing (citing-nodes nodes id)
+          bfacts (block-facts facts id)
+          cells (keep (fn [f] (when (some? (:fact/row f)) [(:fact/row f) (:fact/column f)])) bfacts)]
       [:aside.lib-detail
        [:div.detail-head
         [:span.block-meta (block-tag block) [:span (str source (when location (str " · " location)))] (block-status block)]
         [:h2 (:block/title block)]]
-       (when (#{:candidate :discarded} status)
-         [:div.move-row
-          (when (= :candidate status)
-            [:button.btn.btn-small.btn-primary {:type "button" :on {:click [[:ui/set-block-status id :confirmed]]}} "確認"])
-          (if (= :discarded status)
-            [:button.btn.btn-small {:type "button" :on {:click [[:ui/set-block-status id :candidate]]}} "恢復為候選"]
-            [:button.btn.btn-small {:type "button" :on {:click [[:ui/set-block-status id :discarded]]}} "捨棄"])])
-       (section "內容"
-                (if (= :table (:block/kind block))
-                  (table-view block)
-                  [:div.boxed text]))
-       (section "引用此區塊的段落"
+       [:div.move-row
+        (if (sources/discarded? block)
+          [:button.btn.btn-small {:type "button" :on {:click [[:ui/set-block-status id :confirmed]]}} "恢復"]
+          [:button.btn.btn-small {:type "button" :on {:click [[:ui/set-block-status id :discarded]]}} "捨棄"])]
+       (when note
+         (section "用途說明" [:p.block-note note]))
+       (section (if (sources/table? block) "表格" "原文")
+                (if (sources/table? block)
+                  (table-view block nil nil cells)
+                  [:div.boxed (:block/text block)]))
+       (section (str "事實" (when (seq bfacts) (str "（" (count bfacts) "）")))
+                (if (seq bfacts)
+                  [:div.fact-list (map fact-row bfacts)]
+                  [:span.muted.small "這份素材還沒有登記事實"]))
+       (section "引用它的段落"
                 (if (seq citing)
                   [:div.kids
                    (for [n citing]
@@ -1454,44 +1477,57 @@
                       (title n)])]
                   [:span.muted.small "尚未被引用"]))])))
 
-(defn- library-page [{:keys [blocks nodes ui] :as state} title]
-  (let [{:keys [source-filter source-query library-selected source-file]} ui
-        shown (cond->> (filter-blocks blocks source-filter source-query)
-                source-file (filter #(= source-file (:block/source %))))
-        confirmed (count (filter #(= :confirmed (:block/status %)) blocks))
+(def empty-library-text
+  "還沒有素材：請 agent 從原始資料節錄有用的片段與表格（MCP 的 add_excerpt、add_source_table），並登記其中的事實。")
+
+(defn- library-page [{:keys [blocks nodes facts ui] :as state} title]
+  (let [{:keys [source-filter source-query library-selected source-file show-discarded]} ui
+        shown (filter-blocks blocks source-filter source-query
+                             {:source source-file :include-discarded? show-discarded})
+        counts (sources/source-counts blocks)
+        discarded (count (filter sources/discarded? blocks))
         selected (some #(when (= library-selected (:block/id %)) %) blocks)]
-    [:div.library-page
-     [:aside.lib-filters
-      [:div.panel-head
-       [:h2 "素材庫"]
-       [:span.muted.small (str "已確認 " confirmed " / 共 " (count blocks) " 區塊")]]
-      [:div.field
-       [:label.muted.small {:for "lib-search"} "搜尋素材"]
-       [:input#lib-search {:type "search"
-                           :placeholder "關鍵字、檔名或欄位"
-                           :value source-query
-                           :on {:input [[:ui/set-source-query [:event/target-value]]]
-     :compositionend [[:ui/set-source-query [:event/target-value]]]}}]]
-      (filter-chips blocks source-filter :ui/set-source-filter)
-      [:div.detail-section
-       [:h3 "來源檔"]
-       (for [[src bs] (sort-by key (group-by :block/source blocks))]
-         [:button.source-row {:replicant/key src
-                              :type "button"
-                              :title src
-                              :aria-pressed (str (= src source-file))
-                              :on {:click [[:ui/toggle-source-file src]]}}
-          [:span.source-name src]
-          [:span.muted.small.nowrap (str (count bs) " 區塊")]])]
-      [:button.btn.btn-dashed {:type "button" :disabled true :title "M3 實作素材匯入"} "匯入來源檔"]]
-     [:section.lib-list {:aria-label "素材區塊"}
-      [:div.lib-count.muted.small
-       (str "符合 " (count shown) " 個區塊"
-            (when (> (count shown) list-limit) (str "，顯示前 " list-limit " 個；請用搜尋或篩選縮小範圍")))]
-      (if (seq shown)
-        (map #(library-card nodes library-selected %) (take list-limit shown))
-        [:span.muted.small "沒有符合的素材區塊"])]
-     (library-detail state title selected)]))
+    (if (empty? blocks)
+      [:div.library-page
+       [:div.empty-state.lib-empty
+        [:h2 "素材庫"]
+        [:p.muted empty-library-text]]]
+      [:div.library-page
+       [:aside.lib-filters
+        [:div.panel-head
+         [:h2 "素材庫"]
+         [:span.muted.small (str (- (count blocks) discarded) " 筆素材")]]
+        [:div.field
+         [:label.muted.small {:for "lib-search"} "搜尋素材"]
+         [:input#lib-search {:type "search"
+                             :placeholder "多個詞以空白分隔"
+                             :value source-query
+                             :on {:input [[:ui/set-source-query [:event/target-value]]]
+                                  :compositionend [[:ui/set-source-query [:event/target-value]]]}}]]
+        (filter-chips source-filter :ui/set-source-filter)
+        [:div.detail-section
+         [:h3 "來源檔"]
+         (for [{src :source n :count} counts]
+           [:button.source-row {:replicant/key src
+                                :type "button"
+                                :title src
+                                :aria-pressed (str (= src source-file))
+                                :on {:click [[:ui/toggle-source-file src]]}}
+            [:span.source-name src]
+            [:span.muted.small.nowrap (str n " 筆")]])]
+        [:label.check-row
+         [:input {:type "checkbox"
+                  :checked (boolean show-discarded)
+                  :on {:change [[:ui/toggle-show-discarded]]}}]
+         [:span (str "顯示已捨棄" (when (pos? discarded) (str "（" discarded "）")))]]]
+       [:section.lib-list {:aria-label "素材"}
+        [:div.lib-count.muted.small
+         (str "符合 " (count shown) " 筆素材"
+              (when (> (count shown) list-limit) (str "，顯示前 " list-limit " 筆；請用搜尋或篩選縮小範圍")))]
+        (if (seq shown)
+          (map #(library-card nodes facts library-selected %) (take list-limit shown))
+          [:span.muted.small "沒有符合的素材"])]
+       (library-detail state title selected)])))
 
 ;; ---------------------------------------------------------------------------
 

@@ -424,3 +424,30 @@
         (is (= s (ui/set-target-chars s "a1" bad)) (pr-str bad))))
     (testing "不存在的卡片不改"
       (is (= state (ui/set-target-chars state "nope" "10"))))))
+
+(deftest block-status-test
+  (let [s (assoc state :blocks [{:block/id "b1" :block/kind :para :block/status :confirmed}])
+        d (ui/set-block-status s "b1" :discarded)]
+    (is (= :discarded (get-in d [:blocks 0 :block/status])))
+    (is (= :confirmed (get-in (ui/set-block-status d "b1" :confirmed) [:blocks 0 :block/status])))
+    (is (= s (ui/set-block-status s "b1" :candidate)) "不再有候選狀態")))
+
+(deftest toggle-show-discarded-test
+  (is (true? (get-in (ui/toggle-show-discarded state) [:ui :show-discarded])))
+  (is (false? (get-in (-> state ui/toggle-show-discarded ui/toggle-show-discarded) [:ui :show-discarded]))))
+
+(deftest open-block-test
+  (let [s (-> (assoc state :blocks [{:block/id "b1" :block/status :confirmed}
+                                    {:block/id "b2" :block/status :discarded}])
+              (assoc-in [:ui :source-filter] :table)
+              (assoc-in [:ui :source-query] "x")
+              (assoc-in [:ui :source-file] "a.pdf"))
+        r1 (ui/open-block s "b1")
+        r2 (ui/open-block s "b2")]
+    (is (= :library (get-in r1 [:ui :page])))
+    (is (= "b1" (get-in r1 [:ui :library-selected])))
+    (is (= [:all "" nil] ((juxt #(get-in % [:ui :source-filter]) #(get-in % [:ui :source-query]) #(get-in % [:ui :source-file])) r1))
+        "清掉篩選，素材一定在清單裡")
+    (is (not (get-in r1 [:ui :show-discarded])))
+    (is (true? (get-in r2 [:ui :show-discarded])) "已捨棄的素材自動打開顯示已捨棄")
+    (is (= "b2" (get-in r2 [:ui :library-selected])))))

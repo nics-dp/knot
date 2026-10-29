@@ -11,6 +11,8 @@
             [knot.notes :as notes]
             [knot.ops :as ops]
             [knot.prose :as prose]
+            [knot.source-ops :as source-ops]
+            [knot.sources :as sources]
             [knot.sync :as sync]
             [knot.tree :as tree]
             [knot.ui :as ui]))
@@ -165,7 +167,8 @@
       :citations (vec (for [{:keys [block where]} (:node/citations n)
                             :let [b (block-by-id block)]
                             :when b]
-                        {:block_id (str block) :block_title (:block/title b) :where where}))
+                        (cond-> {:block_id (str block) :block_title (:block/title b) :where where}
+                          (sources/discarded? b) (assoc :discarded true))))
       :relations {:prev (neighbor nodes numbers prev (when prev (tree/relation-between relations prev id)))
                   :next (neighbor nodes numbers nxt (when nxt (tree/relation-between relations id nxt)))
                   :outgoing (remote-entries nodes numbers outgoing :relation/to)
@@ -227,6 +230,7 @@
                                          (:relation e) (assoc :relation (:relation e))
                                          (:has-prose e) (assoc :has_prose true)
                                          (:warn e) (assoc :warn true)
+                                         (:discarded e) (assoc :discarded true)
                                          (:target-chars e) (assoc :target_chars (:target-chars e))
                                          (:key e) (assoc :key (:key e)))))}))
      :context_chars (:chars ctx)
@@ -260,12 +264,36 @@
    :number (ops/heading-number nodes numbers id)
    :title (card-title nodes numbers id)})
 
+(defn- block-by-id [{:keys [blocks]} id]
+  (some #(when (= id (:block/id %)) %) blocks))
+
+(defn- block-summary
+  "素材的簡要資料（block_id、種類、名稱、來源、位置、狀態）。"
+  [b]
+  (cond-> {:block_id (str (:block/id b))
+           :kind (name (:block/kind b))
+           :title (:block/title b)
+           :source (:block/source b)
+           :status (name (or (:block/status b) :confirmed))}
+    (:block/location b) (assoc :location (:block/location b))))
+
+(defn- fact-entry
+  "事實的資料：key、label、value、unit、所屬素材 block_id 與名稱、指定的列與欄。"
+  [state {:fact/keys [key label value unit block row column]}]
+  (let [b (block-by-id state block)]
+    (cond-> {:key key :label label :value value :display (sources/fact-display {:fact/value value :fact/unit unit})
+             :block_id (some-> block str)}
+      unit (assoc :unit unit)
+      b (assoc :block_title (:block/title b))
+      (and b (sources/discarded? b)) (assoc :block_discarded true)
+      (some? row) (assoc :row row :column column))))
+
 (defn- write!
   "執行寫入工具：op 收目前狀態、回傳 knot.ops 的結果。
   錯誤與衝突以 isError 回報；成功時回傳修改組 id 與這次新增或修改的卡片（編號與名稱為寫入後的）。"
   [conn args op]
   (let [old (current-state conn)
-        {:keys [error state label message note touched origin]} (op old)
+        {:keys [error state label message note touched origin blocks facts citing fact-problems]} (op old)
         _ (when error (tool-error! error))
         changes (sync/diff (sync/data old) (sync/data state))]
     (if-not changes
@@ -277,10 +305,14 @@
             nodes (:nodes state)
             numbers (tree/numbering nodes)]
         (when (:conflicts res) (tool-error! "卡片剛被修改，請重新讀取後再試"))
-        {:changeset_id (str (:changeset/id res))
-         :cards (vec (for [id (distinct touched) :when (contains? nodes id)]
-                       (card-summary nodes numbers id)))
-         :message (or message (str "已" label "；所有修改都記錄在 Knot，可在畫面上檢視與復原"))}))))
+        (cond-> {:changeset_id (str (:changeset/id res))
+                 :cards (vec (for [id (distinct touched) :when (contains? nodes id)]
+                               (card-summary nodes numbers id)))
+                 :message (or message (str "已" label "；所有修改都記錄在 Knot，可在畫面上檢視與復原"))}
+          (seq blocks) (assoc :blocks (vec (for [id blocks :let [b (block-by-id state id)] :when b] (block-summary b))))
+          (seq facts) (assoc :facts (vec (for [k facts :let [f (get (:facts state) k)] :when f] (fact-entry state f))))
+          (seq citing) (assoc :cited_cards (vec (for [id citing] (card-summary nodes numbers id))))
+          (seq fact-problems) (assoc :fact_problems (vec (for [{:keys [key error]} fact-problems] {:key key :error error}))))))))
 
 (defn- add-card [conn args]
   (let [kind (enum-arg args "kind" [:heading :paragraph :intro :table :figure])]
@@ -352,10 +384,13 @@
   (let [fact-keys (set (keys facts))
         labelled (filter :node/label (vals nodes))
         labels (set (map :node/label labelled))
-        block-ids (set (map :block/id blocks))
+        usable (remove sources/discarded? blocks)
+        block-ids (set (map :block/id usable))
+        discarded-ids (set (map :block/id (filter sources/discarded? blocks)))
         bad-facts (remove fact-keys (:facts refs))
         bad-labels (remove labels (:labels refs))
-        bad-blocks (remove #(contains? block-ids (parse-uuid %)) (:blocks refs))]
+        bad-blocks (remove #(contains? block-ids (parse-uuid %)) (:blocks refs))
+        gone-blocks (filter #(contains? discarded-ids (parse-uuid %)) bad-blocks)]
     (when (or (seq bad-facts) (seq bad-labels) (seq bad-blocks))
       (str/join "\n"
                 (concat
@@ -372,11 +407,12 @@
                            (str "可用的 label：" (hint-list (for [n labelled]
                                                           (str (:node/label n) "（" (:node/title n) "）"))) "。")))])
                  (when (seq bad-blocks)
-                   [(str "區塊 id 不存在：" (str/join "、" bad-blocks) "。"
-                         (if (empty? blocks)
-                           "目前報告還沒有素材區塊。"
-                           (str "可引用的區塊（id（標題））：" (hint-list (for [b blocks]
-                                                               (str (:block/id b) "（" (:block/title b) "）"))) "。")))]))))))
+                   [(str "素材 id 不存在或已捨棄：" (str/join "、" bad-blocks) "。"
+                         (when (seq gone-blocks) (str "其中 " (str/join "、" gone-blocks) " 已被捨棄。"))
+                         (if (empty? usable)
+                           "目前報告還沒有可引用的素材；用 search_sources 查詢，沒有就用 add_excerpt 或 add_source_table 新增。"
+                           (str "可引用的素材（id（名稱））：" (hint-list (for [b usable]
+                                                                (str (:block/id b) "（" (:block/title b) "）"))) "。")))]))))))
 
 (defn- write-prose [conn args]
   (let [version (version-arg args)
@@ -450,6 +486,152 @@
     (let [r (db/report-info (d/db conn))]
       {:report {:title (:report/title r) :subtitle (:report/subtitle r)}
        :message "已更新報告資訊；不屬於內容修改，不產生修改組"})))
+
+;; ---------------------------------------------------------------------------
+;; 素材與事實（SPEC 5.2、5.5）
+
+(defn- add-excerpt [conn args]
+  (write! conn args
+          #(source-ops/add-excerpt % {:source (get args "source") :title (get args "title") :text (get args "text")
+                                      :location (get args "location") :note (get args "note")})))
+
+;; 批次：每一項的欄位同單筆工具；項目內的格式問題（例如 block_id 不是 UUID）併入該筆的錯誤，不中斷整批檢查
+(defn- add-excerpts [conn args]
+  (let [items (get args "excerpts")]
+    (write! conn args
+            #(source-ops/add-excerpts
+              % {:excerpts (when (sequential? items)
+                             (for [it items]
+                               (if (map? it)
+                                 {:source (get it "source") :title (get it "title") :text (get it "text")
+                                  :location (get it "location") :note (get it "note")}
+                                 it)))}))))
+
+(defn- add-facts [conn args]
+  (let [items (get args "facts")]
+    (write! conn args
+            #(source-ops/add-facts
+              % {:facts (when (sequential? items)
+                          (for [it items]
+                            (if (map? it)
+                              (let [b (get it "block_id")]
+                                {:key (get it "key") :label (get it "label") :value (get it "value")
+                                 :unit (get it "unit") :row (get it "row") :column (get it "column")
+                                 :block-id (if (string? b) (or (parse-uuid b) b) b)})
+                              it)))}))))
+
+(defn- add-source-table [conn args]
+  (write! conn args
+          #(source-ops/add-source-table % {:source (get args "source") :title (get args "title")
+                                           :location (get args "location") :note (get args "note")
+                                           :columns (get args "columns") :rows (get args "rows")})))
+
+(defn- update-source-block [conn args]
+  (let [id (uuid-arg args "block_id" true)]
+    (write! conn args
+            #(source-ops/update-source-block % {:id id :title (get args "title") :text (get args "text")
+                                                :location (get args "location") :note (get args "note")
+                                                :columns (get args "columns") :rows (get args "rows")}))))
+
+(defn- discard-source-block [conn args]
+  (let [id (uuid-arg args "block_id" true)]
+    (write! conn args #(source-ops/discard-source-block % {:id id}))))
+
+(defn- add-fact [conn args]
+  (write! conn args
+          #(source-ops/add-fact % {:key (get args "key") :label (get args "label") :value (get args "value")
+                                   :unit (get args "unit") :block-id (uuid-arg args "block_id" false)
+                                   :row (get args "row") :column (get args "column")})))
+
+(defn- update-fact [conn args]
+  (let [block-id (uuid-arg args "block_id" false)]
+    (write! conn args
+            #(source-ops/update-fact % (cond-> {:key (get args "key") :label (get args "label") :value (get args "value")
+                                                :unit (get args "unit") :block-id block-id}
+                                         ;; row 與 column 傳 null 表示改為不指定儲存格，要與沒傳區分
+                                         (contains? args "row") (assoc :row (get args "row"))
+                                         (contains? args "column") (assoc :column (get args "column")))))))
+
+(defn- delete-fact [conn args]
+  (let [k (get args "key")]
+    (when-not (string? k) (tool-error! "缺少參數 key（字串）"))
+    (write! conn args #(source-ops/delete-fact % {:key k}))))
+
+(defn- add-citation [conn args]
+  (let [block-id (uuid-arg args "block_id" true)]
+    (write! conn args #(source-ops/add-citation % {:id (card-id % args) :block-id block-id :where (get args "where")}))))
+
+(defn- remove-citation [conn args]
+  (let [block-id (uuid-arg args "block_id" true)]
+    (write! conn args #(source-ops/remove-citation % {:id (card-id % args) :block-id block-id}))))
+
+(def ^:private excerpt-chars 120)
+(def ^:private default-search-limit 20)
+(def ^:private max-search-limit 100)
+
+(defn- fact-counts [{:keys [facts]}]
+  (frequencies (map :fact/block (vals facts))))
+
+(defn- search-entry [counts b]
+  (cond-> (assoc (block-summary b) :fact_count (get counts (:block/id b) 0))
+    (sources/table? b) (assoc :columns (:table/columns b) :row_count (count (:table/rows b)))
+    (not (sources/table? b)) (assoc :excerpt (truncate (:block/text b) excerpt-chars))
+    (:block/note b) (assoc :note (:block/note b))))
+
+(defn- search-sources [conn args]
+  (let [state (current-state conn)
+        query (let [q (get args "query")]
+                (cond (nil? q) ""
+                      (string? q) q
+                      :else (tool-error! "query 必須是字串（空字串表示列出全部）")))
+        kind (when (some? (get args "kind")) (enum-arg args "kind" [:para :table]))
+        source (let [s (get args "source")]
+                 (when (some? s) (if (string? s) s (tool-error! "source 必須是來源檔名字串"))))
+        limit (let [l (get args "limit")]
+                (cond (nil? l) default-search-limit
+                      (and (integer? l) (<= 1 l max-search-limit)) l
+                      :else (tool-error! (str "limit 必須是 1 到 " max-search-limit " 的整數"))))
+        found (sources/search (:blocks state) query {:kind kind :source source})
+        counts (fact-counts state)]
+    (cond-> {:total (count found)
+             :results (mapv #(search-entry counts %) (take limit found))
+             :sources (mapv (fn [{:keys [source count]}] {:source source :count count})
+                            (sources/source-counts (:blocks state)))}
+      (> (count found) limit) (assoc :message (str "只列出前 " limit " 筆（共 " (count found) " 筆）；"
+                                                   "加入更多關鍵字、用 kind 或 source 篩選，或調高 limit"))
+      (empty? found) (assoc :message (str "沒有符合的素材；查詢以空白分成多個詞，素材要同時包含所有詞，"
+                                          "可減少關鍵字。已有的素材來源見 sources")))))
+
+(defn- block-id-arg
+  "取出 block_id 並確認素材存在。"
+  [state args]
+  (let [id (uuid-arg args "block_id" true)]
+    (if (block-by-id state id)
+      id
+      (tool-error! (str "找不到素材：" id "。請先用 search_sources 查詢有效的 block_id")))))
+
+(defn- get-source-block [conn args]
+  (let [{:keys [nodes] :as state} (current-state conn)
+        id (block-id-arg state args)
+        b (block-by-id state id)
+        numbers (tree/numbering nodes)
+        cited (for [nid (tree/document-order nodes)
+                    :when (some #(= id (:block %)) (get-in nodes [nid :node/citations]))]
+                (assoc (card-summary nodes numbers nid)
+                       :position (tree/position-label nodes numbers nid)))]
+    (cond-> (assoc (block-summary b)
+                   :facts (mapv #(fact-entry state %) (sort-by :fact/key (filter #(= id (:fact/block %)) (vals (:facts state)))))
+                   :cited_by (vec cited))
+      (:block/note b) (assoc :note (:block/note b))
+      (sources/table? b) (assoc :columns (:table/columns b) :rows (:table/rows b))
+      (not (sources/table? b)) (assoc :text (:block/text b)))))
+
+(defn- list-facts [conn args]
+  (let [state (current-state conn)
+        only (when (some? (get args "block_id")) (block-id-arg state args))
+        facts (cond->> (sort-by :fact/key (vals (:facts state)))
+                only (filter #(= only (:fact/block %))))]
+    {:facts (mapv #(fact-entry state %) facts)}))
 
 ;; ---------------------------------------------------------------------------
 ;; 留言與待辦：不是內容修改，不產生修改組
@@ -723,7 +905,198 @@
                   :additionalProperties false}
     :handler update-report}])
 
-(def tools (into read-tools write-tools))
+(def ^:private block-id-property
+  {:type "string" :description "素材 id（UUID，由 search_sources 或 add_excerpt／add_source_table 的 block_id 取得）"})
+
+(def ^:private source-property
+  {:type "string" :description "來源檔名稱，例如「期中報告.pdf」；Knot 不保存原始檔，只記下名稱讓使用者回頭核對。同一份資料請固定用同一個名稱"})
+
+(def ^:private location-property
+  {:type "string" :description "在來源中的位置（選填），例如「p.12」「3.2 節」「工作表 2」"})
+
+(def ^:private note-property
+  {:type "string" :description "用途說明（選填）：為什麼節錄這一段、預計用在哪裡"})
+
+(def ^:private verbatim-rule
+  "節錄必須照抄原文：不改字、不改數字、不改標點，不要摘要、改寫或翻譯；一段只講一件事（通常是幾句話）。")
+
+(def source-tools
+  [{:name "search_sources"
+    :description (str "搜尋素材庫。query 以空白分成多個詞，素材的名稱、原文、表格儲存格、來源檔名（NFKC 正規化、不分大小寫）同時包含所有詞才符合；空字串列出全部。可用 kind（para 節錄／table 表格）、source（來源檔名，完全相同）篩選，已捨棄的素材不會出現。結果依相關度排序（詞出現在名稱的優先），每筆有 block_id、種類、名稱、來源、位置、原文前 " excerpt-chars " 字（表格為欄名 columns 與列數 row_count）、用途說明與事實數 fact_count；total 是符合的總數，limit 預設 " default-search-limit "。回傳的 sources 列出所有來源檔名與素材數，讓你知道已經有哪些素材。新增素材（add_excerpt、add_source_table）前先用它查詢，避免重複。要看完整原文或整張表用 get_source_block。")
+    :inputSchema {:type "object"
+                  :properties {:query {:type "string" :description "搜尋詞，以空白分隔（全部都要出現）；空字串列出全部"}
+                               :kind {:type "string" :enum ["para" "table"] :description "只找節錄或表格（選填）"}
+                               :source {:type "string" :description "只找這個來源檔名的素材（選填）"}
+                               :limit {:type "integer" :minimum 1 :maximum max-search-limit :description (str "最多回傳幾筆（選填，預設 " default-search-limit "）")}}
+                  :required ["query"]
+                  :additionalProperties false}
+    :handler search-sources}
+   {:name "get_source_block"
+    :description "取得單筆素材的完整內容：節錄的原文 text，或表格的欄名 columns 與各列 rows；另有名稱、來源、位置、用途說明、狀態 status（confirmed 可引用、discarded 已捨棄）、素材上的事實 facts（key、label、value、unit、指定的 row 與 column），以及引用它的段落 cited_by（card_id、名稱、number、所屬章節 position）。block_id 由 search_sources 取得。"
+    :inputSchema {:type "object"
+                  :properties {:block_id block-id-property}
+                  :required ["block_id"]
+                  :additionalProperties false}
+    :handler get-source-block}
+   {:name "list_facts"
+    :description "列出報告中的全部事實：key、label、value、unit（原始值）、display（畫面顯示的文字）、所屬素材 block_id 與名稱 block_title、表格素材指定的 row（0 起算）與 column；素材已捨棄的標示 block_discarded。撰寫本文要用 {{fact:key}} 引用事實，新增前先查看是否已有。block_id 選填，只列出某筆素材上的事實。"
+    :inputSchema {:type "object"
+                  :properties {:block_id (assoc block-id-property :description "只列出這筆素材上的事實（選填，UUID）")}
+                  :additionalProperties false}
+    :handler list-facts}
+   {:name "add_excerpts"
+    :description (str "批次新增素材節錄：一次要新增多筆節錄時用這個，不要重複呼叫 add_excerpt。excerpts 陣列最多 " source-ops/max-batch-excerpts " 筆，每項的欄位與規則同 add_excerpt（source、title、text、location、note）。全部合法才寫入，整批記成一個修改組（使用者可一次復原）；任何一筆不合法就整批不寫，錯誤會列出每一筆的問題（excerpts[i]（名稱）：原因），同一批內原文重複也算錯誤。修正後整批重送。" verbatim-rule "回傳的 blocks 依序對應 excerpts。")
+    :inputSchema {:type "object"
+                  :properties {:excerpts {:type "array" :minItems 1 :maxItems source-ops/max-batch-excerpts
+                                          :description "要新增的節錄，每項同 add_excerpt 的參數"
+                                          :items {:type "object"
+                                                  :properties {:source source-property
+                                                               :title {:type "string" :description "素材名稱（必填）"}
+                                                               :text {:type "string" :description "節錄的原文（必填，照抄）"}
+                                                               :location location-property
+                                                               :note note-property}
+                                                  :required ["source" "title" "text"]
+                                                  :additionalProperties false}}
+                               :summary summary-property
+                               :group group-property}
+                  :required ["excerpts"]
+                  :additionalProperties false}
+    :handler add-excerpts}
+   {:name "add_excerpt"
+    :description (str "新增一筆素材節錄：你讀過原始資料（PDF、Excel、會議紀錄等）後，把有用的一段原文存進素材庫，之後撰寫時以 [[cite:block_id]] 或 add_citation 引用。" verbatim-rule "節錄要有名稱 title（一眼看出這段講什麼，例如「計畫目標」）、來源檔名 source 與位置 location。新增的素材立即可以引用，不需確認；使用者發現錯誤會捨棄它或留待辦請你修正。新增前先用 search_sources 查詢，避免重複（同一來源已有相同原文會被拒絕）。表格請改用 add_source_table；重新整理或計算過的內容不是素材，直接寫在本文或用 write_table。數字要綁定的值再用 add_fact 記成事實。")
+    :inputSchema {:type "object"
+                  :properties {:source source-property
+                               :title {:type "string" :description "素材名稱（必填）"}
+                               :text {:type "string" :description "節錄的原文（必填，照抄）"}
+                               :location location-property
+                               :note note-property
+                               :summary summary-property
+                               :group group-property}
+                  :required ["source" "title" "text"]
+                  :additionalProperties false}
+    :handler add-excerpt}
+   {:name "add_source_table"
+    :description "新增一張表格素材：把原始資料中的數據表照原樣節錄，columns 是欄名（非空陣列），rows 是各列，每列的儲存格數必須等於欄數，儲存格是字串或數字（數字轉成字串）。照抄原表的欄名、列序與儲存格寫法（含單位、百分比符號、千分位逗號），不要重新整理、排序、合計或自己計算；重新整理或計算過的表不是素材，請用 add_card 建表格卡片再 write_table 填寫。表格中要在本文引用的數字用 add_fact 記成事實，可指定 row（0 起算）與 column。新增前先用 search_sources 查詢，避免重複。"
+    :inputSchema {:type "object"
+                  :properties {:source source-property
+                               :title {:type "string" :description "素材名稱（必填），例如「各場域量測結果」"}
+                               :columns {:type "array" :items {:type "string"} :description "欄名（非空）"}
+                               :rows {:type "array" :description "各列；每列是與 columns 等長的儲存格陣列"
+                                      :items {:type "array" :items {:type ["string" "number"]}}}
+                               :location location-property
+                               :note note-property
+                               :summary summary-property
+                               :group group-property}
+                  :required ["source" "title" "columns" "rows"]
+                  :additionalProperties false}
+    :handler add-source-table}
+   {:name "update_source_block"
+    :description "修改素材：title、text（節錄的原文）、location、note（location 與 note 傳空字串表示清除）；表格素材可改 columns 與 rows（要一起給，整張表取代）。改的內容仍須照抄原文（用於修正抄錯的地方）。已捨棄的素材不能修改。改了原文或表格後會重新檢查指向它的事實：修改仍會寫入，值在新內容中找不到的事實列在 fact_problems，請接著用 update_fact 修正。要改某筆素材的內容時先用 get_source_block 看目前內容。"
+    :inputSchema {:type "object"
+                  :properties {:block_id block-id-property
+                               :title {:type "string" :description "新的素材名稱"}
+                               :text {:type "string" :description "新的原文（只用於節錄，取代原本的內容）"}
+                               :columns {:type "array" :items {:type "string"} :description "新的欄名（只用於表格，要與 rows 一起給）"}
+                               :rows {:type "array" :items {:type "array" :items {:type ["string" "number"]}} :description "新的各列（只用於表格，要與 columns 一起給）"}
+                               :location (assoc location-property :description "新的位置；空字串清除")
+                               :note (assoc note-property :description "新的用途說明；空字串清除")
+                               :summary summary-property
+                               :group group-property}
+                  :required ["block_id"]
+                  :additionalProperties false}
+    :handler update-source-block}
+   {:name "discard_source_block"
+    :description "捨棄素材（內容錯誤、重複或不用了）：捨棄後搜尋不到、不能再被引用（write_prose 的 [[cite:...]] 與 add_citation 都會拒絕）；已經引用它的段落保留依據並標示「已捨棄」，回傳的 cited_cards 列出這些段落，請確認本文是否要改寫或改引用其他素材。這是可復原的修改，使用者可在 Knot 畫面復原；沒有恢復工具。"
+    :inputSchema {:type "object"
+                  :properties {:block_id block-id-property
+                               :summary summary-property
+                               :group group-property}
+                  :required ["block_id"]
+                  :additionalProperties false}
+    :handler discard-source-block}
+   {:name "add_fact"
+    :description "新增事實：本文要寫到的數字或關鍵值（站數、人次、比率、金額、日期等），指向它所屬的素材 block_id。value 必須出現在該素材的原文（或指定的儲存格）中——Knot 以 NFKC 正規化並忽略空白後比對，不符時拒絕並說明；照抄素材中的寫法（原文是「2,871」就寫 \"2,871\"）。值與單位分開記錄時 value 只放數字（例如 value \"78.4\"、unit \"%\"），只比對 value。自己算出來的數字（平均、達成率）不是事實，直接寫在本文，會列為「未綁定的數字」。key 由英文小寫字母、數字、「.」、「-」組成（例如 ridership.2025-11、saving-rate.site-a），報告內唯一；label 是顯示用名稱。素材是表格時可用 row（0 起算的列索引）與 column（欄名）指定儲存格，兩者要同時給，不給則比對整張表。寫本文時用 {{fact:key}} 引用，畫面顯示值與單位（四位數以上的整數加千分位、數字與中文單位間空一格，儲存的值不變）。比對時忽略數字的千分位（「1,210」與「1210」視為相同）。新增前先用 list_facts 查看是否已有。"
+    :inputSchema {:type "object"
+                  :properties {:key {:type "string" :description "事實 key（必填）：小寫英文字母、數字、「.」、「-」，報告內唯一"}
+                               :label {:type "string" :description "顯示用名稱（必填），例如「節電率·A」"}
+                               :value {:type ["string" "number"] :description "值（必填），照抄素材中的寫法；建議用字串"}
+                               :unit {:type "string" :description "單位（選填），例如「%」「kWh」；不屬於 value"}
+                               :block_id (assoc block-id-property :description "事實所屬的素材 id（必填，不能是已捨棄的）")
+                               :row {:type "integer" :minimum 0 :description "表格素材：列索引（0 起算，選填，要與 column 同時給）"}
+                               :column {:type "string" :description "表格素材：欄名（選填，要與 row 同時給）"}
+                               :summary summary-property
+                               :group group-property}
+                  :required ["key" "label" "value" "block_id"]
+                  :additionalProperties false}
+    :handler add-fact}
+   {:name "add_facts"
+    :description (str "批次新增事實：一次要新增多筆事實時用這個，不要重複呼叫 add_fact。facts 陣列最多 " source-ops/max-batch-facts " 筆，每項的欄位與檢查同 add_fact（key、label、value、unit、block_id、row、column；value 必須出現在素材中）。全部合法才寫入，整批記成一個修改組（使用者可一次復原）；任何一筆不合法就整批不寫，錯誤會列出每一筆的問題（facts[i]（key）：原因），同一批內 key 重複也算錯誤。修正後整批重送。回傳的 facts 依序對應 facts。")
+    :inputSchema {:type "object"
+                  :properties {:facts {:type "array" :minItems 1 :maxItems source-ops/max-batch-facts
+                                       :description "要新增的事實，每項同 add_fact 的參數"
+                                       :items {:type "object"
+                                               :properties {:key {:type "string" :description "事實 key（必填）：小寫英文字母、數字、「.」、「-」，報告內唯一"}
+                                                            :label {:type "string" :description "顯示用名稱（必填）"}
+                                                            :value {:type ["string" "number"] :description "值（必填），照抄素材中的寫法；建議用字串"}
+                                                            :unit {:type "string" :description "單位（選填）"}
+                                                            :block_id (assoc block-id-property :description "事實所屬的素材 id（必填，不能是已捨棄的）")
+                                                            :row {:type "integer" :minimum 0 :description "表格素材：列索引（0 起算，選填，要與 column 同時給）"}
+                                                            :column {:type "string" :description "表格素材：欄名（選填，要與 row 同時給）"}}
+                                               :required ["key" "label" "value" "block_id"]
+                                               :additionalProperties false}}
+                               :summary summary-property
+                               :group group-property}
+                  :required ["facts"]
+                  :additionalProperties false}
+    :handler add-facts}
+   {:name "update_fact"
+    :description "修改事實的 label、value、unit（空字串清除）、block_id，或表格儲存格的 row 與 column（要同時給；兩者傳 null 表示改為不指定儲存格）；key 不能改。檢查同 add_fact：新的 value 必須出現在素材中。本文中的 {{fact:key}} 會顯示新值，不必改本文；回傳的 cited_cards 是本文用到這個事實的段落，數字有變時請確認前後文是否仍然通順。"
+    :inputSchema {:type "object"
+                  :properties {:key {:type "string" :description "要修改的事實 key（由 list_facts 取得）"}
+                               :label {:type "string" :description "新的顯示名稱"}
+                               :value {:type ["string" "number"] :description "新的值，照抄素材中的寫法"}
+                               :unit {:type "string" :description "新的單位；空字串清除"}
+                               :block_id (assoc block-id-property :description "改指向另一筆素材（不能是已捨棄的）")
+                               :row {:type ["integer" "null"] :minimum 0 :description "表格素材：列索引（0 起算）；null 表示不指定儲存格"}
+                               :column {:type ["string" "null"] :description "表格素材：欄名；null 表示不指定儲存格"}
+                               :summary summary-property
+                               :group group-property}
+                  :required ["key"]
+                  :additionalProperties false}
+    :handler update-fact}
+   {:name "delete_fact"
+    :description "刪除事實（例如登記錯的事實）。本文還用到 {{fact:key}} 的段落時拒絕並列出段落，請先用 write_prose 改寫，再刪除。刪除記成修改組，使用者可以復原。"
+    :inputSchema {:type "object"
+                  :properties {:key {:type "string" :description "要刪除的事實 key（由 list_facts 取得）"}
+                               :summary summary-property
+                               :group group-property}
+                  :required ["key"]
+                  :additionalProperties false}
+    :handler delete-fact}
+   {:name "add_citation"
+    :description "把素材加入段落或引言的依據（只限段落與引言）；寫本文時用 [[cite:block_id]] 也會自動加入。where 選填，說明引用的範圍（例如「欄：場域、節電率」）。已捨棄的素材不能加；已經是依據時回覆「已經是依據」，不寫入。"
+    :inputSchema {:type "object"
+                  :properties {:card_id uuid-property
+                               :block_id block-id-property
+                               :where {:type "string" :description "引用的範圍說明（選填）"}
+                               :summary summary-property
+                               :group group-property}
+                  :required ["card_id" "block_id"]
+                  :additionalProperties false}
+    :handler add-citation}
+   {:name "remove_citation"
+    :description "從段落或引言的依據移除素材（含已捨棄的素材）；本文中的 [[cite:...]] 標記不會被移除，要一併處理請用 write_prose。不是依據時回錯誤。現有的依據可用 get_card 查看。"
+    :inputSchema {:type "object"
+                  :properties {:card_id uuid-property
+                               :block_id block-id-property
+                               :summary summary-property
+                               :group group-property}
+                  :required ["card_id" "block_id"]
+                  :additionalProperties false}
+    :handler remove-citation}])
+
+(def tools (into (into read-tools write-tools) source-tools))
+
 
 (def ^:private tools-by-name (into {} (map (juxt :name identity)) tools))
 
@@ -733,7 +1106,7 @@
 (def supported-versions ["2025-11-25" "2025-06-18" "2025-03-26"])
 
 (def instructions
-  "Knot 是撰寫結構化報告的本機工具。報告是一棵卡片樹：標題（heading，最多四層，編號由位置決定）、引言（intro，每個標題至多一張）、段落（paragraph，要撰寫本文的單位）、表格（table）與圖（figure）。每張卡片有意圖（要寫什麼）、狀態（none：尚無本文、ai：agent 撰寫、human：使用者改過）與選填的本文。卡片以 card_id 識別、留言以 note_id 識別，都是 UUID 字串；指定要操作或查詢的卡片一律用參數 card_id、留言一律用 note_id。卡片名稱（title）不含編號：編號由位置決定、隨移動重新計算，只出現在 number 欄位，不要把編號寫進名稱。請先呼叫 get_outline 了解整體結構，再用 get_card 看單張卡片（連續看多張用 get_cards；要整份大綱的完整意圖時 get_outline 傳 full_intent: true），撰寫某段前用 get_writing_context 取得應參考的內容（周邊卡片只帶意圖，has_prose 為 true 的表示對方已有本文；需要銜接或用到其結果時用 get_card 取本文），寫好後用 write_prose 交回：本文每一行一段，「- 」開頭是項目清單、「1. 」開頭是編號清單，引用用 {{fact:key}}、{{ref:label}}、[[cite:區塊id]]，不存在的標記會被拒絕。表格與圖先用 add_card 建在段落底下（取得 label），本文再以 {{ref:label}} 引用，表格內容用 write_table 填寫。規劃結構與整理關係可用 add_card、build_outline、update_card、move_card、delete_card、set_relation、add_remote_relation、remove_relation；報告的名稱與副標用 update_report。卡片可設定目標字數（target_chars）；get_outline 與 get_card 回傳每張卡片目前的字數 chars（標題為整章／整節合計，空白不算），get_writing_context 的本段會帶目標字數，撰寫時參考目標字數控制篇幅（大約即可，不必精確）。使用者會在卡片上留言與交代待辦：開始工作時先用 list_todos 查看。處理待辦或修改卡片前先用 get_card 看 history：使用者改過的內容不要蓋掉，有疑問就用 add_note 留言詢問，而不是自行猜測。完成待辦一律用 complete_todo 並附 reply 說明做了什麼。使用者回覆你的提問後，處理完要用 add_note（reply_to 指向那則提問）在同一串回一句說明你怎麼處理；沒有接話的討論串會一直出現在 list_todos 的 questions_answered。一次工作有多次寫入時，每次寫入都傳相同的 group（例如「依審查意見調整大綱」），Knot 的歷程會顯示為一筆，使用者可以一次復原。所有修改都會記錄，使用者可以在 Knot 畫面上檢視與復原。")
+  "Knot 是撰寫結構化報告的本機工具。報告是一棵卡片樹：標題（heading，最多四層，編號由位置決定）、引言（intro，每個標題至多一張）、段落（paragraph，要撰寫本文的單位）、表格（table）與圖（figure）。每張卡片有意圖（要寫什麼）、狀態（none：尚無本文、ai：agent 撰寫、human：使用者改過）與選填的本文。卡片以 card_id 識別、留言以 note_id 識別，都是 UUID 字串；指定要操作或查詢的卡片一律用參數 card_id、留言一律用 note_id。卡片名稱（title）不含編號：編號由位置決定、隨移動重新計算，只出現在 number 欄位，不要把編號寫進名稱。請先呼叫 get_outline 了解整體結構，再用 get_card 看單張卡片（連續看多張用 get_cards；要整份大綱的完整意圖時 get_outline 傳 full_intent: true），撰寫某段前用 get_writing_context 取得應參考的內容（周邊卡片只帶意圖，has_prose 為 true 的表示對方已有本文；需要銜接或用到其結果時用 get_card 取本文），寫好後用 write_prose 交回：本文每一行一段，「- 」開頭是項目清單、「1. 」開頭是編號清單，引用用 {{fact:key}}、{{ref:label}}、[[cite:區塊id]]，不存在的標記會被拒絕。表格與圖先用 add_card 建在段落底下（取得 label），本文再以 {{ref:label}} 引用，表格內容用 write_table 填寫。規劃結構與整理關係可用 add_card、build_outline、update_card、move_card、delete_card、set_relation、add_remote_relation、remove_relation；報告的名稱與副標用 update_report。卡片可設定目標字數（target_chars）；get_outline 與 get_card 回傳每張卡片目前的字數 chars（標題為整章／整節合計，空白不算），get_writing_context 的本段會帶目標字數，撰寫時參考目標字數控制篇幅（大約即可，不必精確）。素材與事實：原始資料（PDF、Excel、會議紀錄等）由你自己讀取，挑出要引用的部分存進素材庫。流程：讀原始資料 → search_sources 看已經有哪些素材（避免重複）→ add_excerpt（一段原文，照抄、不改字不改數字、一段只講一件事）或 add_source_table（數據表照原樣）→ add_fact（要在本文寫到的數字；值必須出現在素材中，表格可指定 row 與 column）→ 撰寫時以 {{fact:key}} 引用事實、[[cite:block_id]] 引用素材（也可用 add_citation）。素材以 block_id 識別（UUID）；重新整理或自己計算的表與數字不是素材與事實，直接寫在本文或用 write_table。一次新增多筆節錄或事實時用批次工具 add_excerpts、add_facts（全部合法才寫入，整批一個修改組）。素材與事實的寫入工具有 add_excerpt、add_excerpts、add_source_table、update_source_block、discard_source_block、add_fact、add_facts、update_fact、delete_fact，讀取用 search_sources、get_source_block、list_facts；依據用 add_citation、remove_citation。使用者可以捨棄素材，已捨棄的素材搜尋不到、不能再引用。使用者會在卡片上留言與交代待辦：開始工作時先用 list_todos 查看。處理待辦或修改卡片前先用 get_card 看 history：使用者改過的內容不要蓋掉，有疑問就用 add_note 留言詢問，而不是自行猜測。完成待辦一律用 complete_todo 並附 reply 說明做了什麼。使用者回覆你的提問後，處理完要用 add_note（reply_to 指向那則提問）在同一串回一句說明你怎麼處理；沒有接話的討論串會一直出現在 list_todos 的 questions_answered。一次工作有多次寫入時，每次寫入都傳相同的 group（例如「依審查意見調整大綱」），Knot 的歷程會顯示為一筆，使用者可以一次復原。所有修改都會記錄，使用者可以在 Knot 畫面上檢視與復原。")
 
 (defn- result [id res] {:jsonrpc "2.0" :id id :result res})
 (defn- rpc-error [id code msg] {:jsonrpc "2.0" :id id :error {:code code :message msg}})

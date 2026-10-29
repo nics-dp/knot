@@ -126,6 +126,12 @@
     (testing "有事實時照常"
       (is (= ["2,871"] (prose/unbound-numbers facts doc))))))
 
+(deftest fact-display-in-text-test
+  (let [facts {"n" {:fact/value "3760" :fact/unit "人次"}}
+        doc (:doc (prose/markup->doc "共{{fact:n}}。"))]
+    (is (= "共3,760 人次。" (prose/doc->text facts doc)) "顯示加千分位與空格，儲存的值不變")
+    (is (= 9 (prose/char-count facts doc)) "字數以顯示文字為準，空白不算：共3,760人次。")))
+
 (deftest char-count-test
   (let [facts {"k.a" {:fact/value "47" :fact/unit "%"}}
         count* #(prose/char-count facts (:doc (prose/markup->doc %)))]

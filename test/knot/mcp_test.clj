@@ -70,9 +70,11 @@
 
 (deftest tools-list-test
   (let [tools (get-in (rpc "tools/list") [:body "result" "tools"])]
-    (is (= ["add_card" "add_note" "add_remote_relation" "build_outline" "complete_todo" "delete_card" "get_card"
-            "get_cards" "get_outline" "get_writing_context" "list_todos" "move_card" "remove_relation" "set_relation"
-            "update_card" "update_report" "write_prose" "write_table"]
+    (is (= ["add_card" "add_citation" "add_excerpt" "add_excerpts" "add_fact" "add_facts" "add_note" "add_remote_relation"
+            "add_source_table" "build_outline" "complete_todo" "delete_card" "delete_fact" "discard_source_block"
+            "get_card" "get_cards" "get_outline" "get_source_block" "get_writing_context" "list_facts"
+            "list_todos" "move_card" "remove_citation" "remove_relation" "search_sources" "set_relation"
+            "update_card" "update_fact" "update_report" "update_source_block" "write_prose" "write_table"]
            (sort (map #(get % "name") tools))))
     (is (every? #(= "object" (get-in % ["inputSchema" "type"])) tools))
     (is (every? #(seq (get % "description")) tools))))
@@ -814,7 +816,7 @@
       (let [msg (error-text (call "write_prose" {"card_id" id "text" "{{fact:nope.a}} {{fact:nope.b}} {{ref:tab:zzz}} [[cite:00000000-0000-0000-0000-000000000000]] {{fact:saving-rate.site-a}}"}))]
         (is (re-find #"nope\.a、nope\.b" msg))
         (is (re-find #"tab:zzz" msg))
-        (is (re-find #"區塊 id 不存在" msg))
+        (is (re-find #"素材 id 不存在或已捨棄" msg))
         (is (re-find #"saving-rate\.site-a（節電率·A）" msg) "可用的事實 key")
         (is (re-find #"tab:field-results（各場域量測結果）" msg) "可用的 label")))
     (testing "格式錯誤的標記"
