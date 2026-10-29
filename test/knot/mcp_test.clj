@@ -72,9 +72,9 @@
   (let [tools (get-in (rpc "tools/list") [:body "result" "tools"])]
     (is (= ["add_card" "add_citation" "add_excerpt" "add_excerpts" "add_fact" "add_facts" "add_note" "add_remote_relation"
             "add_source_table" "build_outline" "complete_todo" "delete_card" "delete_fact" "discard_source_block"
-            "get_card" "get_cards" "get_outline" "get_source_block" "get_writing_context" "list_facts"
+            "get_card" "get_cards" "get_outline" "get_source_block" "get_style" "get_writing_context" "list_facts"
             "list_todos" "move_card" "remove_citation" "remove_relation" "search_sources" "set_relation"
-            "update_card" "update_fact" "update_report" "update_source_block" "write_prose" "write_table"]
+            "update_card" "update_fact" "update_report" "update_source_block" "update_style" "write_prose" "write_table"]
            (sort (map #(get % "name") tools))))
     (is (every? #(= "object" (get-in % ["inputSchema" "type"])) tools))
     (is (every? #(seq (get % "description")) tools))))
@@ -227,7 +227,7 @@
   (let [db (d/db *conn*)]
     (->> (d/q '[:find ?id ?at :where [?c :changeset/id ?id] [?c :changeset/at ?at]] db)
          (sort-by second)
-         (mapv #(d/pull db [:changeset/id :changeset/by :changeset/label :changeset/origin]
+         (mapv #(d/pull db [:changeset/id :changeset/by :changeset/label :changeset/origin :changeset/group]
                         [:changeset/id (first %)])))))
 
 (defn- node-by [pred] (some #(when (pred %) %) (vals (:nodes (state)))))
@@ -500,7 +500,7 @@
     (is (not-any? #(#{(parse-uuid id)} ((juxt :relation/from :relation/to) %)) (:relations (state))))
     (is (:relation/pending (relation prev next)) "後一段改為承接前一段，待確認")
     (is (= {:changeset/by :agent :changeset/label "刪掉比較段"}
-           (select-keys (peek (changesets)) [:changeset/by :changeset/label])))
+           (select-keys (peek (changesets)) [:changeset/by :changeset/label :changeset/group])))
     (testing "刪除標題連同下層"
       (let [h (card-id "1.1 計畫緣起")
             before (count (:nodes (state)))
@@ -549,7 +549,7 @@
         _ (user-note! {:node (parse-uuid c) :text "只是留言"})
         _ (notes/add-note! *conn* {:author :agent :node (parse-uuid c) :text "你要我寫幾年？" :reply-to (:note/id t)})
         q (notes/add-note! *conn* {:author :agent :node (parse-uuid c) :text "預算是哪一年？"})
-        q2 (notes/add-note! *conn* {:author :agent :node nil :text "整體文風？"})
+        q2 (notes/add-note! *conn* {:author :agent :node nil :text "整體風格？"})
         _ (user-note! {:reply-to (:note/id q) :text "民國 114 年"})
         _ (notes/add-note! *conn* {:author :agent :reply-to (:note/id q2) :text "收到"})
         _ (user-note! {:reply-to (:note/id q2) :text "再補充"})
@@ -564,7 +564,7 @@
         (is (string? (get todo "at"))))
       (is (nil? (get-in out ["todos" 1 "card"]))))
     (testing "使用者已回答的提問"
-      (is (= ["預算是哪一年？" "整體文風？"] (map #(get % "question") (get out "questions_answered"))))
+      (is (= ["預算是哪一年？" "整體風格？"] (map #(get % "question") (get out "questions_answered"))))
       (is (= "民國 114 年" (get-in out ["questions_answered" 0 "replies" 0 "text"]))))
     (testing "依卡片過濾"
       (let [o (structured (call "list_todos" {"card_id" c}))]
@@ -573,7 +573,7 @@
       (is (re-find #"找不到卡片" (error-text (call "list_todos" {"card_id" (str (random-uuid))})))))
     (testing "agent 接話後不再列為已回答"
       (notes/add-note! *conn* {:author :agent :reply-to (:note/id q) :text "好的"})
-      (is (= ["整體文風？"] (map #(get % "question") (get (structured (call "list_todos" {})) "questions_answered")))))))
+      (is (= ["整體風格？"] (map #(get % "question") (get (structured (call "list_todos" {})) "questions_answered")))))))
 
 (deftest complete-todo-tool-test
   (let [c (card-id "計畫目標")
@@ -690,7 +690,7 @@
 (deftest instructions-test
   (let [text (get-in (rpc "initialize" {"protocolVersion" "2025-06-18"}) [:body "result" "instructions"])]
     (is (every? #(str/includes? text %) ["reply_to" "get_card" "history" "complete_todo" "group" "update_report" "編號"
-                                         "write_prose" "write_table" "{{ref:label}}"]))))
+                                         "write_prose" "write_table" "{{ref:label}}" "get_style" "update_style"]))))
 
 ;; ---------------------------------------------------------------------------
 ;; 表格、圖與本文（M6）
@@ -937,3 +937,53 @@
       (is (re-find #"card_ids" (error-text (call "get_cards" {"card_ids" []}))))
       (is (re-find #"card_ids" (error-text (call "get_cards" {"card_ids" "x"}))))
       (is (re-find #"最多 30" (error-text (call "get_cards" {"card_ids" (repeat 31 a)})))))))
+
+;; ---------------------------------------------------------------------------
+;; 風格（SPEC 5.7）
+
+(defn- style-entry [id]
+  (let [ctx (structured (call "get_writing_context" {"card_id" id}))]
+    (first (get (some #(when (= "style" (get % "group")) %) (get ctx "sections")) "entries"))))
+
+(deftest style-tools-test
+  (let [id (card-id "政策背景")]
+    (testing "尚未設定：text 為空字串並提示；撰寫參考提示尚未設定"
+      (let [r (structured (call "get_style" {}))]
+        (is (= "" (get r "text")))
+        (is (= 0 (get r "chars")))
+        (is (re-find #"尚未設定" (get r "message"))))
+      (is (= "尚未設定風格" (get (style-entry id) "text"))))
+    (testing "使用者在畫面輸入（寫入修改組）後，get_style 取得相同內容"
+      (db/apply-changes! *conn* {:by :user :label "編輯文字"
+                                 :changes {:style {:upsert [{:style/key "report" :style/text "使用「本計畫」"}]}}})
+      (let [r (structured (call "get_style" {}))]
+        (is (= "使用「本計畫」" (get r "text")))
+        (is (= 7 (get r "chars")))
+        (is (= "user" (get r "updated_by")))
+        (is (string? (get r "updated_at")))))
+    (testing "update_style：記成 agent 的修改組、可復原"
+      (let [n (count (changesets))
+            out (structured (call "update_style" {"text" "一律使用第三人稱。" "group" "整理風格"}))]
+        (is (string? (get out "changeset_id")))
+        (is (= (inc n) (count (changesets))))
+        (is (= {:changeset/by :agent :changeset/label "修改風格" :changeset/group "整理風格"}
+               (select-keys (last (changesets)) [:changeset/by :changeset/label :changeset/group])))
+        (let [r (structured (call "get_style" {}))]
+          (is (= "一律使用第三人稱。" (get r "text")))
+          (is (= "agent" (get r "updated_by"))))
+        (testing "get_writing_context 只帶提示（字數、最後修改），不含全文"
+          (let [t (get (style-entry id) "text")]
+            (is (re-find #"共 9 字" t))
+            (is (str/includes? t "get_style"))
+            (is (str/includes? t "agent"))
+            (is (not (str/includes? t "第三人稱")))))
+        (is (= "整理風格" (db/undo! *conn*)))
+        (is (= "使用「本計畫」" (get (structured (call "get_style" {})) "text")))))
+    (testing "相同內容沒有變動；空字串清除"
+      (is (nil? (get (structured (call "update_style" {"text" "使用「本計畫」"})) "changeset_id")))
+      (is (some? (get (structured (call "update_style" {"text" ""})) "changeset_id")))
+      (is (= "" (get (structured (call "get_style" {})) "text")))
+      (db/undo! *conn*)
+      (is (= "使用「本計畫」" (get (structured (call "get_style" {})) "text"))))
+    (testing "缺少 text"
+      (is (re-find #"text" (error-text (call "update_style" {})))))))

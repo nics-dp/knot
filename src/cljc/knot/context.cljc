@@ -21,7 +21,7 @@
 
 (def group-label
   "編輯區摘要列的分組，依顯示順序。"
-  [[:upper "上層"] [:self "本段"] [:neighbors "鄰近"] [:children "下層"] [:relations "關係"] [:sources "素材"] [:style "文風"]])
+  [[:upper "上層"] [:self "本段"] [:neighbors "鄰近"] [:children "下層"] [:relations "關係"] [:sources "素材"] [:style "風格"]])
 
 (defn prose-text
   "本文（ProseMirror JSON 的 EDN 形式）轉成純文字；事實引用換成值與單位，交互參照換成 label，
@@ -106,7 +106,31 @@
     (:relation/pending rel) (str (some-> (:relation/type rel) relation-label (str "，")) "待確認")
     :else (relation-label (:relation/type rel))))
 
-(defn- paragraph-context [{:keys [nodes relations report] :as state} title id]
+(defn- format-at [at]
+  #?(:clj (when at (.format (java.text.SimpleDateFormat. "M/d HH:mm") at))
+     :cljs (when at (.toLocaleString at "zh-TW" #js {:month "numeric" :day "numeric" :hour "2-digit" :minute "2-digit"}))))
+
+(defn style-hint
+  "風格在撰寫參考中的一行提示（給 agent）：字數與最後修改時間，請依 get_style 讀取全文；沒有風格時說明尚未設定。"
+  [state]
+  (let [text (str/trim (or (get-in state [:style :style/text]) ""))]
+    (if (str/blank? text)
+      "尚未設定風格"
+      (let [{:keys [updated-at updated-by]} (:style-info state)]
+        (str "共 " (count text) " 字；請依 get_style 讀取全文"
+             (when updated-at (str "（最後修改：" (some-> updated-by name) " " (format-at updated-at) "）")))))))
+
+(defn style-section
+  "「風格」一組：一個 entry，text 為提示，:summary 為風格開頭約 60 字（畫面顯示用），:chars 為字數。"
+  [state]
+  (let [text (str/trim (or (get-in state [:style :style/text]) ""))
+        summary (let [one-line (str/replace text #"\s+" " ")]
+                  (if (> (count one-line) 60) (str (subs one-line 0 60) "…") one-line))]
+    (section :style "風格"
+             [(entry "風格" (style-hint state) :source :style :chars (count text)
+                     :summary (when-not (str/blank? text) summary))])))
+
+(defn- paragraph-context [{:keys [nodes relations] :as state} title id]
   (let [node (get nodes id)
         parent (tree/parent nodes id)
         intro (some-> parent (#(tree/intro-id nodes %)))
@@ -117,7 +141,7 @@
                       (:relation/from r))]
     (keep identity
           (concat
-           [(section :style "文風" [(entry "文風設定" (:report/style-name report))])
+           [(style-section state)
             (section :upper "章節路徑" (heading-path nodes title id))
             (section :upper "所屬標題的引言"
                      (when intro
@@ -153,10 +177,10 @@
            [(section :relations "摘要本段的段落"
                      (for [s summarizers] (ref-entry state (title s) s)))]))))
 
-(defn- intro-context [{:keys [nodes report] :as state} title id]
+(defn- intro-context [{:keys [nodes] :as state} title id]
   (let [heading (tree/parent nodes id)]
     (keep identity
-          [(section :style "文風" [(entry "文風設定" (:report/style-name report))])
+          [(style-section state)
            (section :upper "章節路徑" (heading-path nodes title id))
            (section :self "引言的意圖" (cons (intent-entry nodes "引言" id)
                                               (target-entry nodes id)))

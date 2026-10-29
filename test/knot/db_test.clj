@@ -564,3 +564,39 @@
         (is (= :discarded (:block/status (get (blocks) tid))))
         (db/undo! c)
         (is (= :confirmed (:block/status (get (blocks) tid))))))))
+
+(deftest style-test
+  (let [style #(db/read-style (d/db *conn*))
+        write! (fn [s by] (db/apply-changes! *conn* {:by by :label "編輯文字"
+                                                     :changes {:style {:upsert [{:style/key "report" :style/text s}]}}}))]
+    (testing "沒有風格時"
+      (is (nil? (style)))
+      (is (nil? (db/style-info (d/db *conn*))))
+      (is (nil? (:style (db/load-state (d/db *conn*))))))
+    (testing "寫入、讀回、記修訂快照與最後修改"
+      (write! "使用「本計畫」" :user)
+      (is (= {:style/key "report" :style/text "使用「本計畫」"} (style)))
+      (is (= {:style {:style/key "report" :style/text "使用「本計畫」"}}
+             (select-keys (db/load-state (d/db *conn*)) [:style])))
+      (is (= #{["style/report"]}
+             (set (d/q '[:find ?t :where [?r :revision/collection :style] [?r :revision/target ?t]] (d/db *conn*)))))
+      (is (= {:chars 7 :updated-by :user}
+             (select-keys (db/style-info (d/db *conn*)) [:chars :updated-by]))))
+    (testing "agent 修改後最後修改者為 agent；修改前的快照在修訂中"
+      (write! "使用「本計畫」，避免口語" :agent)
+      (is (= :agent (:updated-by (db/style-info (d/db *conn*)))))
+      (is (= {:updated-by :agent} (select-keys (:style-info (db/load-state (d/db *conn*))) [:updated-by])))
+      (is (= #{{:style/key "report" :style/text "使用「本計畫」"}}
+             (set (map clojure.edn/read-string
+                       (d/q '[:find [?b ...] :where [?r :revision/collection :style] [?r :revision/before ?b]] (d/db *conn*)))))))
+    (testing "復原：回到上一版，再復原則刪除"
+      (is (= "編輯文字" (db/undo! *conn*)))
+      (is (= "使用「本計畫」" (:style/text (style))))
+      (db/undo! *conn*)
+      (is (nil? (style))))
+    (testing "清除（delete）與復原"
+      (write! "甲" :user)
+      (db/apply-changes! *conn* {:by :user :label "清除風格" :changes {:style {:delete ["report"]}}})
+      (is (nil? (style)))
+      (db/undo! *conn*)
+      (is (= "甲" (:style/text (style)))))))

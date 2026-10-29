@@ -162,7 +162,7 @@
 ;; ---------------------------------------------------------------------------
 ;; 頂部列
 
-(def tabs [[:library "素材"] [:tree "卡片"] [:fulltext "全文"]])
+(def tabs [[:library "素材"] [:tree "卡片"] [:fulltext "全文"] [:style "風格"]])
 
 (defn- time-text [at]
   (when at
@@ -859,10 +859,9 @@
 
 (defn- section-gist
   "摘要列的一項：只有一筆時列出名稱，多筆時列出筆數。"
-  [{:keys [group title entries]}]
+  [{:keys [title entries]}]
   (let [[e & more] entries]
     (cond
-      (= group :style) [:span (:text e)]
       ;; 本段的名稱已在標題列，只標出帶的是意圖
       (= title "本段") [:span "本段意圖" (source-tag (:source e))]
       more [:span (str title " " (count entries) " 項")]
@@ -870,7 +869,9 @@
 
 (defn- context-zone [state id]
   (when-let [{:keys [sections chars]} (context/generation-context state id)]
-    (let [by-group (group-by :group sections)]
+    ;; 風格整份共用、不常改，編輯區不列（在風格頁檢視）；agent 的撰寫參考仍帶提示
+    (let [sections (remove #(= :style (:group %)) sections)
+          by-group (group-by :group sections)]
       (zone "context" "撰寫時參考的內容"
             {:class "zone-auto"
              :hint "由上方的設定與周邊卡片自動組成；周邊卡片只帶意圖，已有本文的標示「已有本文」，agent 需要時再取"
@@ -1530,6 +1531,41 @@
        (library-detail state title selected)])))
 
 ;; ---------------------------------------------------------------------------
+;; 風格頁（SPEC 5.7）
+
+(def style-hint-text
+  "agent 撰寫每一段時都會依這份風格。可以貼上機關的撰寫規範、過去報告的範例段落，或直接寫下要求。")
+
+(def style-placeholder
+  "可以寫的項目，例如：\n用語與語氣（例如：使用「本計畫」、避免口語）\n人稱\n數字與單位寫法\n標點與全形半形\n常見禁忌\n範例段落")
+
+(defn- style-page
+  "風格頁：置中的單欄，頁首說明與字數、最後修改，主體是與意圖同一種編輯框。"
+  [{:keys [style-info ui] :as state}]
+  (let [chars (ui/style-chars state)
+        {:keys [updated-by updated-at]} style-info]
+    [:section.style-page {:aria-label "風格"}
+     (conflict-view (:conflict ui))
+     (toast-view (:toast ui))
+     [:div.style-paper
+      [:div.style-head
+       [:div.style-title
+        [:h2 "風格"]
+        [:p.style-hint style-hint-text]]
+       [:span.style-meta
+        (str chars " 字"
+             (when (and (pos? chars) updated-by)
+               (str " · 最後修改：" (if (= :agent updated-by) "agent" "使用者")
+                    (when updated-at (str " · " (time-text updated-at))))))]]
+      (edit-box "style-box"
+                [:textarea.intent.style-input {:replicant/key "style-input"
+                                               :aria-label "風格"
+                                               :placeholder style-placeholder
+                                               :value (ui/style-text state)
+                                               :on {:input [[:ui/set-style-text [:event/target-value]]]
+                                                    :compositionend [[:ui/set-style-text [:event/target-value]]]}}])]]))
+
+;; ---------------------------------------------------------------------------
 
 (defn app [state]
   (cond
@@ -1557,6 +1593,7 @@
        (topbar state title)
        (case page
          :library (library-page state title)
+         :style (style-page state)
          :fulltext [:div.workspace.workspace-fulltext
                     (outline state title)
                     (fulltext state title)

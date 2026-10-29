@@ -28,7 +28,9 @@
                 [:blocks {:optional true}
                  (coll [:map [:block/id uuid?] [:block/kind [:enum :para :table]]])]
                 [:facts {:optional true}
-                 (coll [:map [:fact/key string?]])]]]]))
+                 (coll [:map [:fact/key string?]])]
+                [:style {:optional true}
+                 (coll [:map [:style/key [:= "report"]] [:style/text {:optional true} string?]])]]]]))
 
 (def NewNote
   [:map {:closed true}

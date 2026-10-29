@@ -314,6 +314,30 @@
           (seq citing) (assoc :cited_cards (vec (for [id citing] (card-summary nodes numbers id))))
           (seq fact-problems) (assoc :fact_problems (vec (for [{:keys [key error]} fact-problems] {:key key :error error}))))))))
 
+;; ---------------------------------------------------------------------------
+;; 風格（SPEC 5.7）
+
+(defn- get-style [conn _args]
+  (let [{:keys [text chars updated-at updated-by]} (db/style-info (d/db conn))
+        blank? (str/blank? text)]
+    (cond-> {:text (if blank? "" text)
+             :chars (if blank? 0 chars)
+             :updated_at (when (and (not blank?) updated-at) (str (.toInstant ^java.util.Date updated-at)))
+             :updated_by (when (and (not blank?) updated-by) (name updated-by))}
+      blank? (assoc :message "尚未設定風格；可以請使用者提供範例或撰寫規範，再用 update_style 整理寫入"))))
+
+(defn- update-style [conn args]
+  (let [text (get args "text")]
+    (when-not (string? text) (tool-error! "缺少參數 text（風格描述；空字串表示清除）"))
+    (write! conn args
+            (fn [state]
+              (if (str/blank? text)
+                {:state (assoc state :style nil) :label "清除風格"
+                 :message "已清除風格；所有修改都記錄在 Knot，可在畫面上檢視與復原"}
+                {:state (assoc state :style {:style/key db/style-key :style/text text})
+                 :label "修改風格"
+                 :message (str "已更新風格（" (count (str/trim text)) " 字）；使用者可在 Knot 的「風格」頁看到，也可以復原")})))))
+
 (defn- add-card [conn args]
   (let [kind (enum-arg args "kind" [:heading :paragraph :intro :table :figure])]
     (when-not (contains? args "parent_id") (tool-error! "缺少參數 parent_id（新增一章時為 null）"))
@@ -726,9 +750,13 @@
                   :additionalProperties false}
     :handler get-cards}
    {:name "get_writing_context"
-    :description "取得撰寫某段本文時應參考的內容（章節路徑、本段意圖、依據的素材與事實、前後段、有關係的段落、文風、本段的目標字數 target_chars），與 Knot 編輯區的「撰寫時參考的內容」相同。周邊卡片（上層、前後段、有關係的段落）只帶意圖，has_prose 為 true 表示對方已有本文，需要銜接或用到其結果時用 get_card 取它的本文；引言例外，下層內容有本文時帶本文。撰寫本文時以它為依據，並參考目標字數控制篇幅；只有段落與引言適用。context_chars 是這份參考內容本身的長度，不是本文的字數。"
+    :description "取得撰寫某段本文時應參考的內容（章節路徑、本段意圖、依據的素材與事實、前後段、有關係的段落、風格、本段的目標字數 target_chars），與 Knot 編輯區的「撰寫時參考的內容」相同。周邊卡片（上層、前後段、有關係的段落）只帶意圖，has_prose 為 true 表示對方已有本文，需要銜接或用到其結果時用 get_card 取它的本文；引言例外，下層內容有本文時帶本文。撰寫本文時以它為依據，並參考目標字數控制篇幅；只有段落與引言適用。context_chars 是這份參考內容本身的長度，不是本文的字數。"
     :inputSchema id-schema
     :handler get-writing-context}
+   {:name "get_style"
+    :description "取得整份報告共用的風格描述（使用者在 Knot「風格」頁寫的，或你用 update_style 整理的）：text 是全文，chars 是字數，updated_at（ISO 時間）與 updated_by（user 或 agent）是最後修改。開始撰寫前讀一次，之後撰寫每一段都依這份風格；get_writing_context 只帶一行提示（字數與最後修改時間），不重複帶全文。尚未設定時 text 為空字串、並在 message 說明。"
+    :inputSchema {:type "object" :properties {} :additionalProperties false}
+    :handler get-style}
    {:name "list_todos"
     :description "列出使用者交代的待辦與使用者的回覆。todos＝尚未完成的待辦（含所屬卡片，整份報告的待辦 card 為 null，以及討論串中的回覆）；questions_answered＝你先前用 add_note 提問、使用者已回答但你尚未接話的討論串：討論串最後一則是使用者的回覆就算沒接話，處理完要用 add_note（reply_to 指向那則提問）在同一串回一句說明你怎麼處理，之後它才不會再出現。開始工作時先呼叫；處理完待辦用 complete_todo。card_id 選填，只列出某張卡片的。待辦與提問各以 note_id 識別。"
     :inputSchema {:type "object"
@@ -897,6 +925,15 @@
                   :required ["note_id"]
                   :additionalProperties false}
     :handler complete-todo}
+   {:name "update_style"
+    :description "寫入整份報告共用的風格描述（整份取代，不是附加：先用 get_style 讀到現有內容再修改）。使用者給你幾份過去的報告、範例段落或撰寫規範，請你整理風格時使用：整理出用語與語氣、人稱、數字與單位寫法、標點、常見禁忌，必要時附少量範例。text 必填；空字串表示清除風格。與其他寫入一樣記成 agent 的修改組，使用者可以在 Knot 比較與復原；一次工作有多次寫入時可傳 group。風格的內容不要抄入整份原文，只寫可套用的規則與短範例。"
+    :inputSchema {:type "object"
+                  :properties {:text {:type "string" :description "完整的風格描述（自由文字，可含範例）；空字串表示清除"}
+                               :summary summary-property
+                               :group group-property}
+                  :required ["text"]
+                  :additionalProperties false}
+    :handler update-style}
    {:name "update_report"
     :description "修改報告的名稱與副標，顯示在 Knot 頂部列與匯出。title、subtitle 都選填但至少給一個；subtitle 給空字串表示清除副標。這不是內容修改，不產生修改組，也不能復原。目前的名稱與副標可由 get_outline 的 report 讀到。"
     :inputSchema {:type "object"
@@ -1106,7 +1143,7 @@
 (def supported-versions ["2025-11-25" "2025-06-18" "2025-03-26"])
 
 (def instructions
-  "Knot 是撰寫結構化報告的本機工具。報告是一棵卡片樹：標題（heading，最多四層，編號由位置決定）、引言（intro，每個標題至多一張）、段落（paragraph，要撰寫本文的單位）、表格（table）與圖（figure）。每張卡片有意圖（要寫什麼）、狀態（none：尚無本文、ai：agent 撰寫、human：使用者改過）與選填的本文。卡片以 card_id 識別、留言以 note_id 識別，都是 UUID 字串；指定要操作或查詢的卡片一律用參數 card_id、留言一律用 note_id。卡片名稱（title）不含編號：編號由位置決定、隨移動重新計算，只出現在 number 欄位，不要把編號寫進名稱。請先呼叫 get_outline 了解整體結構，再用 get_card 看單張卡片（連續看多張用 get_cards；要整份大綱的完整意圖時 get_outline 傳 full_intent: true），撰寫某段前用 get_writing_context 取得應參考的內容（周邊卡片只帶意圖，has_prose 為 true 的表示對方已有本文；需要銜接或用到其結果時用 get_card 取本文），寫好後用 write_prose 交回：本文每一行一段，「- 」開頭是項目清單、「1. 」開頭是編號清單，引用用 {{fact:key}}、{{ref:label}}、[[cite:區塊id]]，不存在的標記會被拒絕。表格與圖先用 add_card 建在段落底下（取得 label），本文再以 {{ref:label}} 引用，表格內容用 write_table 填寫。規劃結構與整理關係可用 add_card、build_outline、update_card、move_card、delete_card、set_relation、add_remote_relation、remove_relation；報告的名稱與副標用 update_report。卡片可設定目標字數（target_chars）；get_outline 與 get_card 回傳每張卡片目前的字數 chars（標題為整章／整節合計，空白不算），get_writing_context 的本段會帶目標字數，撰寫時參考目標字數控制篇幅（大約即可，不必精確）。素材與事實：原始資料（PDF、Excel、會議紀錄等）由你自己讀取，挑出要引用的部分存進素材庫。流程：讀原始資料 → search_sources 看已經有哪些素材（避免重複）→ add_excerpt（一段原文，照抄、不改字不改數字、一段只講一件事）或 add_source_table（數據表照原樣）→ add_fact（要在本文寫到的數字；值必須出現在素材中，表格可指定 row 與 column）→ 撰寫時以 {{fact:key}} 引用事實、[[cite:block_id]] 引用素材（也可用 add_citation）。素材以 block_id 識別（UUID）；重新整理或自己計算的表與數字不是素材與事實，直接寫在本文或用 write_table。一次新增多筆節錄或事實時用批次工具 add_excerpts、add_facts（全部合法才寫入，整批一個修改組）。素材與事實的寫入工具有 add_excerpt、add_excerpts、add_source_table、update_source_block、discard_source_block、add_fact、add_facts、update_fact、delete_fact，讀取用 search_sources、get_source_block、list_facts；依據用 add_citation、remove_citation。使用者可以捨棄素材，已捨棄的素材搜尋不到、不能再引用。使用者會在卡片上留言與交代待辦：開始工作時先用 list_todos 查看。處理待辦或修改卡片前先用 get_card 看 history：使用者改過的內容不要蓋掉，有疑問就用 add_note 留言詢問，而不是自行猜測。完成待辦一律用 complete_todo 並附 reply 說明做了什麼。使用者回覆你的提問後，處理完要用 add_note（reply_to 指向那則提問）在同一串回一句說明你怎麼處理；沒有接話的討論串會一直出現在 list_todos 的 questions_answered。一次工作有多次寫入時，每次寫入都傳相同的 group（例如「依審查意見調整大綱」），Knot 的歷程會顯示為一筆，使用者可以一次復原。所有修改都會記錄，使用者可以在 Knot 畫面上檢視與復原。")
+  "Knot 是撰寫結構化報告的本機工具。報告是一棵卡片樹：標題（heading，最多四層，編號由位置決定）、引言（intro，每個標題至多一張）、段落（paragraph，要撰寫本文的單位）、表格（table）與圖（figure）。每張卡片有意圖（要寫什麼）、狀態（none：尚無本文、ai：agent 撰寫、human：使用者改過）與選填的本文。卡片以 card_id 識別、留言以 note_id 識別，都是 UUID 字串；指定要操作或查詢的卡片一律用參數 card_id、留言一律用 note_id。卡片名稱（title）不含編號：編號由位置決定、隨移動重新計算，只出現在 number 欄位，不要把編號寫進名稱。請先呼叫 get_outline 了解整體結構，再用 get_card 看單張卡片（連續看多張用 get_cards；要整份大綱的完整意圖時 get_outline 傳 full_intent: true），撰寫某段前用 get_writing_context 取得應參考的內容（周邊卡片只帶意圖，has_prose 為 true 的表示對方已有本文；需要銜接或用到其結果時用 get_card 取本文），寫好後用 write_prose 交回：本文每一行一段，「- 」開頭是項目清單、「1. 」開頭是編號清單，引用用 {{fact:key}}、{{ref:label}}、[[cite:區塊id]]，不存在的標記會被拒絕。表格與圖先用 add_card 建在段落底下（取得 label），本文再以 {{ref:label}} 引用，表格內容用 write_table 填寫。規劃結構與整理關係可用 add_card、build_outline、update_card、move_card、delete_card、set_relation、add_remote_relation、remove_relation；報告的名稱與副標用 update_report。整份報告共用一份風格：開始撰寫前先用 get_style 讀一次並遵守（get_writing_context 的「風格」只帶字數與最後修改時間的提示）；使用者給範例請你整理風格時用 update_style。卡片可設定目標字數（target_chars）；get_outline 與 get_card 回傳每張卡片目前的字數 chars（標題為整章／整節合計，空白不算），get_writing_context 的本段會帶目標字數，撰寫時參考目標字數控制篇幅（大約即可，不必精確）。素材與事實：原始資料（PDF、Excel、會議紀錄等）由你自己讀取，挑出要引用的部分存進素材庫。流程：讀原始資料 → search_sources 看已經有哪些素材（避免重複）→ add_excerpt（一段原文，照抄、不改字不改數字、一段只講一件事）或 add_source_table（數據表照原樣）→ add_fact（要在本文寫到的數字；值必須出現在素材中，表格可指定 row 與 column）→ 撰寫時以 {{fact:key}} 引用事實、[[cite:block_id]] 引用素材（也可用 add_citation）。素材以 block_id 識別（UUID）；重新整理或自己計算的表與數字不是素材與事實，直接寫在本文或用 write_table。一次新增多筆節錄或事實時用批次工具 add_excerpts、add_facts（全部合法才寫入，整批一個修改組）。素材與事實的寫入工具有 add_excerpt、add_excerpts、add_source_table、update_source_block、discard_source_block、add_fact、add_facts、update_fact、delete_fact，讀取用 search_sources、get_source_block、list_facts；依據用 add_citation、remove_citation。使用者可以捨棄素材，已捨棄的素材搜尋不到、不能再引用。使用者會在卡片上留言與交代待辦：開始工作時先用 list_todos 查看。處理待辦或修改卡片前先用 get_card 看 history：使用者改過的內容不要蓋掉，有疑問就用 add_note 留言詢問，而不是自行猜測。完成待辦一律用 complete_todo 並附 reply 說明做了什麼。使用者回覆你的提問後，處理完要用 add_note（reply_to 指向那則提問）在同一串回一句說明你怎麼處理；沒有接話的討論串會一直出現在 list_todos 的 questions_answered。一次工作有多次寫入時，每次寫入都傳相同的 group（例如「依審查意見調整大綱」），Knot 的歷程會顯示為一筆，使用者可以一次復原。所有修改都會記錄，使用者可以在 Knot 畫面上檢視與復原。")
 
 (defn- result [id res] {:jsonrpc "2.0" :id id :result res})
 (defn- rpc-error [id code msg] {:jsonrpc "2.0" :id id :error {:code code :message msg}})

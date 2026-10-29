@@ -153,3 +153,12 @@
       (is (= 400 (:status (request :post "/api/report/info" {:title "  "}))))
       (is (= 400 (:status (request :post "/api/report/info" {:title 1}))))
       (is (= 400 (:status (request :post "/api/report/info" {:title "x" :other 1})))))))
+
+(deftest style-changes-api-test
+  (let [res (request :post "/api/report/changes"
+                     {:label "編輯文字" :changes {:style {:upsert [{:style/key "report" :style/text "風格"}]}}})]
+    (is (= 200 (:status res)))
+    (is (= {:style/key "report" :style/text "風格"} (:style (:body (request :get "/api/report")))))
+    (is (= {:updated-by :user} (select-keys (:style-info (:body (request :get "/api/report"))) [:updated-by])))
+    (is (= 400 (:status (request :post "/api/report/changes"
+                                 {:changes {:style {:upsert [{:style/key "other" :style/text "x"}]}}}))))))

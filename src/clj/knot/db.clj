@@ -99,6 +99,10 @@
    :fact/column string
    :fact/block ref-one
 
+   ;; 風格（SPEC 5.7）：整份報告一份，識別鍵固定為 "report"
+   :style/key (assoc string :db/unique :db.unique/identity)
+   :style/text string
+
    ;; 引用與契約
    :citation/id (id-attr)
    :citation/node ref-one
@@ -328,6 +332,8 @@
        (sort-by #(str (:block/source %) " " (:block/location %) " " (:block/title %)))
        vec))
 
+(def style-key "風格的識別鍵（整份報告只有一份）。" "report")
+
 (defn- read-facts [db]
   (->> (pull-all db :fact/key [:fact/key :fact/label :fact/value :fact/unit :fact/row-index :fact/column
                                {:fact/block [:block/id]}])
@@ -338,6 +344,12 @@
                  (some? (:fact/row-index e)) (assoc :fact/row (:fact/row-index e)))))
        (sort-by :fact/key)
        vec))
+
+(defn read-style
+  "整份報告的風格：{:style/key \"report\" :style/text ...}；沒有設定時為 nil。"
+  [db]
+  (when-let [e (d/pull db [:style/key :style/text] [:style/key style-key])]
+    (when (:style/key e) (update e :style/text #(or % "")))))
 
 (def ^:private note-attrs
   [:note/id :note/node :note/author :note/text :note/todo :note/state
@@ -351,6 +363,8 @@
        (sort-by (juxt :note/at :db/id))
        (mapv #(dissoc % :db/id))))
 
+(declare style-info)
+
 (defn load-state
   "整份報告的前端形式：{:report :nodes :relations :blocks :facts :notes}。"
   [db]
@@ -359,6 +373,8 @@
    :relations (read-relations db)
    :blocks (read-blocks db)
    :facts (read-facts db)
+   :style (read-style db)
+   :style-info (some-> (style-info db) (dissoc :text :chars))
    :notes (list-notes db)})
 
 (defn- entity-before
@@ -371,7 +387,8 @@
                  (when (:relation/key e) (relation->client e)))
     :blocks (when-let [e (d/pull db block-pattern [:block/id k])]
               (when (:block/id e) (block->client db e)))
-    :facts (some #(when (= k (:fact/key %)) %) (read-facts db))))
+    :facts (some #(when (= k (:fact/key %)) %) (read-facts db))
+    :style (let [s (read-style db)] (when (= k (:style/key s)) s))))
 
 ;; ---------------------------------------------------------------------------
 ;; 寫入：前端形式 → 交易
@@ -497,6 +514,13 @@
         (some? (:fact/row f)) (assoc :fact/row-index (:fact/row f))
         (and (:fact/block f) (ref :block (:fact/block f))) (assoc :fact/block (ref :block (:fact/block f))))])))
 
+(defn- style-tx [before s]
+  (concat
+   (when (and before (nil? (:style/text s)))
+     [[:db/retract [:style/key (:style/key s)] :style/text]])
+   [(cond-> {:style/key (:style/key s)}
+      (some? (:style/text s)) (assoc :style/text (:style/text s)))]))
+
 (defn- delete-tx [db coll k]
   (case coll
     :nodes (concat
@@ -513,14 +537,15 @@
                            [:db/retractEntity r])
                          [[:db/retractEntity t]]))
                [[:db/retractEntity [:block/id k]]]))
-    :facts [[:db/retractEntity [:fact/key k]]]))
+    :facts [[:db/retractEntity [:fact/key k]]]
+    :style [[:db/retractEntity [:style/key k]]]))
 
 (def ^:private collection-order
   "交易內的順序：素材與事實先於卡片（卡片引用它們），關係最後。"
-  [:blocks :facts :nodes :relations])
+  [:blocks :facts :style :nodes :relations])
 
 (def ^:private key-fns
-  {:nodes :node/id :relations tree/relation-key :blocks :block/id :facts :fact/key})
+  {:nodes :node/id :relations tree/relation-key :blocks :block/id :facts :fact/key :style :style/key})
 
 (defn- version-conflicts
   "[:nodes :upsert] 中已存在的卡片，送來的 :node/version 與資料庫目前的不同者。"
@@ -599,7 +624,8 @@
                                   :nodes (node-tx db ref before e)
                                   :relations (relation-tx ref before e)
                                   :blocks (block-tx db ref before e)
-                                  :facts (fact-tx ref before e)))))
+                                  :facts (fact-tx ref before e)
+                                  :style (style-tx before e)))))
                           upsert)
                   (mapcat (fn [k]
                             (when-let [before (entity-before db coll k)]
@@ -645,13 +671,32 @@
           (write-changes! conn opts))))))
 
 ;; ---------------------------------------------------------------------------
+;; 風格的最後修改（SPEC 5.7）
+
+(defn style-info
+  "風格與它的最後修改：{:text :chars :updated-at :updated-by}；沒有風格時為 nil。
+  最後修改取自最近一個含風格修訂的修改組（復原也算，由使用者做的）。"
+  [db]
+  (when-let [{:style/keys [text]} (read-style db)]
+    (let [[at by] (->> (d/q '[:find ?at ?by
+                              :where [?r :revision/collection :style] [?r :revision/changeset ?c]
+                              [?c :changeset/at ?at]
+                              [(get-else $ ?c :changeset/by :user) ?by]]
+                            db)
+                       (sort-by first)
+                       last)]
+      (cond-> {:text text :chars (count text)}
+        at (assoc :updated-at at :updated-by by)))))
+
+;; ---------------------------------------------------------------------------
 ;; 復原
 
 (defn- undoable-changeset
   "最近一個尚未復原、也不是復原本身的修改組：[id at label group-id group]；沒有 group 時後兩者為 \"\"。"
   [db]
   (let [undone (undone-ids db)]
-    (->> (d/q '[:find ?id ?at ?label ?gid ?group :where
+    ;; 同一毫秒內寫入的修改組以實體 id（建立順序）區分先後
+    (->> (d/q '[:find ?id ?at ?label ?gid ?group ?c :where
                 [?c :changeset/id ?id] [?c :changeset/at ?at] [?c :changeset/origin ?o]
                 [(not= ?o :undo)] [(not= ?o :import)]
                 [(get-else $ ?c :changeset/label "") ?label]
@@ -659,8 +704,9 @@
                 [(get-else $ ?c :changeset/group "") ?group]]
               db)
          (remove (comp undone first))
-         (sort-by second)
-         last)))
+         (sort-by (juxt second peek))
+         last
+         pop)))
 
 (defn- group-members
   "同一個 group-id 中尚未復原的修改組 id，舊到新。"
