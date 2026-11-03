@@ -181,6 +181,12 @@
         [:server/load-change id changeset-id]
         [:dom/reveal-prose]])
 
+     ;; 數字與下層清單：開啟卡片的留言並捲到「留言與歷程」
+     :ui/open-note-thread
+     (fn [state id & [note-id]]
+       [[:store/reset (ui/open-note-thread state id note-id)]
+        [:dom/reveal-notes (boolean note-id)]])
+
      ;; 待辦完成後的「看修改」：選取卡片，再看那一次修改的差異
      :ui/open-change
      (fn [state id changeset-id]
@@ -237,6 +243,20 @@
             (set! (.. el -style -scrollMarginTop) (str (+ 12 (if head (.-offsetHeight head) 0)) "px")))
           (.scrollIntoView el #js {:block "start"
                                    :behavior (if (reduced-motion?) "auto" "smooth")}))))
+
+    ;; reply? 為真時捲到回覆框（置中）並聚焦；回覆框已經開著時 on-mount 不會再觸發，所以這裡自己聚焦
+    :dom/reveal-notes
+    (fn [_ _ & [reply?]]
+      (js/setTimeout
+       #(js/requestAnimationFrame
+         (fn []
+           (let [box (when reply? (js/document.querySelector ".editor .note-compose.note-reply"))
+                 el (or box (js/document.querySelector ".editor .zone-notes"))]
+             (when el
+               (.scrollIntoView el #js {:block (if box "center" "start")
+                                        :behavior (if (reduced-motion?) "auto" "smooth")}))
+             (some-> box (.querySelector "textarea") (.focus #js {:preventScroll true})))))
+       50))
 
     ;; 留言與待辦（SPEC 5.11）：不是內容修改，直接寫入，回應是整份留言清單
     :notes/add

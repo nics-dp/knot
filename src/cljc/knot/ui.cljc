@@ -321,8 +321,12 @@
 (defn clear-note-draft [state k]
   (update-in state [:ui :note-drafts] dissoc k))
 
-(defn start-reply [state note-id]
-  (update state :ui assoc :reply-to note-id :reply-draft ""))
+(defn start-reply
+  "打開某則留言的回覆框；已經在回覆同一則時保留草稿。"
+  [state note-id]
+  (if (= note-id (get-in state [:ui :reply-to]))
+    state
+    (update state :ui assoc :reply-to note-id :reply-draft "")))
 
 (defn set-reply-draft [state text]
   (assoc-in state [:ui :reply-draft] (or text "")))
@@ -340,6 +344,14 @@
   "從待辦清單選一張卡片：選取並關閉清單。"
   [state id]
   (-> state (show-card id) close-todos))
+
+(defn open-note-thread
+  "從數字或清單開啟卡片的留言：選取卡片並打開編輯區（捲動由畫面端處理）。
+  有 note-id（等你回覆的提問）時，直接打開那則提問的回覆框。"
+  ([state id] (open-note-thread state id nil))
+  ([state id note-id]
+   (cond-> (-> state (open-note-card id) open-editor)
+     note-id (start-reply note-id))))
 
 (defn open-change
   "從完成的待辦看 agent 的修改：選取卡片、打開編輯區並切到那一次修改的差異。"

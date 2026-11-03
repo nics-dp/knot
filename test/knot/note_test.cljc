@@ -47,6 +47,35 @@
   (is (= ["q1"] (map :note/id (note/agent-questions nodes notes)))
       "agent 的最上層留言、沒有回覆的才算提問；卡片已刪除的不列"))
 
+(deftest first-questions-test
+  (is (= {"a2" "q1"} (note/first-questions nodes notes))
+      "每張卡片最早的未回覆提問；已回覆的 q2 與卡片已刪除的不列")
+  (is (= {"a2" "q1"} (note/first-questions nodes (conj notes (n "q3" 11 :note/node "a2" :note/author :agent))))
+      "同一張卡片有多則時取最早的"))
+
+(deftest descendant-items-test
+  (let [ns* (tree/from-nested
+             [{:node/id "A" :node/kind :heading :node/name "甲"
+               :children [{:node/id "a1" :node/kind :paragraph :node/title "一"}
+                          {:node/id "B" :node/kind :heading :node/name "乙"
+                           :children [{:node/id "b1" :node/kind :paragraph :node/title "三"}]}
+                          {:node/id "a2" :node/kind :paragraph :node/title "二"}]}])
+        ts [(n "t-b1" 1 :note/node "b1" :note/todo true :note/state :open)
+            (n "t-a1" 2 :note/node "a1" :note/todo true :note/state :open)
+            (n "t-done" 3 :note/node "a1" :note/todo true :note/state :done)
+            (n "t-own" 4 :note/node "A" :note/todo true :note/state :open)
+            (n "q-a2" 5 :note/node "a2" :note/author :agent)
+            (n "q-b1" 6 :note/node "b1" :note/author :agent)
+            (n "q-replied" 7 :note/node "a1" :note/author :agent)
+            (n "r" 8 :note/node "a1" :note/reply-to "q-replied")
+            (n "t-gone" 9 :note/node "gone" :note/todo true :note/state :open)]
+        pairs #(map (juxt (comp :note/id :note) :kind) %)]
+    (is (= [["q-b1" :question] ["q-a2" :question] ["t-a1" :todo] ["t-b1" :todo]]
+           (pairs (note/descendant-items ns* ts "A")))
+        "提問在前、待辦在後，各依文件順序；不含自己、已完成、已回覆、已刪除卡片的")
+    (is (= [["q-b1" :question] ["t-b1" :todo]] (pairs (note/descendant-items ns* ts "B"))))
+    (is (empty? (note/descendant-items ns* ts "a2")))))
+
 ;; Knot 的待辦 -----------------------------------------------------------------
 
 (def doc {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "本文"}]}]})
@@ -118,3 +147,13 @@
       (is (empty? (todos (edit k-nodes "A" :node/name "甲甲") [])))
       (is (empty? (todos (edit k-nodes "b1" :node/title "新名") [])))
       (is (empty? (todos (assoc k-nodes "a3" {:node/id "a3" :node/kind :paragraph :node/parent "A" :node/draft "x"}) []))))))
+
+(deftest todo-lead-test
+  (testing "畫面的說明不寫段落名稱（名稱另列成標籤）"
+    (is (= "這段的本文改了，本段摘要它，可能需要跟著更新："
+           (note/todo-lead [{:id "a1" :reason "摘要它" :fields #{:prose}}])))
+    (is (= "這些段落改了，本段以它們為依據、摘要它們，可能需要跟著更新："
+           (note/todo-lead [{:id "a1" :reason "以它為依據" :fields #{:prose}}
+                            {:id "a2" :reason "摘要它" :fields #{:draft}}]))))
+  (testing "舊資料沒有記下欄位與原因"
+    (is (= "這段改了，可能需要跟著更新：" (note/todo-lead [{:id "a1"}])))))

@@ -339,7 +339,16 @@
   (testing "回覆"
     (let [s (-> state (ui/start-reply "n1") (ui/set-reply-draft "好"))]
       (is (= ["n1" "好"] [(get-in s [:ui :reply-to]) (get-in s [:ui :reply-draft])]))
-      (is (nil? (get-in (ui/cancel-reply s) [:ui :reply-to])))))
+      (is (nil? (get-in (ui/cancel-reply s) [:ui :reply-to])))
+      (is (= "好" (get-in (ui/start-reply s "n1") [:ui :reply-draft])) "再次打開同一則保留草稿")
+      (is (= "" (get-in (ui/start-reply s "n2") [:ui :reply-draft])) "換一則時清空")))
+  (testing "從數字或清單開啟留言：選取、打開編輯區；帶提問 id 時直接打開回覆框"
+    (let [s (-> state ui/toggle-todos (ui/open-note-thread "b1"))]
+      (is (= "b1" (get-in s [:ui :selected])))
+      (is (false? (get-in s [:ui :editor-collapsed])))
+      (is (nil? (get-in s [:ui :todos-open])))
+      (is (nil? (get-in s [:ui :reply-to]))))
+    (is (= "q1" (get-in (ui/open-note-thread state "b1" "q1") [:ui :reply-to]))))
   (testing "從完成的待辦看修改：選取、打開編輯區、切到那一次修改的差異"
     (let [s (-> state ui/toggle-todos (ui/open-change "b1" "cs1"))]
       (is (= "b1" (get-in s [:ui :selected])))

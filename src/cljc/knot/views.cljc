@@ -215,8 +215,11 @@
   (let [todos (note/open-todos nodes notes)
         questions (note/agent-questions nodes notes)
         open? (:todos-open ui)
-        item (fn [{:note/keys [id node text author at] :as n}]
-               (menu-item id (when node [[:ui/open-note-card node]]) author
+        item (fn [{:note/keys [id node text author at] :as n} question?]
+               (menu-item id (when node [(if question?
+                                           [:ui/open-note-thread node id]
+                                           [:ui/open-note-card node])])
+                          author
                           (if node (card-where nodes title node) "整份報告")
                           (list (when (:note/modified-after n) [:span.note-modified {:replicant/key "mod"} "之後已修改"])
                                 [:span.menu-item-text {:replicant/key "x"} (gist text)]
@@ -229,9 +232,9 @@
         [:div.menu-backdrop {:replicant/key "backdrop" :on {:click [[:ui/close-todos]]}}]
         [:div.menu-panel.todos-panel {:replicant/key "panel"}
          [:div.menu-head (str "等你回覆（" (count questions) "）")]
-         (if (seq questions) (map item questions) [:p.small.muted "沒有待回覆的提問"])
+         (if (seq questions) (map #(item % true) questions) [:p.small.muted "沒有待回覆的提問"])
          [:div.menu-head (str "交給 agent（" (count todos) "）")]
-         (if (seq todos) (map item todos) [:p.small.muted "沒有未完成的待辦事項"])
+         (if (seq todos) (map #(item % false) todos) [:p.small.muted "沒有未完成的待辦事項"])
          [:div.menu-head "整份報告的留言"]
          [:div.threads (note-threads state nil)]
          (note-compose state :report nil "給整份報告的交代或備忘…")]))]))
@@ -320,16 +323,25 @@
 
 (defn- note-badges
   "卡片與大綱標題旁的數字：等你回覆的 agent 提問（醒目）與交給 agent 的待辦事項（淡色），
-  與頂部列「待辦事項」的兩組對應。subtree? 為真時是含下層的合計。"
-  [todos questions subtree?]
-  (let [todos (or todos 0) questions (or questions 0)
-        scope (when subtree? "（含下層）")]
-    (when (pos? (+ todos questions))
-      [:span.note-badges
-       (when (pos? questions)
-         [:span.question-count {:title (str questions " 則 agent 的提問等你回覆" scope)} questions])
-       (when (pos? todos)
-         [:span.todo-count {:title (str todos " 則待辦事項交給 agent" scope)} todos])])))
+  與頂部列「待辦事項」的兩組對應。subtree? 為真時是含下層的合計。
+  open-id 有值時數字是按鈕：點了選取那張卡片並捲到編輯區的「留言與歷程」；
+  提問的數字帶 question-id 時直接打開那則提問的回覆框。"
+  ([todos questions subtree?] (note-badges todos questions subtree? nil nil))
+  ([todos questions subtree? open-id question-id]
+   (let [todos (or todos 0) questions (or questions 0)
+         scope (when subtree? "（含下層）")
+         attrs (fn [title note-id]
+                 (if open-id
+                   {:type "button" :title (str title (if note-id "；點選回覆" "；點選開啟留言"))
+                    :on {:click [(cond-> [:ui/open-note-thread open-id] note-id (conj note-id))]}}
+                   {:title title}))
+         tag (fn [k] (if open-id (keyword (str "button." k)) (keyword (str "span." k))))]
+     (when (pos? (+ todos questions))
+       [:span.note-badges
+        (when (pos? questions)
+          [(tag "question-count") (attrs (str questions " 則 agent 的提問等你回覆" scope) question-id) questions])
+        (when (pos? todos)
+          [(tag "todo-count") (attrs (str todos " 則待辦事項交給 agent" scope) nil) todos])]))))
 
 (defn- count-span
   "字數小字：class 為基本類別，超出或不足時加上顏色類別並以 title 說明。"
@@ -561,8 +573,15 @@
   [{:keys [nodes facts ui] :as state} title]
   (let [selected (:selected ui)
         intents? (ui/fulltext-intents? state)
+        todos (note/todo-counts (:nodes state) (:notes state))
+        questions (note/question-counts (:nodes state) (:notes state))
+        first-q (note/first-questions (:nodes state) (:notes state))
+        noted? #(pos? (+ (get todos % 0) (get questions % 0)))
+        badges (fn [id] (when (noted? id)
+                          [:div.ft-badges {:replicant/key (str id "-badges")}
+                           (note-badges (get todos id) (get questions id) false id (first-q id))]))
         select-on #(hash-map :replicant/key % :data-id (str %)
-                             :class (when (= % selected) "ft-selected")
+                             :class (cond-> [] (= % selected) (conj "ft-selected") (noted? %) (conj "ft-noted"))
                              :on {:click [[:ui/select %]]})]
     [:section.fulltext {:aria-label "全文"
                         :replicant/on-render [[:dom/reveal-selected (str selected)]]}
@@ -587,6 +606,7 @@
 
           :intro
           [:div.ft-block.ft-intro (select-on id)
+           (badges id)
            ;; 只在畫面上標示，匯出時引言就是一般的文字
            [:div.ft-kind "引言"]
            (if-let [doc (:node/prose node)]
@@ -597,6 +617,7 @@
 
           :paragraph
           [:div.ft-block (assoc (select-on id) :role "button" :tabindex 0)
+           (badges id)
            (if-let [doc (:node/prose node)]
              (prose-view facts doc (:blocks state))
              (if intents?
@@ -606,6 +627,7 @@
 
           :table
           [:div.ft-float.ft-table (assoc (select-on id) :role "button" :tabindex 0)
+           (badges id)
            [:div.ft-caption
             [:span.chip.chip-ref (xref-text (:node/label node))]
             [:span (:node/title node)]]
@@ -615,6 +637,7 @@
 
           :figure
           [:div.ft-float.ft-figure (assoc (select-on id) :role "button" :tabindex 0)
+           (badges id)
            [:div.figure-placeholder "圖檔在匯出 LaTeX 時處理"]
            [:div.ft-caption
             [:span.chip.chip-ref (xref-text (:node/label node))]
@@ -1039,18 +1062,21 @@
           (if todo "取消待辦事項" "標為待辦事項")])
        (when (#{:user :knot} author)
          [:button.text-btn.text-danger {:type "button" :on {:click [[:notes/delete id]]}} "刪除"])]]
-     [:p.note-text text]
-     ;; Knot 待辦的觸發卡片：放在內容下方，觸發多時自行換行，不擠在標題列
-     (let [tids (filter #(contains? nodes %) (map :id triggers))]
-       (when (seq tids)
+     ;; Knot 待辦：說明不重複寫段落名稱，觸發的段落列成下方可點的標籤（觸發多時自行換行）；
+     ;; 觸發的卡片都已刪除時，改顯示留言原本的文字
+     (let [live (filter #(contains? nodes (:id %)) triggers)
+           tids (map :id live)]
+       (if (empty? tids)
+         [:p.note-text text]
          (let [numbers (tree/numbering nodes)]
-           [:div.note-triggers
-            [:span.small.muted "改了的段落"]
+           (list
+            [:p.note-text {:replicant/key "lead"} (note/todo-lead live)]
+            [:div.note-triggers {:replicant/key "triggers"}
             (for [tid tids]
               [:button.note-trigger {:replicant/key (str "trigger-" tid) :type "button"
                                      :title "開啟這張卡片"
                                      :on {:click [[:ui/open-note-card tid]]}}
-               (note/card-ref nodes numbers tid)])])))]))
+               (note/card-ref nodes numbers tid)])]))))]))
 
 (defn- reply-box [{:keys [ui]} {:note/keys [id]}]
   (let [draft (:reply-draft ui "")]
@@ -1195,6 +1221,25 @@
    (thread-icon n)
    [:div.tl-body (note-thread state thread)]])
 
+(defn- descendant-note-list
+  "標題的「留言與歷程」最上方：底下各卡片等你回覆的提問與未完成的待辦事項，點一列開啟那張卡片的留言。"
+  [{:keys [nodes notes]} id]
+  (when (tree/heading? nodes id)
+    (let [items (note/descendant-items nodes notes id)
+          numbers (tree/numbering nodes)]
+      (when (seq items)
+        [:div.note-descendants {:replicant/key "descendants"}
+         [:div.note-desc-head (str "下層的待辦事項與提問（" (count items) "）")]
+         (for [{:keys [kind note]} items
+               :let [{:note/keys [id node text]} note
+                     question? (= :question kind)]]
+           [:button.item.item-button {:replicant/key (str "d-" id) :type "button"
+                                      :title (if question? "回覆這則提問" "開啟這張卡片的留言")
+                                      :on {:click [(cond-> [:ui/open-note-thread node] question? (conj id))]}}
+            [:span.item-tag {:class (when question? "tag-warm")} (if question? "等你回覆" "待辦事項")]
+            [:span.item-position.note-desc-ref (note/card-ref nodes numbers node)]
+            [:span.item-title (gist (first (str/split-lines (or text ""))))]])]))))
+
 (defn- notes-zone
   "編輯區最後的「留言與歷程」：這張卡片的留言串與修改紀錄依時間穿插成一條時間軸（最新的在下方），最後是新增留言。"
   [state id]
@@ -1204,11 +1249,13 @@
         {:keys [entries more?]} (when (= h-id id) data)
         items (history/timeline (note/threads (:notes state) id) entries)]
     (zone "notes" "留言與歷程"
-          {:hint "留言、待辦事項與這張卡片的修改紀錄；不會出現在報告中"
+          {:class "zone-notes"
+           :hint "留言、待辦事項與這張卡片的修改紀錄；不會出現在報告中"
            :aside (when (pos? (+ n q))
                     [:span.note-tags
                      (when (pos? q) [:span.tag.tag-warm (str q " 則等你回覆")])
                      (when (pos? n) [:span.tag (str n " 則待辦事項")])])}
+          (descendant-note-list state id)
           [:div.tl
            (when more?
              [:div.tl-item.tl-more {:replicant/key "more"}

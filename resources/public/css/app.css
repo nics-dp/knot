@@ -998,3 +998,20 @@ h5.ft-heading { font-size: 16px; font-weight: 500; color: var(--ink-2); margin-t
 .count-low.card-count, .count-low.zone-count, .count-low.target-total { color: var(--amber); font-weight: 500; }
 .count-high.card-count, .count-high.zone-count, .count-high.target-total { color: #A4342A; font-weight: 500; }
 .note-modified { flex: none; border-radius: 6px; padding: 0 6px; font-size: 11px; background: var(--amber-bg); color: var(--amber); border: 1px dashed var(--amber-dash); margin-left: 4px; }
+
+/* 全文頁區塊右上角的數字（絕對定位，不推動本文；段落右側留出位置） */
+.ft-block, .ft-float { position: relative; }
+.ft-badges { position: absolute; top: 6px; right: 10px; z-index: 1; }
+.ft-block.ft-noted { padding-right: 64px; }
+button.question-count, button.todo-count { font-family: inherit; cursor: pointer; }
+button.question-count:hover, button.todo-count:hover { filter: brightness(0.95); }
+/* 標題「留言與歷程」最上方：下層的待辦事項與提問 */
+.note-descendants { display: flex; flex-direction: column; gap: 6px; }
+.note-desc-head { font-size: 13px; font-weight: 700; color: var(--ink-2); }
+.item-button { width: 100%; border: 0; font: inherit; text-align: left; cursor: pointer; color: inherit; }
+.item-button:hover, .item-button:focus-visible { background: var(--navy-tint); }
+.item-button .item-tag { width: 76px; }
+.note-desc-ref { min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 點數字捲到留言與歷程時，留出編輯區頂部固定標題列的高度 */
+.zone-notes { scroll-margin-top: 96px; }

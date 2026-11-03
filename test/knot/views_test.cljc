@@ -221,7 +221,7 @@
   (is (str/includes? (render note-state) "[:span.count-badge 2]") "未完成的待辦與 agent 的提問")
   (let [html (render (ui/toggle-todos note-state))]
     (is (str/includes? html "交給 agent（1）"))
-    (is (str/includes? html "[:ui/open-note-card \"a2\"]") "agent 的提問")
+    (is (str/includes? html "[:ui/open-note-thread \"a2\" \"q1\"]") "agent 的提問直接打開回覆框")
     (is (str/includes? html "整份報告的留言"))
     (is (str/includes? html "compose-:report"))))
 
@@ -699,7 +699,9 @@
       (testing "多個觸發卡片各有一個連結"
         (is (str/includes? html "trigger-a2"))
         (is (str/includes? html "trigger-A"))
-        (is (str/includes? html "改了的段落"))
+        (is (str/includes? html "這些段落改了，本段摘要它們、因果承接它們，可能需要跟著更新：")
+            "說明不重複段落名稱")
+        (is (not (str/includes? html "「甲 二」的本文改了")) "不顯示留言原本列出名稱的文字")
         (is (< (str/index-of html "note-text") (str/index-of html "note-triggers"))
             "放在內容下方，不擠在標題列")
         (is (not (str/includes? html "看「")) "連結只寫卡片名稱"))
@@ -748,3 +750,46 @@
         (is (str/includes? h "新增第一章"))
         (is (not (str/includes? h "匯入範例內容")))
         (is (str/includes? (render (assoc named :dev? true)) "匯入範例內容"))))))
+
+;; 全文頁區塊的數字、標題的下層清單 ------------------------------------------------
+
+(def badge-state
+  (-> (ui/init-state
+       {:report/title "測試報告"
+        :tree [{:node/id "A" :node/kind :heading :node/name "甲"
+                :children [{:node/id "a1" :node/kind :paragraph :node/title "一"}
+                           {:node/id "a2" :node/kind :paragraph :node/title "二"}
+                           {:node/id "f1" :node/kind :figure :node/title "流程圖" :node/label "fig:f"}]}]})
+      (ui/set-notes [{:note/id "t1" :note/node "a1" :note/author :user :note/text "補數據\n第二行"
+                      :note/todo true :note/state :open :note/at 1}
+                     {:note/id "q1" :note/node "a1" :note/author :agent :note/text "要寫幾年？" :note/at 2}
+                     {:note/id "t2" :note/node "f1" :note/author :user :note/text "換圖" :note/todo true
+                      :note/state :open :note/at 3}
+                     {:note/id "q0" :note/node "A" :note/author :agent :note/text "標題自己的提問" :note/at 4}])))
+
+(deftest fulltext-block-badges-test
+  (let [v (views/app (ui/set-page badge-state :fulltext))
+        blocks (find-all :div.ft-badges v)
+        html (pr-str v)]
+    (is (= 2 (count blocks)) "只有自己有數字的段落與圖，不含下層合計、也沒有數字的 a2 不顯示")
+    (is (str/includes? html "[:ui/open-note-thread \"a1\" \"q1\"]") "提問的數字直接打開回覆框")
+    (is (str/includes? html "[:ui/open-note-thread \"a1\"]") "待辦的數字只開啟留言")
+    (is (str/includes? html "[:ui/open-note-thread \"f1\"]"))
+    (is (not (str/includes? html "[:ui/open-note-thread \"a2\"]")))
+    (is (str/includes? html "ft-noted"))))
+
+(deftest heading-descendant-list-test
+  (let [html (render (ui/open-editor (ui/select badge-state "A")))
+        idx #(str/index-of html %)]
+    (is (str/includes? html "下層的待辦事項與提問（3）"))
+    (is (< (idx "下層的待辦事項與提問") (idx "tl-item")) "清單在時間軸之前")
+    (is (< (idx "d-q1") (idx "d-t1") (idx "d-t2")) "提問在前")
+    (is (str/includes? html "第一章 一"))
+    (is (str/includes? html "流程圖"))
+    (is (str/includes? html "補數據"))
+    (is (not (str/includes? html "第二行")) "只取第一行")
+    (is (str/includes? html "[:ui/open-note-thread \"a1\" \"q1\"]") "提問直接打開回覆框")
+    (is (str/includes? html "[:ui/open-note-thread \"a1\"]") "待辦事項只開啟留言"))
+  (testing "段落的編輯區沒有這個清單"
+    (is (not (str/includes? (render (ui/open-editor (ui/select badge-state "a1")))
+                            "下層的待辦事項與提問")))))

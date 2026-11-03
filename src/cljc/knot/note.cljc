@@ -51,6 +51,13 @@
        (keep :note/node)
        frequencies))
 
+(defn first-questions
+  "每張卡片最早一則等你回覆的提問 {卡片 id 留言 id}，供數字直接打開回覆框。"
+  [nodes notes]
+  (reduce (fn [m {:note/keys [id node]}]
+            (cond-> m (and node (not (contains? m node))) (assoc node id)))
+          {} (agent-questions nodes notes)))
+
 (defn subtree-todo-count
   "卡片與其所有下層卡片的數量合計（counts 為 todo-counts 或 question-counts），供全文大綱的標題使用。"
   [nodes counts id]
@@ -68,6 +75,20 @@
     (filterv #(and (= :agent (:note/author %)) (nil? (:note/reply-to %))
                    (not (replied (:note/id %))))
              (sort-by :note/at (visible nodes notes)))))
+
+(defn descendant-items
+  "標題底下（後代卡片，不含自己）等你回覆的提問與未完成的待辦事項：
+  [{:note 留言 :kind :question|:todo}]。提問在前、待辦事項在後，同種類依文件順序（同一張卡片依時間）。"
+  [nodes notes id]
+  (let [order (into {} (map-indexed (fn [i c] [c i]) (tree/descendant-ids nodes id)))
+        mine? #(contains? order (:note/node %))
+        sorted #(sort-by (juxt (comp order :note/node) :note/at) %)
+        qs (filterv mine? (agent-questions nodes notes))
+        q-ids (set (map :note/id qs))
+        ts (filterv #(and (mine? %) (open-todo? %) (not (q-ids (:note/id %))))
+                    (visible nodes notes))]
+    (into (mapv #(hash-map :note % :kind :question) (sorted qs))
+          (map #(hash-map :note % :kind :todo) (sorted ts)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Knot 的待辦：使用者改了段落後，提醒相關段落（SPEC 5.6）
@@ -117,6 +138,21 @@
          (if one? (str "的" (what-changed triggers) "改了") "改了")
          "，本段" (str/join "、" (distinct (map (comp phrase :reason) triggers)))
          "，可能需要跟著更新。")))
+
+(defn todo-lead
+  "畫面上 Knot 待辦的說明（段落名稱另以可點的標籤列在後面，所以不重複寫出）：
+  一個觸發：「這段的本文改了，本段摘要它，可能需要跟著更新：」；
+  多個：「這些段落改了，本段因果承接它們、摘要它們，可能需要跟著更新：」。"
+  [triggers]
+  (let [one? (= 1 (count triggers))
+        phrases (distinct (keep #(some-> (reason-phrases (:reason %))
+                                         (cond-> (not one?) (str/replace "它" "它們")))
+                                triggers))
+        ;; 舊資料的觸發可能沒有記下欄位與原因
+        what (when (every? (comp seq :fields) triggers) (what-changed triggers))]
+    (str (cond (not one?) "這些段落改了" what (str "這段的" what "改了") :else "這段改了")
+         (when (seq phrases) (str "，本段" (str/join "、" phrases)))
+         "，可能需要跟著更新：")))
 
 (defn knot-todos
   "修改（使用者或 agent，before → after）要留下的 Knot 待辦（SPEC 5.6）：
