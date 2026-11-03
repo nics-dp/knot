@@ -81,7 +81,7 @@ Knot 是一個單機、單人使用的報告撰寫工具，也是 agent 撰寫�
 
 - Knot 不呼叫 LLM。需要模型的工作（規劃結構、整理素材、撰寫本文、連動修改相關段落、萃取風格）由 agent 完成，透過 MCP 讀寫 Knot。
 - 後端提供 `/mcp` 端點，使用 MCP 的 Streamable HTTP 傳輸（JSON-RPC：`initialize`、`tools/list`、`tools/call`）；工具直接呼叫 `knot.db`、`knot.tree`、`knot.context`，與畫面共用同一個資料庫連線與驗證。
-- 只綁 localhost，並檢查 `Origin` 標頭，防止網頁透過 DNS rebinding 呼叫本機服務。
+- 只綁 localhost，並檢查 `Origin` 標頭，防止網頁透過 DNS rebinding 呼叫本機服務。綁定位址可由環境變數 `KNOT_HOST` 改變；容器內綁 `0.0.0.0`，對外以 `docker run -p 127.0.0.1:3000:3000` 限制為本機（2026-11-03）。
 - **Knot 是本機服務：** 以 jar 或容器啟動，指定一個報告目錄（容器則掛載該目錄）；目錄中沒有資料庫時建立新報告，有則開啟。預設網址 `http://localhost:3000`。
 - **Claude Code 在任意目錄連線：** 使用者設定一次（使用者層級）`claude mcp add --scope user --transport http knot http://localhost:3000/mcp`，之後在任何目錄開 Claude Code 都連到正在執行的 Knot。Knot 不在報告目錄寫入 `.mcp.json` 或 skill（2026-10-29 使用者決定）。
 - skill 放在 repo 的 `skills/`，與 MCP 工具一起管理版本、隨 Knot 發佈。使用者自行安裝（例如把 `skills/knot-*` 複製到 `~/.claude/skills/` 或報告目錄的 `.claude/skills/`），Knot 不自動安裝（2026-10-29 使用者決定）。
@@ -129,7 +129,7 @@ test-resources/fixtures/       虛構的範例報告、素材、agent 交回的�
 docs/SPEC.md  docs/ideas.md  docs/design/  docs/QUESTIONS.md
 ```
 
-啟動方式：在報告目錄執行 `java -jar knot.jar`（或 `java -jar knot.jar <報告目錄>`），啟動伺服器並開啟瀏覽器；開發時為 `clojure -M:run [報告目錄]`，REPL 開發使用 `local/report`。jar 的打包方式待 M8 前後處理。
+啟動方式：在報告目錄執行 `java -jar knot.jar`（或 `java -jar knot.jar <報告目錄>`），啟動伺服器並開啟瀏覽器；開發時為 `clojure -M:run [報告目錄]`，REPL 開發使用 `local/report`。打包：`clojure -T:build uber` 產生 `target/knot.jar`（需先 `shadow-cljs release app`）；容器映像以 repo 根目錄的 `Dockerfile` 建置（`docker build -t knot .`），在報告目錄執行 `docker run --rm -p 127.0.0.1:3000:3000 -v "$PWD":/report knot`，容器內設 `KNOT_NO_BROWSER` 不開瀏覽器。指令寫在 `README.md`。
 
 ## 3. 開發環境
 
@@ -633,7 +633,7 @@ agent 在背景寫入時，畫面要即時反映，也不能把 agent 的修改�
 
 - LaTeX 範例專案：目錄結構、章節與表格的寫法、表格環境（由使用者提供）
 - 是否支援 Claude Code 以外的 MCP 用戶端（5.12）
-- 打包與發佈：jar 與容器的細節、發佈方式，打包時再決定；容器的啟動指令寫在 README
+- 發佈方式：目前只在本機建置映像（jar 與 Dockerfile 已完成，見第 2 節），是否推到 registry、版本標記方式待定
 - 範本的 EDN 檔案格式（由使用者提供範例）
 - 從舊報告開始時，舊報告的匯入格式（LaTeX、Word 或 PDF）
 - 範本與契約項目的來源格式（5.1）

@@ -69,6 +69,7 @@
 - `bb cljs-test`：前端測試（shadow-cljs `:test` build，node 執行）
 - `bb lint`（= `clojure -M:lint --lint src test dev`）：clj-kondo，裝在 repo 的 alias 內
 - `bb start`（= `clojure -M:run`）：一般模式啟動並開啟瀏覽器
+- `bb docker:build`（= `docker build -t knot .`）：容器映像，執行方式見 `README.md`；`.dockerignore` 是白名單，新增建置需要的檔案時要放行，**不可放行根目錄 PDF 與 `local/`**。在本機驗證容器時避開 3000（例如 `-p 127.0.0.1:3100:3000`）
 
 ## 每項工作的完成條件
 
@@ -110,6 +111,7 @@
 - **JDK 25。** Datalevin 需要 `--add-opens` 與 `--enable-native-access`，已寫在 deps.edn 的 `:dev`、`:test`、`:run` alias。
 - **anydoc 的 npm 套件是 `@firecrawl/anydoc`。** npm 上名為 `anydoc` 的是無關的套件。執行方式仍是 `node_modules/.bin/anydoc <檔案>`。
 - **integrant 1.0。** 每個 key 都要有 `ig/init-key` 方法，否則會嘗試 require 同名 namespace 而失敗。
+- **容器的執行階段需要 glibc 2.38 以上。** Datalevin 的原生函式庫依賴 GLIBC_2.38、libmvec、libgomp：Alpine（musl，加 gcompat 也會讓 JVM 當掉）與 Debian 12 都不能用，目前用 ubuntu:24.04。jlink 的模組清單寫在 Dockerfile；缺模組只在執行期才出錯，改了清單要實際操作寫入、事件串流、留言再確認。
 - **Datalevin 中文全文搜尋。** 預設分詞器查不到中文（M0 已實測），M5 須自訂 bigram 分析器。
 
 ## 固定版本（M0，2026-10-26）
@@ -131,5 +133,7 @@
 | clj-kondo/clj-kondo | 2026.10.20 |
 | cognitect-labs/test-runner | v0.5.1 (5e91ee0) |
 | @tiptap/core、@tiptap/pm | 3.32.0 |
+| io.github.clojure/tools.build（`:build` alias，打包 uberjar） | v0.10.14 (1176afd) |
+| Docker 基底映像 | node:22.12.0-bookworm-slim、clojure:temurin-25-tools-deps-bookworm（建置）、ubuntu:24.04（執行，搭配 jlink 自訂 JRE） |
 | @firecrawl/anydoc | 0.2.4 |
 | clojure-mcp-light（bbin，全域） | v0.2.2 |

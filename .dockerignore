@@ -1,0 +1,11 @@
+# 白名單：先全部排除，再放行建置需要的檔案（根目錄有真實 PDF、local/ 有真實資料，不得進 build context）
+*
+!deps.edn
+!build.clj
+!shadow-cljs.edn
+!package.json
+!package-lock.json
+!.npmrc
+!src/
+!resources/
+resources/public/js/
