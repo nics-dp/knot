@@ -377,3 +377,119 @@
               (tree/dependents nodes [(rel "a3" "x1" :causal)] "a3")))
     (is (some #{{:id "b1" :dependency :argument :reason "遞進承接"}}
               (tree/dependents nodes [(rel "x1" "b1" :progression)] "x1")))))
+
+;; ---------------------------------------------------------------------------
+;; 附錄（SPEC 5.3）
+
+;; 第一章 甲、第二章 乙、附錄 A 丙（A.1 丙一 → A.1.1 丙一一 → A.1.1.1）、附錄 B 丁
+(def app-nodes
+  (-> (tree/from-nested
+       [(h "A" "甲" (p "a1"))
+        (h "B" "乙" (p "b1"))
+        (h "X" "丙" (h "X1" "丙一" (h "X11" "丙一一" (h "X111" "丙一一一" (p "x1")))))
+        (h "Y" "丁" (p "y1"))])
+      (assoc-in ["X" :node/appendix] true)
+      (assoc-in ["Y" :node/appendix] true)))
+
+(deftest appendix-numbering-test
+  (let [nums (tree/numbering app-nodes)]
+    (testing "一般章不受附錄影響"
+      (is (= "1" (nums "A")))
+      (is (= "2" (nums "B"))))
+    (testing "附錄為字母，下層為 A.1、A.1.1、A.1.1.1"
+      (is (= {"X" "A" "X1" "A.1" "X11" "A.1.1" "X111" "A.1.1.1" "Y" "B"}
+             (select-keys nums ["X" "X1" "X11" "X111" "Y"]))))
+    (testing "顯示名稱與位置"
+      (is (= "第二章 乙" (tree/display-title app-nodes nums "B")))
+      (is (= "附錄 A 丙" (tree/display-title app-nodes nums "X")))
+      (is (= "A.1 丙一" (tree/display-title app-nodes nums "X1")))
+      (is (= "附錄 B 丁" (tree/display-title app-nodes nums "Y")))
+      (is (= "附錄 B" (tree/position-label app-nodes nums "y1")))
+      (is (= "A.1.1.1" (tree/position-label app-nodes nums "x1")))
+      (is (= "A.1.1.1" (tree/heading-number app-nodes nums "X111")))
+      (is (nil? (tree/heading-number app-nodes nums "a1")))))
+  (testing "沒有附錄時不變"
+    (is (= {"A" "1" "A1" "1.1" "A2" "1.2" "A21" "1.2.1" "A211" "1.2.1.1" "B" "2"} (tree/numbering nodes))))
+  (testing "第 27 個以後不丟例外"
+    (is (= ["A" "B" "Z" "AA" "AB" "AZ" "BA"] (map tree/appendix-letter [0 1 25 26 27 51 52])))
+    (let [many (-> (tree/from-nested (mapv #(h (str "c" %) "附") (range 30)))
+                   (as-> ns (reduce #(assoc-in %1 [%2 :node/appendix] true) ns (keys ns))))
+          nums (tree/numbering many)]
+      (is (= 30 (count (set (vals nums))))))))
+
+(deftest appendix-predicate-test
+  (is (tree/appendix? app-nodes "X"))
+  (is (not (tree/appendix? app-nodes "A")))
+  (is (not (tree/appendix? app-nodes "X1")) "只有章可以是附錄")
+  (is (not (tree/appendix? (assoc-in app-nodes ["X1" :node/appendix] true) "X1"))))
+
+(deftest appendix-order-test
+  (testing "一般章不能落在附錄之後，附錄不能落在一般章之前"
+    (is (nil? (tree/placement app-nodes "A" "X" :after)))
+    (is (nil? (tree/placement app-nodes "A" "Y" :before)) "附錄前面的位置在附錄區")
+    (is (nil? (tree/placement app-nodes "A" "Y" :after)))
+    (is (nil? (tree/placement app-nodes "X" "A" :before)))
+    (is (nil? (tree/placement app-nodes "Y" "A" :before)))
+    (is (nil? (tree/sibling-placement app-nodes "B" 1)) "一般章下移不能越過附錄")
+    (is (nil? (tree/sibling-placement app-nodes "X" -1)) "附錄上移不能越過一般章"))
+  (testing "同一區內可以調整順序"
+    (is (= {:parent nil :index 0} (tree/placement app-nodes "B" "A" :before)))
+    (is (= {:parent nil :index 2} (tree/placement app-nodes "Y" "X" :before))
+        "附錄 B 放到附錄 A 之前：在移動者之外的兄弟中計算，前面有兩個一般章")
+    (is (= {:parent nil :index 3} (tree/placement app-nodes "X" "Y" :after)))
+    (is (= {:parent nil :index 1} (tree/placement app-nodes "A" "B" :after)) "一般章排在最後一個一般章之後（附錄之前）"))
+  (testing "附錄章移到標題底下時不再是附錄"
+    (let [place (tree/placement app-nodes "Y" "A" :into)
+          moved (tree/move app-nodes "Y" place)]
+      (is (some? place))
+      (is (not (contains? (get moved "Y") :node/appendix))))))
+
+(deftest appendix-insert-key-test
+  (testing "新增一般章放在最後一個一般章之後（附錄之前）"
+    (let [k (tree/insert-key app-nodes nil :heading)
+          ns (assoc app-nodes "N" {:node/id "N" :node/kind :heading :node/name "新" :node/order-key k})]
+      (is (= ["A" "B" "N" "X" "Y"] (tree/child-ids ns nil)))))
+  (testing "新增附錄章放在最後"
+    (let [k (tree/insert-key app-nodes nil :heading true)
+          ns (assoc app-nodes "N" {:node/id "N" :node/kind :heading :node/name "新" :node/appendix true :node/order-key k})]
+      (is (= ["A" "B" "X" "Y" "N"] (tree/child-ids ns nil)))))
+  (testing "沒有附錄時一般章放最後"
+    (let [k (tree/insert-key nodes nil :heading)
+          ns (assoc nodes "N" {:node/id "N" :node/kind :heading :node/name "新" :node/order-key k})]
+      (is (= ["A" "B" "N"] (tree/child-ids ns nil))))))
+
+(deftest set-appendix-test
+  (testing "設為附錄：移到附錄區最後"
+    (let [ns (tree/set-appendix app-nodes "A" true)]
+      (is (= ["B" "X" "Y" "A"] (tree/child-ids ns nil)))
+      (is (tree/appendix? ns "A"))
+      (is (= "附錄 C" (tree/heading-number ns (tree/numbering ns) "A")))
+      (is (= "1" ((tree/numbering ns) "B")))))
+  (testing "取消附錄：移到一般章最後"
+    (let [ns (tree/set-appendix app-nodes "Y" false)]
+      (is (= ["A" "B" "Y" "X"] (tree/child-ids ns nil)))
+      (is (not (tree/appendix? ns "Y")))
+      (is (not (contains? (get ns "Y") :node/appendix)))
+      (is (= "3" ((tree/numbering ns) "Y")))))
+  (testing "已是目標狀態、不是章時不變"
+    (is (= app-nodes (tree/set-appendix app-nodes "X" true)))
+    (is (= app-nodes (tree/set-appendix app-nodes "A" false)))
+    (is (= app-nodes (tree/set-appendix app-nodes "X1" true)))
+    (is (= app-nodes (tree/set-appendix app-nodes "a1" true)))))
+
+(deftest appendix-char-counts-test
+  (let [doc (fn [s] {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text s}]}]})
+        ns (-> app-nodes
+               (assoc-in ["a1" :node/prose] (doc "一二三"))
+               (assoc-in ["b1" :node/prose] (doc "四五"))
+               (assoc-in ["x1" :node/prose] (doc "六七八九"))
+               (assoc-in ["y1" :node/prose] (doc "十")))
+        state {:facts {} :nodes ns}
+        counts (tree/char-counts state)]
+    (testing "附錄自己的合計照常"
+      (is (= 4 (counts "X")))
+      (is (= 1 (counts "Y"))))
+    (testing "報告本文的合計不含附錄"
+      (is (= 5 (tree/report-chars state))))
+    (testing "沒有附錄時等於全部"
+      (is (= 5 (tree/report-chars {:facts {} :nodes (dissoc ns "X" "X1" "X11" "X111" "x1" "Y" "y1")}))))))

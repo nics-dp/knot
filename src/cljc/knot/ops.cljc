@@ -14,13 +14,9 @@
 ;; 顯示用
 
 (defn heading-number
-  "標題編號：章為「第一章」，其餘為「1.2」；非標題為 nil。"
+  "標題編號：章為「第一章」「附錄 A」，其餘為「1.2」「A.1」；非標題為 nil。"
   [nodes numbers id]
-  (when (tree/heading? nodes id)
-    (let [num (get numbers id)]
-      (if (= 1 (tree/depth nodes id))
-        (str "第" (tree/chinese-numeral (parse-long num)) "章")
-        num))))
+  (tree/heading-number nodes numbers id))
 
 (defn- card-ref
   "錯誤說明中的卡片稱呼，例如「1.1 計畫緣起」。"
@@ -38,27 +34,30 @@
 ;; 結構規則（SPEC 5.3）：標題底下依序是引言、段落、下層標題。
 (defn- order-reason
   "moving-id（新卡片為 ::probe）放進 parent-id 的 index 位置而違反排列順序時的說明；合法時為 nil。
-  after-id 是新增時指定的 after_id（沒有時為 nil）。"
+  after-id 是新增時指定的 after_id（沒有時為 nil）。最上層的順序規則是一般章在前、附錄章在後。"
   [nodes parent-id moving-id index after-id]
   (when-not (tree/order-ok? nodes parent-id moving-id index)
-    (let [r (when parent-id (card-ref nodes parent-id))
-          sibs (vec (remove #{moving-id} (tree/child-ids nodes parent-id)))
-          before (when (pos? index) (nth sibs (dec index)))
-          after (when (< index (count sibs)) (nth sibs index))
-          rule "標題底下依序是引言、段落、下層標題"]
-      (case (if (and after (tree/intro? nodes after) (not= :intro (tree/kind nodes moving-id)))
-              :before-intro
-              (tree/kind nodes moving-id))
-        :paragraph (str rule "，段落要排在下層標題之前，不能排在下層標題之後"
-                        (when (and before (tree/heading? nodes before))
-                          (str "；要放進" (card-ref nodes before) "請用 position 為 into"
-                               (when after-id "（新增時改以它為 parent_id，建立大綱時放進它的 children）"))))
-        :heading (str rule "，下層標題要排在這一層所有段落之後"
-                      (when r (str "；要放到" r "的最後，"
-                                   (if after-id "after_id 請指定最後一個子卡片，或省略 after_id"
-                                       "請接在最後一個子卡片之後，或用 position 為 into"))))
-        :intro "引言固定在最前面"
-        (str rule "，其他卡片不能排在引言前面")))))
+    (if (nil? parent-id)
+      (if (get-in nodes [moving-id :node/appendix])
+        "附錄章要排在所有一般章之後；放在附錄區最後請省略 after_id，或接在附錄章之後"
+        "一般章要排在所有附錄章之前，不能排在附錄之後；放在一般章最後請省略 after_id，或接在最後一個一般章之後")
+      (let [r (card-ref nodes parent-id)
+            sibs (vec (remove #{moving-id} (tree/child-ids nodes parent-id)))
+            before (when (pos? index) (nth sibs (dec index)))
+            after (when (< index (count sibs)) (nth sibs index))
+            rule "標題底下依序是引言、段落、下層標題"]
+        (case (if (and after (tree/intro? nodes after) (not= :intro (tree/kind nodes moving-id)))
+                :before-intro
+                (tree/kind nodes moving-id))
+          :paragraph (str rule "，段落要排在下層標題之前，不能排在下層標題之後"
+                          (when (and before (tree/heading? nodes before))
+                            (str "；要放進" (card-ref nodes before) "請用 position 為 into"
+                                 (when after-id "（新增時改以它為 parent_id，建立大綱時放進它的 children）"))))
+          :heading (str rule "，下層標題要排在這一層所有段落之後；要放到" r "的最後，"
+                        (if after-id "after_id 請指定最後一個子卡片，或省略 after_id"
+                            "請接在最後一個子卡片之後，或用 position 為 into"))
+          :intro "引言固定在最前面"
+          (str rule "，其他卡片不能排在引言前面"))))))
 
 (defn- reject-reason
   "把 moving-id（已在 nodes 中，新卡片為試探用的 probe）放進 parent-id 底下為什麼不行；
@@ -106,14 +105,24 @@
 ;; ---------------------------------------------------------------------------
 ;; 新增
 
-(defn- new-node [kind title intent label target-chars]
+(defn- new-node [kind title intent label target-chars appendix]
   (let [draft (or intent "")]
     (cond-> (case kind
               :intro {:node/kind :intro :node/draft draft}
               :paragraph {:node/kind :paragraph :node/title title :node/status :none :node/draft draft}
               :heading {:node/kind :heading :node/name title :node/draft draft}
               (:table :figure) {:node/kind kind :node/title title :node/draft draft :node/label label})
-      target-chars (assoc :node/target-chars target-chars))))
+      target-chars (assoc :node/target-chars target-chars)
+      (true? appendix) (assoc :node/appendix true))))
+
+(defn- appendix-error
+  "appendix 的檢查：只有章（parent_id 為 null 的標題）可以帶，且必須是 true 或 false；合法（含沒給）時為 nil。"
+  [kind parent-id appendix]
+  (cond
+    (nil? appendix) nil
+    (not (boolean? appendix)) "appendix 必須是 true 或 false"
+    (not (and (= kind :heading) (nil? parent-id)))
+    "appendix 只用於章（最上層的標題，parent_id 為 null）；下層標題、段落等不能設定"))
 
 (defn- target-chars-error
   "目標字數的檢查：只有標題、段落、引言可設定，且必須是正整數；合法（含沒給）時為 nil。"
@@ -137,10 +146,12 @@
 (defn- insert-card
   "在 parent-id 底下新增一張卡片，接在 after-id 之後（省略時引言放最前面、其他放最後）。
   回傳 {:state :id} 或 {:error}。"
-  [state {:keys [parent-id after-id kind title intent label target-chars]}]
+  [state {:keys [parent-id after-id kind title intent label target-chars appendix]}]
   (let [{:keys [nodes]} state
-        probe (assoc nodes ::probe {:node/id ::probe :node/kind kind})]
+        probe (assoc nodes ::probe (cond-> {:node/id ::probe :node/kind kind}
+                                     (true? appendix) (assoc :node/appendix true)))]
     (or (some->> (field-error kind title label target-chars) (hash-map :error))
+        (some->> (appendix-error kind parent-id appendix) (hash-map :error))
         (cond
           (and (some? parent-id) (not (contains? nodes parent-id)))
           {:error (str "找不到 parent_id：" parent-id)}
@@ -166,8 +177,8 @@
               (if error
                 {:error error}
                 (let [id (random-uuid)
-                      k (if after-id (tree/key-after nodes after-id) (tree/insert-key nodes parent-id kind))
-                      nodes' (assoc nodes id (assoc (new-node kind title intent label target-chars)
+                      k (if after-id (tree/key-after nodes after-id) (tree/insert-key nodes parent-id kind (true? appendix)))
+                      nodes' (assoc nodes id (assoc (new-node kind title intent label target-chars appendix)
                                                     :node/id id :node/parent parent-id :node/order-key k))]
                   {:id id
                    :state (-> state
@@ -206,8 +217,14 @@
           (fail (str (kind-names kind "這種卡片") "不能有 children，只有標題（可有標題、段落、引言）與段落（可有表格、圖）能有下層卡片"))
           (and children (not (sequential? children))) (fail "children 必須是陣列")
           :else
-          (let [r (insert-card state (assoc item :parent-id parent-id
-                                            :after-id (when-not (= kind :intro) prev)))]
+          (let [;; 附錄章接在一般章後面時放到附錄區最後（不夾在既有的附錄之前）
+                after (cond
+                        (= kind :intro) nil
+                        (and (nil? parent-id) (= kind :heading) (true? (:appendix item))
+                             (some? prev) (not (tree/appendix? (:nodes state) prev)))
+                        nil
+                        :else prev)
+                r (insert-card state (assoc item :parent-id parent-id :after-id after))]
             (if (:error r)
               (fail (:error r))
               (let [id (:id r)
@@ -221,8 +238,8 @@
                          more))))))))))
 
 (defn build-outline
-  "一次建立巢狀骨架：items 為 [{:kind :title :intent :label :target-chars :children [...]}]（標題的 children 是標題、段落、引言，
-  段落的 children 只能是表格與圖）。
+  "一次建立巢狀骨架：items 為 [{:kind :title :intent :label :target-chars :appendix :children [...]}]（標題的 children 是標題、段落、引言，
+  段落的 children 只能是表格與圖；appendix 只用於章，一般章不能排在附錄章之後）。
   任何一項不合法就整批不寫。created 依文件順序列出所有新卡片。"
   [state {:keys [parent-id after-id items]}]
   (cond
@@ -243,8 +260,17 @@
 ;; ---------------------------------------------------------------------------
 ;; 修改
 
+(defn- set-appendix
+  "章設為附錄或取消附錄（tree/set-appendix），順序改變後整理相鄰關係。"
+  [state id appendix]
+  (let [nodes' (tree/set-appendix (:nodes state) id appendix)]
+    (-> state
+        (assoc :nodes nodes')
+        (update :relations tree/reconcile-adjacent (:nodes state) nodes'))))
+
 (defn update-card
-  "修改卡片的名稱（title）、意圖（intent）或目標字數（target-chars）；不改本文。
+  "修改卡片的名稱（title）、意圖（intent）、目標字數（target-chars）或章的附錄標記（appendix）；不改本文。
+  appendix 只用於章：true 設為附錄、移到附錄區最後；false 取消附錄、移到一般章最後；已是該狀態時不移動。
   target-chars 要有這個 key 才修改：正整數為設定，nil 為清除（只有標題、段落、引言有字數）。
   給了 version 且與目前版本不同時不寫入（SPEC 5.13）。"
   [state {:keys [id title intent version] :as args}]
@@ -252,12 +278,16 @@
         node (get nodes id)
         k (:node/kind node)
         target? (contains? args :target-chars)
-        target (:target-chars args)]
+        target (:target-chars args)
+        appendix? (some? (:appendix args))
+        appendix (:appendix args)]
     (cond
       (nil? node) {:error (str "找不到卡片：" id)}
       (and (some? version) (not= version (:node/version node)))
       {:error (str "卡片已被修改（目前版本 " (:node/version node) "），請先 get_card 重新讀取")}
-      (and (nil? title) (nil? intent) (not target?)) {:error "沒有要修改的欄位：請給 title、intent 或 target_chars"}
+      (and (nil? title) (nil? intent) (not target?) (not appendix?))
+      {:error "沒有要修改的欄位：請給 title、intent、target_chars 或 appendix"}
+      (and appendix? (appendix-error k (:node/parent node) appendix)) {:error (appendix-error k (:node/parent node) appendix)}
       (and target? (target-chars-error k target)) {:error (target-chars-error k target)}
       (and target? (nil? target) (not (#{:heading :paragraph :intro} k)))
       {:error (str (kind-names k) "沒有字數，不能設定 target_chars")}
@@ -270,7 +300,8 @@
       {:state (cond-> state
                 (some? title) (ui/set-node-field id (if (= :heading k) :node/name :node/title) title)
                 (some? intent) (ui/set-node-field id :node/draft intent)
-                target? (ui/set-target-chars id target))
+                target? (ui/set-target-chars id target)
+                appendix? (set-appendix id appendix))
        :touched [id]
        :origin :manual
        :label (str "修改" (card-ref nodes id))})))

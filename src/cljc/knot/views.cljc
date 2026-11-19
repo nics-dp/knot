@@ -1415,6 +1415,15 @@
       (conj [:button.menu-item {:replicant/key "to-intro" :type "button"
                                 :on {:click [[:ui/paragraph->intro id]]}}
              "改為引言"])
+      ;; 章：附錄一律排在一般章之後；設定時移到附錄區最後，取消時移到一般章最後
+      (and (tree/heading? nodes id) (nil? parent-id))
+      (conj (let [appendix? (tree/appendix? nodes id)]
+              [:button.menu-item {:replicant/key "appendix" :type "button"
+                                  :title (if appendix?
+                                           "取消附錄，移到一般章的最後"
+                                           "設為附錄，移到附錄區的最後")
+                                  :on {:click [[:ui/set-appendix id (not appendix?)]]}}
+               (if appendix? "取消附錄" "設為附錄")]))
       ;; 全文頁沒有看板的工具列，刪除也放在這裡（與工具列的「刪除」相同，可以復原）
       id
       (conj [:button.menu-item.text-danger {:replicant/key "delete" :type "button"
@@ -1450,7 +1459,7 @@
           ;; 名稱框：編號是固定的前綴，與名稱同在一個框內，只有名稱可以改
           :heading [:div.title-row
                     [:label.title-field
-                     [:span.title-number (some-> (title id) (str/split #" " 2) first)]
+                     [:span.title-number (tree/heading-number nodes (tree/numbering nodes) id)]
                      (name-input id :node/name (:node/name node) "標題名稱" focus?)]]
           :intro [:h2 "引言"]
           [:div.title-row

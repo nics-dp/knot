@@ -526,7 +526,9 @@
       state
       (let [[new-id state] (new-id (remember state (case k :heading "新增同層標題" :paragraph "新增段落" :table "新增表格" :figure "新增圖")))
             node (case k
-                   :heading {:node/kind :heading :node/name "新標題" :node/draft ""}
+                   :heading (cond-> {:node/kind :heading :node/name "新標題" :node/draft ""}
+                              ;; 在附錄章旁新增的章也是附錄
+                              (tree/appendix? nodes id) (assoc :node/appendix true))
                    :paragraph {:node/kind :paragraph :node/title "新段落" :node/status :none :node/draft ""}
                    (new-float (:nodes state) k))
             nodes' (assoc (:nodes state) new-id
@@ -561,6 +563,22 @@
                       :toast (str "已刪除「" title "」"
                                   (when (> (count gone) 1) (str "與 " (dec (count gone)) " 張下層卡片"))
                                   "；Ctrl／⌘+Z 可復原"))))))))
+
+(defn set-appendix
+  "章設為附錄（移到附錄區最後）或取消附錄（移到一般章最後）；一個可復原的修改組。
+  不是章、或已經是目標狀態時不變。"
+  [state id appendix]
+  (let [{:keys [nodes]} state
+        nodes' (tree/set-appendix nodes id appendix)]
+    (if (= nodes nodes')
+      state
+      (let [label (str (if appendix "設為附錄：" "取消附錄：") "「" (:node/name (get nodes id)) "」")]
+        (-> state
+            (remember label)
+            (assoc :nodes nodes')
+            (update :relations tree/reconcile-adjacent nodes nodes')
+            (update :ui assoc :selected id :bias {} :toast
+                    (str "已" (if appendix "設為附錄" "取消附錄") "：「" ((titles (assoc state :nodes nodes')) id) "」；編號已重新計算"))))))) 
 
 (defn clear-focus-title [state]
   (update state :ui dissoc :focus-title))

@@ -84,7 +84,8 @@
         {:keys [nodes report] :as state} (current-state conn)
         counts (tree/char-counts state)
         numbers (tree/numbering nodes)
-        todo-counts (notes/todo-counts (d/db conn))]
+        todo-counts (notes/todo-counts (d/db conn))
+        edits (db/last-edits (d/db conn))]
     {:report {:title (:report/title report) :subtitle (:report/subtitle report)}
      :cards (vec (for [id (tree/document-order nodes)
                        :let [n (get nodes id)]]
@@ -98,6 +99,9 @@
                             :status (status-name n)
                             :has_prose (has-prose? n)
                             :version (:node/version n)}
+                     (tree/appendix? nodes id) (assoc :appendix true)
+                     (edits id) (assoc :last_edited_by (name (:by (edits id)))
+                                       :last_edited_at (inst-str (:at (edits id))))
                      true (merge (char-fields counts n))
                      (:node/label n) (assoc :label (:node/label n))
                      (pos? (get todo-counts id 0)) (assoc :open_todos (get todo-counts id)))))}))
@@ -188,6 +192,7 @@
                       (:note/todo note) (assoc :todo true :state (name (:note/state note)))
                       (:note/reply-to note) (assoc :reply_to (str (:note/reply-to note))))))}
       true (merge (char-fields (tree/char-counts state) n))
+      (tree/appendix? nodes id) (assoc :appendix true)
       (:node/label n) (assoc :label (:node/label n))
       (seq (:columns (:node/table-content n))) (assoc :table (select-keys (:node/table-content n) [:columns :rows])))))
 
@@ -282,10 +287,13 @@
       :else (tool-error! (str k " 只接受 " (str/join "、" (map name allowed)) "，收到：" raw)))))
 
 (defn- card-summary [nodes numbers id]
-  {:card_id (str id)
-   :kind (name (:node/kind (get nodes id)))
-   :number (ops/heading-number nodes numbers id)
-   :title (card-title nodes numbers id)})
+  (let [n (get nodes id)]
+    (cond-> {:card_id (str id)
+             :kind (name (:node/kind n))
+             :number (ops/heading-number nodes numbers id)
+             :title (card-title nodes numbers id)}
+      (tree/appendix? nodes id) (assoc :appendix true)
+      (:node/label n) (assoc :label (:node/label n)))))
 
 (defn- block-by-id [{:keys [blocks]} id]
   (some #(when (= id (:block/id %)) %) blocks))
@@ -394,7 +402,8 @@
                               :title (get args "title")
                               :intent (get args "intent")
                               :label (get args "label")
-                              :target-chars (get args "target_chars")}))))
+                              :target-chars (get args "target_chars")
+                              :appendix (get args "appendix")}))))
 
 (defn- parse-items
   "build_outline 的 items 轉成 knot.ops 的格式（kind 轉 keyword，其餘原樣；格式問題交給 ops 回報）。"
@@ -406,7 +415,8 @@
                        :title (get item "title")
                        :intent (get item "intent")
                        :label (get item "label")
-                       :target-chars (get item "target_chars")}
+                       :target-chars (get item "target_chars")
+                       :appendix (get item "appendix")}
                 (contains? item "children") (assoc :children (parse-items (get item "children"))))
               item))
           items)
@@ -430,7 +440,9 @@
                                         :version version}
                                        ;; target_chars 傳 null 表示清除，要與沒傳區分
                                        (when (contains? args "target_chars")
-                                         {:target-chars (get args "target_chars")}))))))
+                                         {:target-chars (get args "target_chars")})
+                                       ;; appendix 只接受 true／false；null 與沒傳相同（不改）
+                                       {:appendix (get args "appendix")})))))
 
 (defn- version-arg
   "取出選填的 version 參數（整數）。"
@@ -802,7 +814,7 @@
 
 (def read-tools
   [{:name "get_outline"
-    :description "取得整份報告的卡片樹（依文件順序的扁平清單）與報告資訊（名稱 title 與副標 subtitle，可用 update_report 修改）：card_id、類型、深度、編號 number、名稱 title、意圖摘要、狀態、是否有本文，字數 chars（段落、引言為本文去掉空白的字數，標題為整章／整節合計，表格與圖沒有）與目標字數 target_chars（有設定才有），以及未完成待辦數 open_todos（沒有待辦時省略）。title 是純名稱，不含編號；編號（標題為「第一章」「1.2」，其他卡片為 null）由卡片的位置決定、隨移動重新計算，存在 number 欄位，不要把編號寫進名稱。這是規劃與定位卡片的起點；意圖預設截斷為前 80 字；要完整意圖時傳 full_intent: true（撰寫或審閱整份大綱時用，不必逐張 get_card）。"
+    :description "取得整份報告的卡片樹（依文件順序的扁平清單）與報告資訊（名稱 title 與副標 subtitle，可用 update_report 修改）：card_id、類型、深度、編號 number、名稱 title、意圖摘要、狀態、是否有本文，字數 chars（段落、引言為本文去掉空白的字數，標題為整章／整節合計，表格與圖沒有）與目標字數 target_chars（有設定才有），以及未完成待辦數 open_todos（沒有待辦時省略）；附錄章帶 appendix: true。每張卡片帶最後修改者 last_edited_by（user 或 agent）與時間 last_edited_at（ISO 時間），取自最近一筆未被復原的修改（建立也算，匯入與復原本身不算；使用者修改後復原會回到先前那一筆）：用來找出使用者改過的卡片（last_edited_by 為 user），再用 get_cards 讀它們的 history 看改了什麼，避免蓋掉使用者的修改；沒有修改紀錄的卡片省略這兩個欄位。title 是純名稱，不含編號；編號（標題為「第一章」「附錄 A」「1.2」「A.1」，其他卡片為 null）由卡片的位置決定、隨移動重新計算，存在 number 欄位，不要把編號寫進名稱。這是規劃與定位卡片的起點；意圖預設截斷為前 80 字；要完整意圖時傳 full_intent: true（撰寫或審閱整份大綱時用，不必逐張 get_card）。"
     :inputSchema {:type "object"
                   :properties {:full_intent {:type "boolean" :description "true 時回傳完整意圖（預設 false：前 80 字）"}}
                   :additionalProperties false}
@@ -855,13 +867,14 @@
                 :intent {:type "string" :description "意圖：這張卡片要寫什麼"}
                 :target_chars {:type "integer" :minimum 1 :description "目標字數（選填，正整數）；標題為整章／整節的目標，只用於標題、段落、引言"}
                 :label {:type "string" :description "表格與圖的 label 代稱（選填），小寫英數與連字號，例如 ridership；label 會是 tab:ridership 或 fig:ridership。省略時自動產生"}
+                :appendix {:type "boolean" :description "只用於最上層的章：true 表示附錄章（一般章不能排在附錄章之後）"}
                 :children {:type "array" :description "下層卡片，格式同本項，可再巢狀：標題底下可以是引言、段落、下層標題，段落底下只能是表格與圖"
                            :items {:type "object"}}}
    :required ["kind"]})
 
 (def write-tools
   [{:name "add_card"
-    :description "新增一張卡片（標題、段落、引言、表格或圖）。規則同 Knot 畫面：引言每個標題最多一張且在最前面；標題底下依序是引言、這一層的段落、下層標題（段落與下層標題可以並存，但段落一律排在下層標題之前，不能排在下層標題之後）；表格（table）與圖（figure）只能掛在段落底下：parent_id 是該段落的 card_id，title 是表圖的標題、intent 是它要呈現什麼；建立時會產生 label（tab:代稱 或 fig:代稱，建立後不變、報告內不可重複），可用 label 參數給代稱（小寫英文字母、數字與連字號，例如 ridership），省略時自動產生 4 碼短 id；段落本文用 {{ref:label}} 引用它，表格內容之後用 write_table 填寫。標題最多四層。parent_id 為 null 表示新增一章。after_id 指定接在同一層的哪張卡片之後；省略時引言放最前面、段落放在最後一個段落之後（下層標題之前）、標題放最後。新段落的狀態為 none，本文之後再寫。可用 target_chars 設定目標字數（標題、段落、引言）。不合法時會回傳具體原因，不會寫入。一次要建立多張卡片請用 build_outline。"
+    :description "新增一張卡片（標題、段落、引言、表格或圖）。規則同 Knot 畫面：引言每個標題最多一張且在最前面；標題底下依序是引言、這一層的段落、下層標題（段落與下層標題可以並存，但段落一律排在下層標題之前，不能排在下層標題之後）；表格（table）與圖（figure）只能掛在段落底下：parent_id 是該段落的 card_id，title 是表圖的標題、intent 是它要呈現什麼；建立時會產生 label（tab:代稱 或 fig:代稱，建立後不變、報告內不可重複），可用 label 參數給代稱（小寫英文字母、數字與連字號，例如 ridership），省略時自動產生 4 碼短 id；段落本文用 {{ref:label}} 引用它，表格內容之後用 write_table 填寫。標題最多四層。parent_id 為 null 表示新增一章（放在最後一個一般章之後、附錄之前）；章可帶 appendix: true 新增附錄章（附錄一律排在所有一般章之後，不計入報告本文字數，編號為「附錄 A」「A.1」；附錄章放在附錄區最後，after_id 不能讓一般章落在附錄之後）。after_id 指定接在同一層的哪張卡片之後；省略時引言放最前面、段落放在最後一個段落之後（下層標題之前）、標題放最後。新段落的狀態為 none，本文之後再寫。可用 target_chars 設定目標字數（標題、段落、引言）。不合法時會回傳具體原因，不會寫入。一次要建立多張卡片請用 build_outline。"
     :inputSchema {:type "object"
                   :properties {:kind {:type "string" :enum ["heading" "paragraph" "intro" "table" "figure"]
                                       :description "heading＝標題、paragraph＝段落、intro＝引言、table＝表格、figure＝圖"}
@@ -870,6 +883,7 @@
                                :title {:type "string" :description "標題名稱、段落標題或表格與圖的標題；引言不需要"}
                                :intent {:type "string" :description "意圖：這張卡片要寫什麼（選填）"}
                                :target_chars {:type "integer" :minimum 1 :description "目標字數（選填，正整數）：本文預期的篇幅，標題為整章／整節的目標；只用於標題、段落、引言"}
+                               :appendix {:type "boolean" :description "只用於章（parent_id 為 null 的標題）：true 表示附錄章（選填）。附錄一律排在所有一般章之後，編號為「附錄 A」，下層為 A.1；省略 after_id 時放在附錄區最後。下層標題與其他卡片帶 appendix 會被拒絕"}
                                :label {:type "string" :description "表格與圖的 label 代稱（選填）：小寫英文字母、數字與連字號，例如 ridership，label 即為 tab:ridership／fig:ridership；省略時自動產生；只用於表格與圖"}
                                :summary summary-property
                                :group group-property}
@@ -877,7 +891,7 @@
                   :additionalProperties false}
     :handler add-card}
    {:name "build_outline"
-    :description "一次建立巢狀的報告骨架（標題、段落、引言、表格、圖），整批寫成一個修改組，使用者可一次復原。規劃章節結構時使用。任何一處不合法就整批不寫，錯誤會指出是哪一項（例如 items[1].children[0]）與原因。規則與 add_card 相同；標題的 children 是引言、段落、下層標題，段落的 children 只能是表格與圖（可用 label 給代稱，同批的 label 也不能重複）；標題、段落、引言可用 target_chars 設定目標字數；同一個標題底下的 items 順序必須是引言、段落、下層標題（段落排在下層標題之前，可以並存）。回傳所有新卡片（依文件順序，含編號與 card_id），之後可用 card_id 繼續操作。"
+    :description "一次建立巢狀的報告骨架（標題、段落、引言、表格、圖），整批寫成一個修改組，使用者可一次復原。規劃章節結構時使用。任何一處不合法就整批不寫，錯誤會指出是哪一項（例如 items[1].children[0]）與原因。規則與 add_card 相同；標題的 children 是引言、段落、下層標題，段落的 children 只能是表格與圖（可用 label 給代稱，同批的 label 也不能重複）；標題、段落、引言可用 target_chars 設定目標字數；同一個標題底下的 items 順序必須是引言、段落、下層標題（段落排在下層標題之前，可以並存）。最上層的章可帶 appendix: true 建立附錄章（編號「附錄 A」「A.1」，不計入報告本文字數）；一般章不能排在附錄章之後（錯誤會指出是哪一項），附錄章接在一般章之後時放到附錄區最後。回傳所有新卡片（依文件順序，含編號、card_id，表格與圖含 label，附錄章含 appendix: true），之後可用 card_id 繼續操作。"
     :inputSchema {:type "object"
                   :properties {:parent_id {:type ["string" "null"] :description "放在哪個標題底下；null 表示放在最上層（建立章）"}
                                :after_id {:type "string" :description "同一層的某張卡片 id，第一項接在它後面（選填，省略時放最後）"}
@@ -912,12 +926,13 @@
                   :additionalProperties false}
     :handler write-table}
    {:name "update_card"
-    :description "修改卡片的名稱、意圖或目標字數（標題的名稱、段落的標題、卡片的意圖、target_chars）；不修改本文。傳入 get_card 取得的 version 可避免覆蓋使用者剛做的修改：版本不同時不會寫入。引言沒有名稱。改了意圖時：修改段落的意圖或本文後，Knot 會在依賴它的段落（摘要它的段落、上層引言、因果或遞進承接的下一段、以它為依據的段落；已有本文的才算）留下待辦，回應的 todos_created 列出這些段落（card_id、number、title、reason）。這些待辦等使用者下一輪指示時再處理，不要在同一輪自行接著改；處理時用 list_todos。處理一則待辦所做的修改也可能在下一層留下新的待辦，同樣留到下一輪。"
+    :description "修改卡片的名稱、意圖或目標字數（標題的名稱、段落的標題、卡片的意圖、target_chars），或章的附錄標記 appendix；不修改本文。appendix（只用於章）：true 設為附錄並移到附錄區最後，false 取消附錄並移到一般章最後，已是該狀態時不移動；附錄的編號為「附錄 A」「A.1」，不計入報告本文字數。傳入 get_card 取得的 version 可避免覆蓋使用者剛做的修改：版本不同時不會寫入。引言沒有名稱。改了意圖時：修改段落的意圖或本文後，Knot 會在依賴它的段落（摘要它的段落、上層引言、因果或遞進承接的下一段、以它為依據的段落；已有本文的才算）留下待辦，回應的 todos_created 列出這些段落（card_id、number、title、reason）。這些待辦等使用者下一輪指示時再處理，不要在同一輪自行接著改；處理時用 list_todos。處理一則待辦所做的修改也可能在下一層留下新的待辦，同樣留到下一輪。"
     :inputSchema {:type "object"
                   :properties {:card_id uuid-property
                                :title {:type "string" :description "新的標題名稱（標題）或段落標題（段落）"}
                                :intent {:type "string" :description "新的意圖，會取代原本的內容"}
                                :target_chars {:type ["integer" "null"] :minimum 1 :description "目標字數（正整數）；傳 null 清除；不傳則不改。只用於標題、段落、引言"}
+                               :appendix {:type "boolean" :description "只用於章：true 設為附錄（移到附錄區最後）、false 取消附錄（移到一般章最後）；不傳則不改"}
                                :version {:type "integer" :description "讀取時的卡片版本（選填）；與目前版本不同時拒絕寫入"}
                                :summary summary-property
                                :group group-property}
@@ -925,7 +940,7 @@
                   :additionalProperties false}
     :handler update-card}
    {:name "move_card"
-    :description "移動卡片到另一張卡片的前面、後面或裡面，規則與使用者在畫面拖曳相同（層級、引言在最前、段落排在下層標題之前、最多四層）。移動段落後，受影響的相鄰段落關係會標為「待確認」，請使用者或之後用 set_relation 確認；標題移動後編號會重新計算。不合法時回傳原因。"
+    :description "移動卡片到另一張卡片的前面、後面或裡面，規則與使用者在畫面拖曳相同（層級、引言在最前、段落排在下層標題之前、最多四層；章不能跨過一般章與附錄的邊界：一般章只能排在所有附錄之前、附錄章只能排在一般章之後，要改區域請用 update_card 的 appendix）。移動段落後，受影響的相鄰段落關係會標為「待確認」，請使用者或之後用 set_relation 確認；標題移動後編號會重新計算。不合法時回傳原因。"
     :inputSchema {:type "object"
                   :properties {:card_id {:type "string" :description "要移動的卡片 id"}
                                :target_id {:type "string" :description "放置位置參考的卡片 id"}

@@ -793,3 +793,37 @@
   (testing "段落的編輯區沒有這個清單"
     (is (not (str/includes? (render (ui/open-editor (ui/select badge-state "a1")))
                             "下層的待辦事項與提問")))))
+
+(def appendix-state
+  (ui/init-state
+   {:report/title "測試報告"
+    :ui/selected "A"
+    :tree [{:node/id "A" :node/kind :heading :node/name "甲"
+            :children [{:node/id "a1" :node/kind :paragraph :node/title "一"}
+                       {:node/id "A1" :node/kind :heading :node/name "甲一"}]}
+           {:node/id "X" :node/kind :heading :node/name "逐週數據" :node/appendix true
+            :children [{:node/id "X1" :node/kind :heading :node/name "週報"}]}]}))
+
+(deftest appendix-menu-test
+  (let [menu-actions (fn [s]
+                       (->> (find-all :button.menu-item (views/app (ui/open-editor s)))
+                            (map (juxt #(last %) #(get-in (second %) [:on :click])))))]
+    (testing "一般章的「⋯」選單有「設為附錄」"
+      (is (some #{["設為附錄" [[:ui/set-appendix "A" true]]]} (menu-actions appendix-state))))
+    (testing "附錄章有「取消附錄」"
+      (let [s (assoc-in appendix-state [:ui :selected] "X")]
+        (is (some #{["取消附錄" [[:ui/set-appendix "X" false]]]} (menu-actions s)))))
+    (testing "下層標題與段落沒有"
+      (doseq [id ["A1" "a1" "X1"]]
+        (is (not-any? #(#{"設為附錄" "取消附錄"} (first %))
+                      (menu-actions (assoc-in appendix-state [:ui :selected] id))))))))
+
+(deftest appendix-numbering-display-test
+  (let [html (render (ui/set-page appendix-state :fulltext))]
+    (testing "全文頁的標題與大綱用附錄編號"
+      (is (str/includes? html "附錄 A 逐週數據"))
+      (is (str/includes? html "A.1 週報"))
+      (is (str/includes? html "第一章 甲"))))
+  (testing "編輯區的名稱框前綴"
+    (let [html (render (ui/open-editor (assoc-in appendix-state [:ui :selected] "X")))]
+      (is (str/includes? html "附錄 A")))))
