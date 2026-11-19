@@ -471,28 +471,6 @@
                          "新增引言：寫下意圖（可留空），本文由 agent 依下層內容撰寫"
                          label))))))
 
-(defn wrap-paragraphs
-  "已有段落的標題要新增下層標題時：把現有段落移到新的下層標題。"
-  [state heading-id]
-  (let [{:keys [nodes]} state
-        paras (filterv #(tree/paragraph? nodes %) (tree/child-ids nodes heading-id))]
-    (if (or (empty? paras)
-            (>= (tree/depth nodes heading-id) tree/max-heading-level))
-      state
-      (let [label "把現有段落移到新的下層標題"
-            [sub-id state] (-> state
-                               (remember label)
-                               (insert-node heading-id {:node/kind :heading
-                                                        :node/name "新標題"
-                                                        :node/draft ""}))
-            state (reduce (fn [s pid]
-                            (update s :nodes tree/move pid
-                                    {:parent sub-id
-                                     :index (count (tree/child-ids (:nodes s) sub-id))}))
-                          state
-                          paras)]
-        (update state :ui assoc :selected sub-id :bias {} :toast label)))))
-
 (defn paragraph->intro
   "把段落改為所屬標題的引言（該標題還沒有引言時）。"
   [state para-id]

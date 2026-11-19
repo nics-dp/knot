@@ -46,7 +46,6 @@
    :ui/clear-focus-title ui/clear-focus-title
    :ui/set-viewport-height ui/set-viewport-height
    :ui/add-child ui/add-child
-   :ui/wrap-paragraphs ui/wrap-paragraphs
    :ui/paragraph->intro ui/paragraph->intro
    :ui/set-source-filter ui/set-source-filter
    :ui/set-source-query ui/set-source-query

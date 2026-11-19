@@ -1315,7 +1315,6 @@
   (let [node (get nodes id)
         kids (tree/child-ids nodes id)
         intro (tree/intro-id nodes id)
-        has-paras (some #(tree/paragraph? nodes %) kids)
         can-sub (< (tree/depth nodes id) tree/max-heading-level)]
     (list
      (zone "inputs" "設定" {:hint "agent 撰寫下層段落與引言時會參考這裡的意圖"}
@@ -1344,9 +1343,7 @@
                      :action [:div.field-actions
                               (field-button "新增段落" [[:ui/add-child id :paragraph]])
                               (when can-sub
-                                (field-button "新增下層標題" [[:ui/add-child id :heading]]))
-                              (when (and can-sub has-paras)
-                                (field-button "新增下層標題並移入段落" [[:ui/wrap-paragraphs id]]))]}
+                                (field-button "新增下層標題" [[:ui/add-child id :heading]]))]}
                     (if (seq shown)
                       [:div.kids
                        (for [k shown]

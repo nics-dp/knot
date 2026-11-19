@@ -64,12 +64,7 @@
       (testing "再新增段落：接在最後一個段落之後、下層標題之前"
         (let [s2 (ui/add-child s "A" :paragraph)
               pid (get-in s2 [:ui :selected])]
-          (is (= ["a1" "a2" pid id] (tree/child-ids (:nodes s2) "A")))))))
-  (testing "把現有段落移到新的下層標題"
-    (let [s (ui/wrap-paragraphs state "A")
-          sub (get-in s [:ui :selected])]
-      (is (= [sub] (tree/child-ids (:nodes s) "A")))
-      (is (= ["a1" "a2"] (tree/child-ids (:nodes s) sub))))))
+          (is (= ["a1" "a2" pid id] (tree/child-ids (:nodes s2) "A"))))))))
 
 (deftest sibling-kind-mixed-test
   (let [s (ui/add-child state "A" :heading)

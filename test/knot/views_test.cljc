@@ -348,11 +348,11 @@
                        {:node/id "T" :node/kind :heading :node/name "丙"}]}]}))
 
 (deftest heading-structure-buttons-test
-  (testing "已有段落的標題：可以同時新增段落、新增下層標題，並保留「移入段落」"
+  (testing "已有段落的標題：可以同時新增段落、新增下層標題，不提供「移入段落」"
     (let [html (render (ui/open-editor mixed-state))]
       (is (str/includes? html "[:ui/add-child \"H\" :paragraph]"))
       (is (str/includes? html "[:ui/add-child \"H\" :heading]"))
-      (is (str/includes? html "[:ui/wrap-paragraphs \"H\"]"))
+      (is (not (str/includes? html "wrap-paragraphs")))
       (is (str/includes? html "段落、下層標題"))
       (is (not (str/includes? html "不混用")))))
   (testing "沒有段落的標題：不提供「移入段落」"
