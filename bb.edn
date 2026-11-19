@@ -60,7 +60,7 @@
                  :task (do (when-not (zero? (:exit (shell {:continue true :out :string :err :string} "docker buildx inspect knot-builder")))
                              (shell "docker buildx create --name knot-builder --driver docker-container"))
                            (shell "docker buildx build --builder knot-builder"
-                                  "--platform linux/arm64,linux/amd64"
+                                  "--platform" "linux/arm64,linux/amd64"
                                   "--build-arg" (str "VERSION=" version)
                                   "-t" (str image ":" version) "-t" (str image ":latest")
                                   "--push" "."))}
@@ -111,5 +111,5 @@
                            (shell "git tag -a" tag "-m" (str "Knot " version))
                            (shell "git push origin main" tag)
                            (shell "gh release create" tag skills-zip
-                                  "--title" (str "'Knot " version "'")
+                                  "--title" (str "Knot " version)
                                   "--notes-file" (str "docs/releases/" version ".md")))}}}
