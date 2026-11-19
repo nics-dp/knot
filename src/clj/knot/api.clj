@@ -3,6 +3,7 @@
   (:require [clojure.string :as str]
             [datalevin.core :as d]
             [knot.db :as db]
+            [knot.export :as export]
             [knot.notes :as notes]
             [knot.seed :as seed]
             [knot.ui :as ui]
@@ -162,6 +163,13 @@
                 (if-let [change (db/node-change (d/db conn) id cs)]
                   {:status 200 :body change}
                   {:status 404 :body {:error "這張卡片沒有這次修改"}}))))}]
+   ["/export/latex"
+    {:get (fn [_]
+            (let [{:keys [dir bytes]} (export/export-latex conn)]
+              {:status 200
+               :headers {"Content-Type" "application/zip"
+                         "Content-Disposition" (export/content-disposition dir)}
+               :body (java.io.ByteArrayInputStream. bytes)}))}]
    ["/report/recent-changes"
     {:get (fn [_] {:status 200 :body {:cards (db/recent-cards (d/db conn) 10)}})}]
    ["/report/undo"

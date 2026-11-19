@@ -1,0 +1,36 @@
+% 由 Knot 產生的範例主檔（報告：OO 市 智慧&路燈_計畫 100%；匯出時間：2026-11-19 10:00）
+% 這只是範例，可以自由修改，或只取 contents/、tables/ 放進自己的專案；重新匯出會覆蓋此檔。
+% 請以 XeLaTeX 編譯（xelatex main.tex，需要編譯兩次才有目錄與交互參照）。
+\documentclass[a4paper,12pt]{ctexrep}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\ctexset{
+  contentsname = {目錄},
+  figurename = {圖},
+  tablename = {表},
+  appendixname = {附錄},
+  chapter = {name = {第,章}, number = {\chinese{chapter}}},
+}
+\setcounter{secnumdepth}{3}
+\setcounter{tocdepth}{3}
+% 圖檔找不到時畫帶檔名的空框，讓缺圖也能編譯
+\let\knotincludegraphics\includegraphics
+\renewcommand{\includegraphics}[2][]{%
+  \IfFileExists{#2.pdf}{\knotincludegraphics[#1]{#2.pdf}}{%
+  \IfFileExists{#2.png}{\knotincludegraphics[#1]{#2.png}}{%
+  \IfFileExists{#2.jpg}{\knotincludegraphics[#1]{#2.jpg}}{%
+    \fbox{\parbox[c][4cm][c]{0.8\linewidth}{\centering 缺圖：\texttt{\detokenize{#2}}}}}}}}
+
+\title{OO 市 智慧\&路燈\_計畫 100\%\\[1ex]\large 期末報告 \#草稿}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+\include{contents/ch01}
+\include{contents/ch02}
+\appendix
+\include{contents/appA}
+\end{document}

@@ -424,7 +424,7 @@
     (is (str/includes? s "尚未填寫：在下方"))
     (is (not (str/includes? s ":table.data-table"))))
   (testing "圖有虛線佔位"
-    (is (str/includes? (pr-str (views/app (open-editor float-state "f1"))) "圖檔在匯出 LaTeX 時處理"))))
+    (is (str/includes? (pr-str (views/app (open-editor float-state "f1"))) "images/arch.tex，圖檔請在 LaTeX 中放入"))))
 
 (deftest paragraph-editor-floats-and-unbound-test
   (let [s (pr-str (views/app (open-editor float-state "a1")))]
@@ -465,7 +465,7 @@
     (is (str/includes? s "圖 fig:arch"))
     (is (= 1 (count (find-all :table.data-table v))) "有內容的表格顯示成表格")
     (is (str/includes? s "（尚未填寫）"))
-    (is (str/includes? s "圖檔在匯出 LaTeX 時處理"))))
+    (is (str/includes? s "images/arch.tex，圖檔請在 LaTeX 中放入"))))
 
 (deftest table-card-unfilled-badge-test
   (is (str/includes? (pr-str (views/app float-state)) "尚未填寫")))

@@ -25,11 +25,11 @@
 
 (defn handler
   "events 為 :knot/events 的值；省略時 /api/events 回 503（測試用）。
-  opts：{:dev? true} 時提供開發用的 API（匯入範例內容）。"
+  opts：{:dev? true} 時提供開發用的 API（匯入範例內容）；:report-dir 為報告目錄（MCP export_latex 寫檔用）。"
   ([conn] (handler conn nil {}))
   ([conn events] (handler conn events {}))
   ([conn events opts]
-   (let [mcp-handler (mcp/handler conn)
+   (let [mcp-handler (mcp/handler conn (select-keys opts [:report-dir]))
          app (ring/ring-handler
               (ring/router (routes conn events opts)
                            {:data {:muuntaja m/instance
@@ -53,7 +53,7 @@
   (let [port (:http/port config)]
     (println (str "Knot 伺服器：http://localhost:" port "（報告目錄 "
                   (.getCanonicalPath (java.io.File. (str (:report-dir config)))) "）"))
-    (http/run-server (handler db events (select-keys config [:dev?])) {:ip (:http/host config) :port port :legacy-return-value? false})))
+    (http/run-server (handler db events (select-keys config [:dev? :report-dir])) {:ip (:http/host config) :port port :legacy-return-value? false})))
 
 (defmethod ig/halt-key! :knot/http [_ server]
   ;; 已停止的伺服器 server-stop! 回傳 nil

@@ -14,6 +14,7 @@
 
 (def ^:dynamic *handler* nil)
 (def ^:dynamic *conn* nil)
+(def ^:dynamic *report-dir* nil)
 
 (use-fixtures :each
   (fn [t]
@@ -21,7 +22,7 @@
           conn (db/open-report dir)]
       (try
         (seed/seed! conn (edn/read-string (slurp (io/resource "fixtures/reports/streetlight.edn"))))
-        (binding [*handler* (server/handler conn) *conn* conn] (t))
+        (binding [*handler* (server/handler conn nil {:report-dir dir}) *conn* conn *report-dir* dir] (t))
         (finally (db/close-report conn))))))
 
 (defn- post
@@ -71,7 +72,7 @@
 (deftest tools-list-test
   (let [tools (get-in (rpc "tools/list") [:body "result" "tools"])]
     (is (= ["add_card" "add_citation" "add_excerpt" "add_excerpts" "add_fact" "add_facts" "add_note" "add_remote_relation"
-            "add_source_table" "build_outline" "complete_todo" "delete_card" "delete_fact" "discard_source_block"
+            "add_source_table" "build_outline" "complete_todo" "delete_card" "delete_fact" "discard_source_block" "export_latex"
             "get_card" "get_cards" "get_outline" "get_source_block" "get_style" "get_writing_context" "get_writing_order" "list_facts"
             "list_todos" "move_card" "remove_citation" "remove_relation" "search_sources" "set_relation"
             "update_card" "update_fact" "update_report" "update_source_block" "update_style" "write_prose" "write_table"]
@@ -1285,3 +1286,21 @@
       (let [d (some #(when (= "get_outline" (get % "name")) (get % "description")) (get-in (rpc "tools/list") [:body "result" "tools"]))]
         (is (str/includes? d "last_edited_by"))
         (is (str/includes? d "get_cards"))))))
+
+(deftest export-latex-test
+  (let [before (count (d/q '[:find [?e ...] :where [?e :changeset/id]] (d/db *conn*)))
+        res (structured (call "export_latex" {}))
+        path (get res "path")
+        files (get res "files")
+        dir "OO 市智慧路燈示範計畫"]
+    (is (str/ends-with? path "/export/OO 市智慧路燈示範計畫.zip"))
+    (is (.exists (io/file path)))
+    (is (= (.getCanonicalFile (io/file *report-dir* "export")) (.getParentFile (io/file path))))
+    (is (some #{(str dir "/main.tex")} files))
+    (is (some #{(str dir "/images/README.txt")} files))
+    (with-open [zf (java.util.zip.ZipFile. (io/file path))]
+      (is (= (set files) (set (map #(.getName ^java.util.zip.ZipEntry %) (enumeration-seq (.entries zf))))))
+      (is (str/includes? (slurp (.getInputStream zf (.getEntry zf (str dir "/main.tex"))) :encoding "UTF-8")
+                         "\\documentclass[a4paper,12pt]{ctexrep}")))
+    (is (= before (count (d/q '[:find [?e ...] :where [?e :changeset/id]] (d/db *conn*))))
+        "匯出不產生修改組")))

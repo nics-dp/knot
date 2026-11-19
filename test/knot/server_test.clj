@@ -205,3 +205,18 @@
     (testing "復原不產生待辦"
       (request :post "/api/report/undo")
       (is (= 2 (count (knot-notes)))))))
+
+(deftest export-latex-api-test
+  (seed/seed! *conn* (edn/read-string (slurp (io/resource "fixtures/reports/streetlight.edn"))))
+  (let [res (*handler* {:request-method :get :uri "/api/export/latex" :headers {}})
+        bytes (.readAllBytes ^java.io.InputStream (:body res))
+        names (with-open [zis (java.util.zip.ZipInputStream. (java.io.ByteArrayInputStream. bytes)
+                                                              java.nio.charset.StandardCharsets/UTF_8)]
+                (loop [acc []] (if-let [e (.getNextEntry zis)] (recur (conj acc (.getName e))) acc)))]
+    (is (= 200 (:status res)))
+    (is (= "application/zip" (get-in res [:headers "Content-Type"])))
+    (is (= (str "attachment; filename=\"report.zip\"; filename*=UTF-8''"
+                (-> (java.net.URLEncoder/encode "OO 市智慧路燈示範計畫.zip" "UTF-8") (.replace "+" "%20")))
+           (get-in res [:headers "Content-Disposition"])))
+    (is (some #{"OO 市智慧路燈示範計畫/main.tex"} names))
+    (is (some #{"OO 市智慧路燈示範計畫/contents/ch01.tex"} names))))
