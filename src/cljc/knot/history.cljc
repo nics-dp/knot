@@ -18,7 +18,7 @@
   #{:node/id :node/version})
 
 (defn- field-of
-  "快照欄位歸入哪一類歷程欄位；其他欄位都算 :settings（label、圖檔、caption、契約項目等）。"
+  "快照欄位歸入哪一類歷程欄位；其他欄位都算 :settings（label、圖檔、caption等）。"
   [k]
   (case k
     (:node/name :node/title) :name

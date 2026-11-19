@@ -1336,10 +1336,7 @@
                  info (when (pos? chars) (count-info chars t))]
              (target-field id t
                            (when info
-                             (count-span "target-total" (update info :text #(str "整" level "合計 " %))))))
-           (when-let [items (seq (:node/contract-items node))]
-             (field "contract" "撰寫要求" {:count (count items)}
-                    [:div.chips (for [c items] [:span.tag {:replicant/key c} c])])))
+                             (count-span "target-total" (update info :text #(str "整" level "合計 " %)))))))
      (zone "structure" "結構" {:hint "引言固定在最前面；其後依序是段落、下層標題"}
            (field "intro" "引言"
                   {:action (when-not intro (field-button "新增" [[:ui/add-child id :intro]]))}

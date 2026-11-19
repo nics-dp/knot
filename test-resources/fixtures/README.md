@@ -6,7 +6,7 @@
 
 | 路徑 | 內容 | 用於 |
 |---|---|---|
-| `templates/closing-report.edn` | 結案報告範本骨架：四層以內的章節樹與契約項目 | 5.1、M1 `(seed!)` |
+| `templates/closing-report.edn` | 結案報告範本骨架：四層以內的章節樹 | 5.1、M1 `(seed!)` |
 | `sources/streetlight-final.md` | 含標題、段落、GFM 表格與 `<!-- page: N -->` 頁碼標記的素材 | 5.2 |
 | `agent/` | 模擬 agent 交回的內容（本文、修改建議、整理過的 Markdown），檔名為 `<工具>/<情境>.edn` | M3 起 |
 
