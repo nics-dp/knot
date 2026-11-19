@@ -14,5 +14,9 @@
         :task (clojure "-M:test")}
   cljs-test {:doc "前端測試（node）"
              :task (shell "npx shadow-cljs compile test")}
+  uber {:doc "target/knot.jar（需先 npx shadow-cljs release app；會覆蓋 resources/public/js）"
+        :task (shell "clojure -T:build uber")}
+  docker:build {:doc "docker build -t knot ."
+                :task (shell "docker build -t knot .")}
   lint {:doc "clj-kondo"
         :task (clojure "-M:lint --lint src test dev")}}}

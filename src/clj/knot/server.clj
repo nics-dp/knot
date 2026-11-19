@@ -53,7 +53,7 @@
   (let [port (:http/port config)]
     (println (str "Knot 伺服器：http://localhost:" port "（報告目錄 "
                   (.getCanonicalPath (java.io.File. (str (:report-dir config)))) "）"))
-    (http/run-server (handler db events (select-keys config [:dev?])) {:ip "127.0.0.1" :port port :legacy-return-value? false})))
+    (http/run-server (handler db events (select-keys config [:dev?])) {:ip (:http/host config) :port port :legacy-return-value? false})))
 
 (defmethod ig/halt-key! :knot/http [_ server]
   ;; 已停止的伺服器 server-stop! 回傳 nil

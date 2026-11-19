@@ -46,5 +46,9 @@
                       no.cjohansen/replicant {:mvn/version "2026.07.1"}
                       no.cjohansen/nexus     {:mvn/version "2026.08.1"}}}
 
+  ;; clojure -T:build uber → target/knot.jar
+  :build {:deps {io.github.clojure/tools.build {:git/tag "v0.10.14" :git/sha "1176afd"}}
+          :ns-default build}
+
   :lint {:replace-deps {clj-kondo/clj-kondo {:mvn/version "2026.10.20"}}
          :main-opts ["-m" "clj-kondo.main"]}}}

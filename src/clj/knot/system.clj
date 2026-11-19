@@ -6,6 +6,8 @@
 (def defaults
   ;; 報告目錄預設為啟動時所在的目錄
   {:http/port 3000
+   ;; 只綁本機；容器內由 KNOT_HOST 改成 0.0.0.0（對外仍由 docker -p 127.0.0.1: 限制）
+   :http/host "127.0.0.1"
    :report-dir (System/getProperty "user.dir")
    ;; 開發模式（dev/user.clj 設為 true）：畫面與 API 提供「匯入範例內容」
    :dev? false})
