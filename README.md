@@ -14,6 +14,8 @@ Knot 是一個寫報告用的白板服務，讓使用者和 agent（例如 Claud
 
 ![Knot 的卡片頁：依層級分欄的卡片樹，右側是選取段落的意圖、依據與前後段落的關係（虛構範例）](docs/images/knot-cards.png)
 
+![Knot 的全文頁：左側大綱，中間依章節排版的本文（事實的數值以標記顯示，表與圖在所屬段落之後），右側是選取段落的設定（虛構範例）](docs/images/knot-fulltext.png)
+
 Knot 本身不呼叫任何 LLM API，也不保存金鑰。
 
 > **資料外送：** agent 讀到的素材與卡片會送到 agent 所用的模型服務，Knot 無法把關。哪些資料可以交給 agent 處理，請自行判斷。
