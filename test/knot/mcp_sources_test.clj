@@ -253,6 +253,12 @@
         (is (some #{[bid "第一段"]} (cites)))))
     (testing "get_card 的依據"
       (is (some #(= bid (get % "block_id")) (get (ok (call "get_card" {"card_id" p})) "citations"))))
+    (testing "get_outline 的依據數：段落與引言才有"
+      (let [cards (get (ok (call "get_outline" {})) "cards")
+            by-id (into {} (map (juxt #(get % "card_id") identity)) cards)]
+        (is (= (count (cites)) (get-in by-id [p "citations"])))
+        (is (every? #(contains? % "citations") (filter #(#{"paragraph" "intro"} (get % "kind")) cards)))
+        (is (not-any? #(contains? % "citations") (filter #(#{"heading" "table" "figure"} (get % "kind")) cards)))))
     (testing "重複：已經是依據，沒有寫入"
       (let [n (count (changesets))
             r (ok (call "add_citation" {"card_id" p "block_id" bid}))]
