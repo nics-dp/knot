@@ -101,6 +101,7 @@
                             :has_prose (has-prose? n)
                             :version (:node/version n)}
                      (tree/appendix? nodes id) (assoc :appendix true)
+                     (#{:paragraph :intro} (:node/kind n)) (assoc :citations (count (:node/citations n)))
                      (edits id) (assoc :last_edited_by (name (:by (edits id)))
                                        :last_edited_at (inst-str (:at (edits id))))
                      true (merge (char-fields counts n))
@@ -815,7 +816,7 @@
 
 (def read-tools
   [{:name "get_outline"
-    :description "取得整份報告的卡片樹（依文件順序的扁平清單）與報告資訊（名稱 title 與副標 subtitle，可用 update_report 修改）：card_id、類型、深度、編號 number、名稱 title、意圖摘要、狀態、是否有本文，字數 chars（段落、引言為本文去掉空白的字數，標題為整章／整節合計，表格與圖沒有）與目標字數 target_chars（有設定才有），以及未完成待辦數 open_todos（沒有待辦時省略）；附錄章帶 appendix: true。每張卡片帶最後修改者 last_edited_by（user 或 agent）與時間 last_edited_at（ISO 時間），取自最近一筆未被復原的修改（建立也算，匯入與復原本身不算；使用者修改後復原會回到先前那一筆）：用來找出使用者改過的卡片（last_edited_by 為 user），再用 get_cards 讀它們的 history 看改了什麼，避免蓋掉使用者的修改；沒有修改紀錄的卡片省略這兩個欄位。title 是純名稱，不含編號；編號（標題為「第一章」「附錄 A」「1.2」「A.1」，其他卡片為 null）由卡片的位置決定、隨移動重新計算，存在 number 欄位，不要把編號寫進名稱。這是規劃與定位卡片的起點；意圖預設截斷為前 80 字；要完整意圖時傳 full_intent: true（撰寫或審閱整份大綱時用，不必逐張 get_card）。"
+    :description "取得整份報告的卡片樹（依文件順序的扁平清單）與報告資訊（名稱 title 與副標 subtitle，可用 update_report 修改）：card_id、類型、深度、編號 number、名稱 title、意圖摘要、狀態、是否有本文，字數 chars（段落、引言為本文去掉空白的字數，標題為整章／整節合計，表格與圖沒有）與目標字數 target_chars（有設定才有），以及未完成待辦數 open_todos（沒有待辦時省略）；附錄章帶 appendix: true。段落與引言帶依據數 citations（掛了幾筆素材；0 表示還沒有依據，可用來找出缺依據的段落）。每張卡片帶最後修改者 last_edited_by（user 或 agent）與時間 last_edited_at（ISO 時間），取自最近一筆未被復原的修改（建立也算，匯入與復原本身不算；使用者修改後復原會回到先前那一筆）：用來找出使用者改過的卡片（last_edited_by 為 user），再用 get_cards 讀它們的 history 看改了什麼，避免蓋掉使用者的修改；沒有修改紀錄的卡片省略這兩個欄位。title 是純名稱，不含編號；編號（標題為「第一章」「附錄 A」「1.2」「A.1」，其他卡片為 null）由卡片的位置決定、隨移動重新計算，存在 number 欄位，不要把編號寫進名稱。這是規劃與定位卡片的起點；意圖預設截斷為前 80 字；要完整意圖時傳 full_intent: true（撰寫或審閱整份大綱時用，不必逐張 get_card）。"
     :inputSchema {:type "object"
                   :properties {:full_intent {:type "boolean" :description "true 時回傳完整意圖（預設 false：前 80 字）"}}
                   :additionalProperties false}

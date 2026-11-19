@@ -57,17 +57,24 @@
 (defn- escape-re [s]
   (str/replace s #"[\\^$.|?*+()\[\]{}]" #(str "\\" %)))
 
+(defn- squash-spaces
+  "去掉空白，但兩個數字之間的空白縮成一格保留（避免「12 34」被當成「1234」）。"
+  [s]
+  (-> (str/replace s #"\s+" " ")
+      (str/replace #"(?<!\d) | (?!\d)" "")))
+
 (defn- contains-value?
   "text 是否含 value（比對前經 normalize）。值以數字開頭或結尾時，該端不能接在其他數字上：
-  「12」不算出現在「1210」「3.12」「1,210」中；千分位逗號兩邊都先去掉。這時原文只做 NFKC、空白不去掉，
-  避免以空白分隔的兩個數字被接在一起。"
+  「12」不算出現在「1210」「3.12」「1,210」中；千分位逗號兩邊都先去掉。這時原文與值都只去掉
+  不在兩個數字之間的空白（「2026 年 6 月 1 日」與「2026年6月1日」相同），避免以空白分隔的兩個數字被接在一起。"
   [text value]
   (let [v (normalize value)]
     (if (re-find #"^\d|\d$" v)
-      (boolean (re-find (re-pattern (str (when (re-find #"^\d" v) "(?<!\\d)(?<!\\d[.,])")
-                                         (escape-re v)
-                                         (when (re-find #"\d$" v) "(?!\\d)(?!\\.\\d)(?!,\\d{3}(?!\\d))")))
-                        (strip-thousands (str/replace (nfkc text) #"\s+" " "))))
+      (let [v (strip-thousands (squash-spaces (nfkc value)))]
+        (boolean (re-find (re-pattern (str (when (re-find #"^\d" v) "(?<!\\d)(?<!\\d[.,])")
+                                           (escape-re v)
+                                           (when (re-find #"\d$" v) "(?!\\d)(?!\\.\\d)(?!,\\d{3}(?!\\d))")))
+                          (strip-thousands (squash-spaces (nfkc text))))))
       (str/includes? (normalize text) v))))
 
 (defn- table-contains-value?

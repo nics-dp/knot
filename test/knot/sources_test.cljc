@@ -114,6 +114,21 @@
 
 (defn- ids [bs] (mapv :block/id bs))
 
+(deftest fact-value-date-spacing-test
+  (let [p {:block/kind :para :block/title "期程" :block/text "期程：2026 年 6 月 1 日至 8 月 23 日，共 12 週。量測 12 34 次。"}
+        ok? #(nil? (sources/fact-value-error p {:fact/value %}))]
+    (testing "以數字開頭的值：數字與文字之間的空白不影響比對"
+      (is (ok? "2026 年 6 月 1 日"))
+      (is (ok? "2026年6月1日"))
+      (is (ok? "8 月 23 日"))
+      (is (ok? "12 週")))
+    (testing "兩個數字之間的空白仍然保留，不會接成一個數字"
+      (is (ok? "12 34"))
+      (is (not (ok? "1234"))))
+    (testing "邊界規則不變"
+      (is (not (ok? "2")))
+      (is (not (ok? "26"))))))
+
 (deftest search-test
   (testing "空字串列出全部（預設排除已捨棄），維持原順序"
     (is (= ["1" "2" "3"] (ids (sources/search blocks "" {}))))
