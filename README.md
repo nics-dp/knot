@@ -20,22 +20,60 @@ Knot 本身不呼叫任何 LLM API，也不保存金鑰。
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/)（或其他 Docker 環境）
 - [Claude Code](https://claude.com/claude-code)
+- 可以存取 `nics-dp` 組織的 GitHub 帳號（Knot 的映像放在組織內部的 GitHub 套件）
 
-不需要安裝 Java 或其他開發工具，Knot 整個裝在容器裡。
+支援 Mac（M 晶片）與 Windows（Intel／AMD 處理器）。不需要安裝 Java 或其他開發工具，Knot 整個裝在容器裡。
 
-## 快速開始
+## 安裝（第一次）
 
-### 1. 建置映像（第一次）
+### 1. 登入 GitHub 的映像庫
+
+到 GitHub 的 [Personal access tokens（classic）](https://github.com/settings/tokens) 建立一個權杖，權限只勾 `read:packages`，再登入：
 
 ```sh
-git clone <本 repo> knot
-cd knot
-docker build -t knot .
+docker login ghcr.io -u <你的 GitHub 帳號>
+# Password 貼上剛建立的權杖
 ```
 
-約 1–2 分鐘，完成後會有一個名為 `knot` 的映像（約 230 MB）。之後除非更新 Knot，不需要再建置。
+登入一次即可，Docker 會記住。
 
-### 2. 準備報告目錄
+### 2. 下載 Knot
+
+```sh
+docker pull ghcr.io/nics-dp/knot:0.1.0
+```
+
+同一個版本同時包含 Mac（M 晶片）與 Windows 兩種，Docker 會自動下載符合你電腦的版本（約 230 MB）。
+
+### 3. 讓 Claude Code 連上 Knot
+
+```sh
+claude mcp add --scope user --transport http knot http://localhost:3000/mcp
+```
+
+只要設定一次，之後在任何目錄開 Claude Code 都會連到正在執行的 Knot。
+
+### 4. 安裝 skill
+
+skill 是給 agent 的操作說明，告訴它如何規劃、匯入、撰寫與處理待辦。到 [Releases](https://github.com/nics-dp/knot/releases) 下載與 Knot 同版本的 `knot-skills-<版本>.zip`，解壓縮後把裡面的 `knot-*` 資料夾複製到 Claude Code 的 skill 目錄：
+
+```sh
+mkdir -p ~/.claude/skills
+cp -R knot-skills-0.1.0/knot-* ~/.claude/skills/
+```
+
+Windows 的位置是 `%USERPROFILE%\.claude\skills\`。只想用在某一份報告時，也可以放在該報告目錄的 `.claude/skills/`。
+
+| skill | 用途 | 對 agent 這樣說 |
+|---|---|---|
+| `knot-planning` 規劃 | 讀原始資料，和你討論後寫成報告目錄裡的 `撰寫要求.md`（必須涵蓋的內容、架構草案、待確認的問題）；你確認後，依它在 Knot 建立章節、段落與每段的意圖 | 「開始規劃報告」「依撰寫要求建立卡片」「撰寫要求改了，調整大綱」 |
+| `knot-import` 匯入 | 從原始資料照抄節錄與表格成為素材，把本文要寫的數字記成事實，再把素材掛到需要它的段落 | 「匯入資料」「新增了一份資料，幫我匯入」 |
+| `knot-writing` 撰寫 | 依撰寫順序逐段寫本文，寫完一節就回頭審稿 | 「開始撰寫全文」「寫第二章」「重寫這一節」 |
+| `knot-todos` 處理待辦 | 回覆你已回答的提問、處理你交代的待辦，以及段落修改後 Knot 留下的待辦 | 「處理待辦」「繼續下一輪」 |
+
+## 開始一份報告
+
+### 1. 準備報告目錄
 
 一份報告一個目錄。建一個新目錄，把原始資料（計畫書、會議紀錄、數據、格式規定等）放進去：
 
@@ -46,50 +84,47 @@ docker build -t knot .
 └── 營運數據.csv
 ```
 
-### 3. 啟動 Knot
+### 2. 啟動 Knot
 
-在報告目錄執行：
+在報告目錄執行（macOS、Linux）：
 
 ```sh
 cd 共享單車成果報告
-docker run --rm -p 127.0.0.1:3000:3000 -v "$PWD":/report --user "$(id -u):$(id -g)" knot
+docker run --rm -p 127.0.0.1:3000:3000 -v "$PWD":/report --user "$(id -u):$(id -g)" ghcr.io/nics-dp/knot:0.1.0
+```
+
+Windows（PowerShell）：
+
+```powershell
+cd 共享單車成果報告
+docker run --rm -p 127.0.0.1:3000:3000 -v "${PWD}:/report" ghcr.io/nics-dp/knot:0.1.0
 ```
 
 用瀏覽器開啟 http://localhost:3000，會看到一份空白報告。這個終端機視窗要一直開著；按 Ctrl+C 停止。
 
 Knot 會在報告目錄裡建立 `.knot/` 存放報告內容，下次在同一個目錄啟動就會接著用。
 
-### 4. 讓 Claude Code 連上 Knot（第一次）
+### 3. 和 agent 協作
 
-```sh
-claude mcp add --scope user --transport http knot http://localhost:3000/mcp
-```
+另開一個終端機，在同一個報告目錄啟動 Claude Code，依序請它：
 
-只要設定一次，之後在任何目錄開 Claude Code 都會連到正在執行的 Knot。
+1. **「開始規劃報告」**：agent 讀完資料，寫出 `撰寫要求.md` 並列出要你決定的問題。你可以在對話中回答，也可以直接修改這個檔案。確認後它會在 Knot 建立章節、段落與每段的意圖。
+2. **「匯入資料」**：agent 把資料中要引用的段落、數據表與數字登記成素材與事實，並掛到需要它的段落。建議到 Knot 的「素材」頁抽查幾筆原文與來源。
+3. **「開始撰寫全文」**：agent 依每段的意圖、素材與前後段落寫出本文。
+4. **之後每一輪：** 你在 Knot 上修改、留言或留下待辦，再請 agent「處理待辦」。
 
-### 5. 開始協作
+agent 的修改會即時出現在瀏覽器上（剛修改的卡片有綠框）。每一次修改（你的或 agent 的）都記在卡片歷程裡，可以和前一版比較，也可以按 Ctrl+Z 復原。
 
-另開一個終端機，在同一個報告目錄啟動 Claude Code，請它開始規劃，例如：
+### 4. 匯出 LaTeX
 
-> 讀這個目錄裡的資料，在 Knot 建立成果報告的大綱，每一段寫下意圖。有不確定的地方在卡片上留言問我。
-
-agent 的修改會即時出現在瀏覽器上（剛修改的卡片有綠框）。
-
-## 協作的方式
-
-1. **agent 規劃：** 讀原始資料，在 Knot 建立章節與段落，為每段寫下意圖（這段要說什麼、依據哪些資料），並把資料中的數字登記成素材與事實。
-2. **你檢視與調整：** 在卡片頁或全文頁看整份結構。可以直接改名稱、意圖、拖曳調整順序，也可以在卡片的「留言與歷程」留下待辦事項交代 agent。
-3. **回覆 agent 的提問：** agent 有疑問時會在卡片上留言。頂部列的「待辦事項」列出所有等你回覆的提問，點一下就會打開回覆框。
-4. **請 agent 處理：** 回到 Claude Code，請它「處理 Knot 上的待辦事項與回覆」，它會修改對應的卡片並回報。
-5. **撰寫本文：** 結構確定後，請 agent 逐章撰寫。它會依每段的意圖、素材與前後段落寫出本文；你在編輯區檢視、修改。
-
-每一次修改（你的或 agent 的）都記在卡片歷程裡，可以和前一版比較，也可以復原。
+頂部列的「匯出 LaTeX」會下載一個 zip：`main.tex`（範例主檔，以 XeLaTeX 編譯）、`contents/`（每章一個檔）、`tables/`（每張表一個檔）、`images/`（每張圖一個檔，圖檔請自行放入，說明見 `images/README.txt`）。這是草稿：內容與章節、表、圖之間的插入關係都已接好，排版細節請在 LaTeX 中調整。重新匯出會覆蓋這些檔案，自己的修改請放在 `main.tex` 或另外的檔案。
 
 ## 日常使用
 
 - **停止：** 在執行 Knot 的終端機按 Ctrl+C。報告內容都在報告目錄的 `.knot/` 裡。
-- **換一份報告：** 停止後，到另一個報告目錄再執行一次第 3 步的指令。同一時間只開一份報告。
+- **換一份報告：** 停止後，到另一個報告目錄再啟動一次。同一時間只開一份報告。
 - **備份或搬移：** 整個報告目錄（含 `.knot/`）一起複製即可。
+- **更新版本：** 先備份報告目錄的 `.knot/`，`docker pull` 新版本，啟動時改用新的版本號；同時下載同版本的 skill，取代 `~/.claude/skills/` 裡舊的 `knot-*`（skill 與 Knot 的工具一起改版，兩者要同一個版本）。
 - **3000 被佔用時：** 把指令中的 `127.0.0.1:3000:3000` 改成例如 `127.0.0.1:3100:3000`，瀏覽器改開 http://localhost:3100，Claude Code 的 MCP 網址也要改成 `http://localhost:3100/mcp`。（啟動訊息印的 `localhost:3000` 是容器內的 port，不用理會。）
 
 啟動指令的各部分：
@@ -98,16 +133,25 @@ agent 的修改會即時出現在瀏覽器上（剛修改的卡片有綠框）�
 |---|---|
 | `-p 127.0.0.1:3000:3000` | 讓本機瀏覽器連得到容器內的 Knot。**一定要寫 `127.0.0.1:`**，否則同網段的其他電腦也連得到你的報告。 |
 | `-v "$PWD":/report` | 把目前所在的目錄當成報告目錄。 |
-| `--user "$(id -u):$(id -g)"` | 讓 `.knot/` 屬於你自己的帳號（Linux 上省略時會屬於 root）。 |
+| `--user "$(id -u):$(id -g)"` | 讓 `.knot/` 屬於你自己的帳號（Linux 上省略時會屬於 root；Windows 不需要）。 |
 | `--rm` | 停止後自動刪除容器；報告內容在報告目錄裡，不受影響。 |
 
 ## 常見問題
 
+- **`docker pull` 顯示 denied 或 unauthorized：** 確認已用有 `read:packages` 權限的權杖 `docker login ghcr.io`，而且你的 GitHub 帳號能看到 `nics-dp/knot`。
 - **瀏覽器打不開：** 確認啟動 Knot 的終端機還開著、沒有錯誤訊息，或用 `docker ps` 看容器是否在執行；也確認網址的 port 和 `-p` 設定一致。
 - **Claude Code 說找不到 knot 工具：** 確認 Knot 正在執行，並用 `claude mcp list` 檢查 MCP 設定的網址。Knot 要先啟動，Claude Code 才連得上。
+- **agent 沒有照 skill 的流程做：** 確認 `~/.claude/skills/` 底下有 `knot-planning` 等資料夾（每個資料夾裡有 `SKILL.md`）；剛安裝時要重新開啟 Claude Code 才會載入。
 - **MCP 回應 403：** Knot 只接受來自本機的請求，從其他主機名稱開啟的網頁無法呼叫。
-- **目前在哪些電腦上驗證過：** Apple Silicon 的 Mac（arm64）。Intel / x86_64 的電腦可以建置，但尚未實測。
 
-## 目前進度
+## 自行建置映像
 
-卡片樹、全文、素材與事實、撰寫、留言與待辦、卡片歷程、相關段落的連動、風格與 MCP 工具已完成；LaTeX 匯出與交接檢查尚在開發。
+不從 GitHub 下載、改用原始碼建置時：
+
+```sh
+git clone https://github.com/nics-dp/knot.git
+cd knot
+docker build -t knot .
+```
+
+約 1–2 分鐘。啟動時把指令最後的 `ghcr.io/nics-dp/knot:0.1.0` 換成 `knot`；skill 在原始碼的 `skills/` 目錄。開發環境的說明見 `CLAUDE.md`。

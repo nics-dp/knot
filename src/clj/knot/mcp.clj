@@ -3,7 +3,8 @@
   工具以資料登記：{:name :description :inputSchema :handler}，handler 收 (conn args)，
   回傳結果 map（key 為英文 snake_case 的 keyword）；工具層面的錯誤丟 (tool-error! 中文說明)。
   keyword 與 JSON 字串的轉換集中在 `write-json` 與 `read-json`。"
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [datalevin.core :as d]
             [jsonista.core :as json]
             [knot.context :as context]
@@ -1281,6 +1282,11 @@
           (throw e))))
     ::unknown-tool))
 
+(defn version
+  "Knot 的版本（resources/knot/version.txt，發佈時唯一的版本來源）。"
+  []
+  (some-> (io/resource "knot/version.txt") slurp str/trim))
+
 (defn- dispatch
   "處理一個 JSON-RPC 請求（有 id），回傳回應 map。"
   [conn opts {:strs [id method params]}]
@@ -1289,7 +1295,7 @@
     (let [asked (get params "protocolVersion")]
       (result id {:protocolVersion (if (some #{asked} supported-versions) asked "2025-06-18")
                   :capabilities {:tools {}}
-                  :serverInfo {:name "knot" :version "0.1"}
+                  :serverInfo {:name "knot" :version (version)}
                   :instructions instructions}))
 
     "ping" (result id {})

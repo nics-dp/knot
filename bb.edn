@@ -19,4 +19,97 @@
   docker:build {:doc "docker build -t knot ."
                 :task (shell "docker build -t knot .")}
   lint {:doc "clj-kondo"
-        :task (clojure "-M:lint --lint src test dev")}}}
+        :task (clojure "-M:lint --lint src test dev")}
+
+  ;; ---- 本機發佈（SPEC 第 7 節「發佈」）：bb release 依序執行下面四步，也可以單獨執行 ----
+  :init (do (def version (str/trim (slurp "resources/knot/version.txt")))
+            (def image "ghcr.io/nics-dp/knot")
+            (def skills-zip (str "target/knot-skills-" version ".zip"))
+            (defn out [& args] (str/trim (:out (shell {:out :string} (str/join " " args)))))
+            (defn fail! [msg] (println "停止：" msg) (System/exit 1)))
+  :requires ([clojure.string :as str]
+             [babashka.fs :as fs])
+
+  release:version {:doc "印出要發佈的版本（resources/knot/version.txt）"
+           :task (println version)}
+
+  release {:doc "發佈 resources/knot/version.txt 的版本：檢查 → 映像 → 本機架構冒煙測試 → skill zip → 推送標籤與建立 Release（amd64 另以 bb release:smoke linux/amd64 測）"
+           :task (do (run 'release:check)
+                     (run 'release:image)
+                     (run 'release:smoke)
+                     (run 'release:skills)
+                     (run 'release:publish))}
+
+  release:check {:doc "發佈前檢查：在 main、工作區乾淨、標籤還不存在、有版本說明、測試與 lint 通過"
+                 :task (let [tag (str "v" version)]
+                         (when-not (= "main" (out "git rev-parse --abbrev-ref HEAD")) (fail! "要在 main 分支發佈"))
+                         (when-not (str/blank? (out "git status --porcelain")) (fail! "工作區有未 commit 的變更"))
+                         (when-not (str/blank? (out "git tag -l" tag)) (fail! (str "標籤 " tag " 已存在；請先改 resources/knot/version.txt")))
+                         (when-not (fs/exists? (str "docs/releases/" version ".md")) (fail! (str "缺少版本說明 docs/releases/" version ".md")))
+                         (shell "bb test")
+                         (shell "bb cljs-test")
+                         (shell "bb lint")
+                         (println "檢查通過：" tag))}
+
+  release:login {:doc "以 gh 的權杖登入 ghcr.io（權杖需有 write:packages）"
+                 :task (let [user (out "gh api user --jq .login")]
+                         (shell {:in (out "gh auth token")} "docker login ghcr.io -u" user "--password-stdin"))}
+
+  release:image {:doc "建置 arm64 與 amd64 兩種架構，推到 ghcr.io/nics-dp/knot:<版本> 與 :latest"
+                 :depends [release:login]
+                 :task (do (when-not (zero? (:exit (shell {:continue true :out :string :err :string} "docker buildx inspect knot-builder")))
+                             (shell "docker buildx create --name knot-builder --driver docker-container"))
+                           (shell "docker buildx build --builder knot-builder"
+                                  "--platform linux/arm64,linux/amd64"
+                                  "--build-arg" (str "VERSION=" version)
+                                  "-t" (str image ":" version) "-t" (str image ":latest")
+                                  "--push" "."))}
+
+  release:skills {:doc "把 skills/knot-* 打包成 target/knot-skills-<版本>.zip（解壓後為 knot-skills-<版本>/knot-*）"
+                  :task (let [dir (str "target/knot-skills-" version)]
+                          (fs/delete-tree dir)
+                          (fs/delete-if-exists skills-zip)
+                          (fs/create-dirs dir)
+                          (doseq [d (filter (fn [p] (and (fs/directory? p) (str/starts-with? (fs/file-name p) "knot-"))) (fs/list-dir "skills"))]
+                            (fs/copy-tree d (fs/path dir (fs/file-name d))))
+                          (fs/zip skills-zip [dir] {:root "target"})
+                          (println "已產生" skills-zip))}
+
+  release:smoke {:doc "實際啟動映像做冒煙測試：bb release:smoke [linux/amd64|linux/arm64] [映像]（預設本機架構、ghcr.io 上的 <版本>）"
+                 :task (let [[platform img] *command-line-args*
+                             platform (when-not (str/blank? platform) platform)
+                             img (or img (str image ":" version))
+                             dir (str (fs/create-temp-dir {:prefix "knot-smoke"}))
+                             name (str "knot-smoke-" (System/currentTimeMillis))
+                             port "3199"
+                             mcp (fn [body] (out "curl -s -X POST" (str "localhost:" port "/mcp")
+                                                 "-H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream'"
+                                                 "-d" (str "'" body "'")))]
+                         (shell (str "docker run -d --rm --name " name
+                                     (when platform (str " --platform " platform))
+                                     " -p 127.0.0.1:" port ":3000 -v " dir ":/report " img))
+                         (try
+                           (loop [n 0]
+                             (when (> n 90) (fail! "90 秒內沒有啟動"))
+                             (when-not (zero? (:exit (shell {:continue true :out :string :err :string}
+                                                            (str "curl -sf localhost:" port "/api/report"))))
+                               (Thread/sleep 1000) (recur (inc n))))
+                           (let [init (mcp "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}")
+                                 add (mcp "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"build_outline\",\"arguments\":{\"parent_id\":null,\"items\":[{\"kind\":\"heading\",\"title\":\"測試章\",\"children\":[{\"kind\":\"paragraph\",\"title\":\"測試段\"}]}]}}}")
+                                 exp (mcp "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"export_latex\",\"arguments\":{}}}")
+                                 arch (out "docker exec" name "uname -m")]
+                             (println "架構：" arch)
+                             (println "initialize：" (if (str/includes? init (str "\"version\":\"" version "\"")) "OK" init))
+                             (println "寫入：" (if (and (str/includes? add "card_id") (not (str/includes? add "isError\":true"))) "OK" add))
+                             (println "LaTeX 匯出：" (if (fs/exists? (str dir "/export")) "OK" exp))
+                             (println "事件串流：" (let [ct (str (:out (shell {:continue true :out :string :err :string} (str "curl -s -m 2 -o /dev/null -w %{content_type} localhost:" port "/api/events"))))] (if (str/includes? ct "text/event-stream") "OK" (str "回應類型為 " ct)))))
+                           (finally (shell {:continue true} "docker stop" name))))}
+
+  release:publish {:doc "打標籤 v<版本>、推送 main 與標籤、建立 GitHub Release 並附上 skill zip"
+                   :task (let [tag (str "v" version)]
+                           (when-not (fs/exists? skills-zip) (fail! "先執行 bb release:skills"))
+                           (shell "git tag -a" tag "-m" (str "Knot " version))
+                           (shell "git push origin main" tag)
+                           (shell "gh release create" tag skills-zip
+                                  "--title" (str "'Knot " version "'")
+                                  "--notes-file" (str "docs/releases/" version ".md")))}}}

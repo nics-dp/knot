@@ -649,11 +649,17 @@ agent 在背景寫入時，畫面要即時反映，也不能把 agent 的修改�
 
 原始碼與映像都放在 GitHub：程式碼推到 `nics-dp/knot`（internal：企業內成員可見；2026-11-19 建立），容器映像發佈為該 repo 的套件（GitHub Container Registry，`ghcr.io/nics-dp/knot`），skill 附在 GitHub Release（2026-11-19 使用者決定，取代原本「映像放雲端硬碟」）。
 
-- **版本：** 語意化版本，第一版為 `0.1.0`。版本號只寫在一處（例如 `resources/knot/version.txt`），MCP `initialize` 的 `serverInfo.version`、畫面（頂部列或說明處，最簡單即可）、映像標記都由它而來；發佈時在 git 打 `v0.1.0` 標籤。
+- **版本：** 語意化版本，第一版為 `0.1.0`。版本號只寫在 `resources/knot/version.txt`，MCP `initialize` 的 `serverInfo.version`、映像標記與標籤（`org.opencontainers.image.version`）、`bb release` 都由它而來；發佈時在 git 打 `v0.1.0` 標籤。發佈新版前先改這個檔與寫版本說明。映像帶 `org.opencontainers.image.source` 標籤，讓 ghcr.io 的套件連到 repo、繼承 internal 可見度。
 - **映像：** 一個標記同時包含 `linux/arm64`（Apple Silicon Mac）與 `linux/amd64`（Intel Mac、Windows、Linux）兩種架構，使用者 `docker pull ghcr.io/nics-dp/knot:0.1.0` 自動取得自己電腦的版本；另標 `latest` 指向最新版。
-- **建置與推送：** 以 GitHub Actions 在推送 `v*` 標籤時執行：測試（`bb test`、`bb cljs-test`、`bb lint`）→ `docker buildx` 建置兩種架構並推到 ghcr.io（用 workflow 的 `GITHUB_TOKEN`，不需另外的密碼）→ 對 amd64 映像做冒煙測試（啟動容器、`GET /api/report`、MCP `initialize` 與一次寫入、事件串流、LaTeX 匯出）→ 建立 Release，附上 skill 的 zip。arm64 在 Actions 上以模擬建置；發佈前另在本機（Apple Silicon）拉下來實際操作一次。
+- **建置與推送（本機）：** 不用 GitHub Actions（組織的 Actions 額度有限；2026-11-19 使用者決定），在開發者的 Mac 上以 `bb release` 依序執行，各步也可以單獨執行：
+  1. `bb release:check`：在 `main`、工作區乾淨、標籤還不存在、有版本說明 `docs/releases/<版本>.md`，`bb test`、`bb cljs-test`、`bb lint` 全過。
+  2. `bb release:image`：以 gh 的權杖登入 ghcr.io（權杖需有 `write:packages`），`docker buildx`（`docker-container` driver 的 `knot-builder`）建置 arm64 與 amd64 並推送 `<版本>` 與 `latest`。amd64 在 Apple Silicon 上以模擬建置（OrbStack 或 Docker Desktop 的 Rosetta）。
+  3. `bb release:smoke [linux/amd64|linux/arm64] [映像]`：啟動映像，檢查架構、MCP `initialize` 的版本、一次寫入（`build_outline`）、LaTeX 匯出與事件串流；`bb release` 只測本機架構，amd64 要另外執行 `bb release:smoke linux/amd64`。
+  4. `bb release:skills`：`skills/knot-*` 打包成 `target/knot-skills-<版本>.zip`。
+  5. `bb release:publish`：打 `v<版本>` 標籤、推送 `main` 與標籤、`gh release create` 附上 skill 的 zip，說明取自 `docs/releases/<版本>.md`。
+- **支援的電腦：** 常用環境是 Mac（Apple Silicon，`linux/arm64`）與 Windows（x86_64，Docker Desktop 跑 `linux/amd64` 容器）；Intel Mac 也用 amd64。ARM 的 Windows 不另外支援。
 - **skill：** `skills/knot-*` 打包成 `knot-skills-<版本>.zip` 附在 Release。skill 與 MCP 工具一起改版，換版本時兩者都要更新；skill 的內容只能引用該版本有的工具與欄位。
-- **Release 說明：** 新增與改變的功能、資料相容性、是否需要重新安裝 skill。
+- **Release 說明：** 寫在 `docs/releases/<版本>.md`，內容為新增與改變的功能、資料相容性、是否需要重新安裝 skill。
 - **README（給使用者）：**
   1. 安裝 Docker Desktop；以 GitHub 帳號建立 personal access token（權限 `read:packages`），`docker login ghcr.io` 登入一次（套件跟著 repo 為 internal，只有企業內成員能拉）；`docker pull ghcr.io/nics-dp/knot:<版本>`。
   2. 在報告目錄啟動（`docker run`，同第 2 節，映像名稱改為 ghcr.io 的完整名稱與版本），開啟 `http://localhost:3000`。
