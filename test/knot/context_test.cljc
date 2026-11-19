@@ -125,11 +125,12 @@
         pid (get-in s [:ui :selected])
         s (update-in s [:nodes pid] assoc :node/title "章的段落" :node/draft "章段意圖")
         ctx (context/generation-context s pid)]
-    (testing "段落的後一段只取緊接的段落：後面是下層標題時沒有"
-      (is (nil? (section ctx "下一段")))
+    (testing "段落的後一段依全文順序：後面是下層標題時取下層標題的第一段（跨標題）"
+      (is (= ["一"] (mapv :label (:entries (section ctx "下一段")))))
       (is (nil? (section ctx "前一段"))))
-    (testing "下層標題的第一段沒有前一段，不會取到上層的段落"
-      (is (nil? (section (context/generation-context s "a1") "前一段"))))
+    (testing "下層標題的第一段，前一段是上層標題的段落（跨標題），前一段的本文照常帶"
+      (let [e (first (:entries (section (context/generation-context s "a1") "前一段")))]
+        (is (= "章的段落" (:label e)))))
     (testing "引言的下層內容包含這一層直接的段落與下層標題"
       (let [ictx (context/generation-context s "iA")]
         (is (= [["章的段落" "章段意圖"] ["1.1 甲一／一" "很長的本文"] ["1.1 甲一／二" "本段意圖"] ["1.1 甲一／三" "後段意圖"]]
@@ -275,3 +276,12 @@
       (is (zero? (:chars e)))))
   (testing "空白的風格視同沒有"
     (is (= "尚未設定風格" (:text (first (:entries (section (context/generation-context (ui/set-style-text state "  ") "a2") "風格"))))))))
+
+(deftest cross-heading-prev-prose-test
+  (let [s (-> (ui/add-child state "A" :paragraph)
+              (as-> s (let [pid (get-in s [:ui :selected])]
+                        (update-in s [:nodes pid] assoc :node/title "章的段落" :node/prose (doc "章段本文")))))
+        e (first (:entries (section (context/generation-context s "a1") "前一段")))]
+    (testing "前一段在上層標題底下（跨標題）：本文照常帶"
+      (is (= {:label "章的段落" :text "章段本文" :source :prose}
+             (select-keys e [:label :text :source]))))))

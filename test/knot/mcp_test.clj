@@ -1083,3 +1083,80 @@
         (is (not (get-in res ["result" "isError"])))
         (is (= (dec n) (count (get (structured (call "list_todos" {})) "items"))))
         (is (= "不需要修改" (:note/text (last (notes/list-notes (d/db *conn*))))))))))
+
+(deftest same-group-auto-complete-todo-test
+  (let [id (card-id "各場域結果比較")
+        id-a (card-id "異常狀況說明")
+        todo-of (fn [card] (first (filter #(and (= :knot (:note/author %)) (= (parse-uuid card) (:note/node %)))
+                                          (notes/list-notes (d/db *conn*)))))]
+    (testing "同一 group：先改觸發段落，再改目標段落 → 待辦自動完成、連到修改組、回應有 todos_completed"
+      (let [out1 (structured (call "write_prose" {"card_id" id "text" "重寫一" "group" "重寫第三章"}))]
+        (is (= 2 (count (get out1 "todos_created"))))
+        (is (= :open (:note/state (todo-of id-a))))
+        (is (every? #(string? (:group-id %)) (:note/triggers (todo-of id-a))) "觸發記下 group-id"))
+      (let [out2 (structured (call "write_prose" {"card_id" id-a "text" "跟著重寫" "group" "重寫第三章"}))
+            t (todo-of id-a)]
+        (is (= [["異常狀況說明" "3.1"]] (map (juxt #(get % "title") #(get % "number")) (get out2 "todos_completed"))))
+        (is (every? string? (map #(get % "card_id") (get out2 "todos_completed"))))
+        (is (re-find #"已自動完成 1 則同組內已改寫的相關段落待辦" (get out2 "message")))
+        (is (= :done (:note/state t)))
+        (is (= (parse-uuid (get out2 "changeset_id")) (:note/changeset t)))
+        (is (= {:note/author :knot :note/text "同一組內已改寫（重寫第三章）" :note/reply-to (:note/id t)}
+               (select-keys (last (notes/list-notes (d/db *conn*))) [:note/author :note/text :note/reply-to])))
+        (testing "list_todos 不再列出；其他段落的待辦照舊"
+          (let [titles (map #(get-in % ["card" "title"]) (get (structured (call "list_todos" {})) "items"))]
+            (is (not (some #{"異常狀況說明"} titles)))
+            (is (some #{"節能效益估算"} titles))))))))
+
+(deftest different-group-todo-not-completed-test
+  (let [id (card-id "各場域結果比較")
+        id-a (card-id "異常狀況說明")]
+    (call "write_prose" {"card_id" id "text" "重寫一" "group" "甲組"})
+    (testing "不同組：不完成，之後已修改"
+      (Thread/sleep 5)
+      (let [out (structured (call "write_prose" {"card_id" id-a "text" "另一組改寫" "group" "乙組"}))
+            items (get (structured (call "list_todos" {})) "items")
+            todo (first (filter #(= "異常狀況說明" (get-in % ["card" "title"])) items))]
+        (is (nil? (get out "todos_completed")))
+        (is (some? todo))
+        (is (true? (get todo "modified_after")))))
+    (testing "沒有 group：不完成"
+      (call "write_prose" {"card_id" id-a "text" "沒有組"})
+      (is (some #(= "異常狀況說明" (get-in % ["card" "title"])) (get (structured (call "list_todos" {})) "items"))))))
+
+(deftest set-relation-across-headings-tool-test
+  (let [nodes (:nodes (state))
+        pairs (:prev (tree/adjacent-pairs nodes))
+        [to from] (first (filter (fn [[to from]] (not= (tree/parent nodes to) (tree/parent nodes from))) pairs))
+        out (structured (call "set_relation" {"from_id" (str from) "to_id" (str to) "type" "progression"}))]
+    (is (some? to) "範例報告有跨標題相鄰的段落")
+    (is (= 2 (count (get out "cards"))))
+    (is (= {:relation/type :progression :relation/pending false}
+           (select-keys (relation (str from) (str to)) [:relation/type :relation/pending])))
+    (testing "不相鄰的錯誤說出實際的前一段"
+      (let [far (first (remove #{from to} (keys pairs)))
+            msg (error-text (call "set_relation" {"from_id" (str far) "to_id" (str to) "type" "causal"}))]
+        (is (re-find #"前一段是" msg))))))
+
+(deftest same-group-intro-auto-complete-and-retrigger-test
+  (let [intro (:node/id (node-by #(= :intro (:node/kind %))))
+        ;; 該引言所屬標題底下需有本文的段落才會觸發；改寫引言前先確認它有待辦
+        todo-of (fn [card] (first (filter #(and (= :knot (:note/author %)) (= card (:note/node %)))
+                                          (notes/list-notes (d/db *conn*)))))
+        state0 (state)
+        h (tree/parent (:nodes state0) intro)
+        under (first (filter #(and (tree/paragraph? (:nodes state0) %) (seq (:node/prose (get (:nodes state0) %))))
+                             (tree/descendant-ids (:nodes state0) h)))]
+    (testing "同一 group 內先改段落（觸發上層引言的待辦）、再改寫引言 → 引言的待辦自動完成"
+      (call "write_prose" {"card_id" (str intro) "text" "引言先有本文"})
+      (call "write_prose" {"card_id" (str under) "text" "改寫" "group" "整章重寫"})
+      (is (= :open (:note/state (todo-of intro))) "引言有待辦")
+      (let [out (structured (call "write_prose" {"card_id" (str intro) "text" "引言跟著重寫" "group" "整章重寫"}))]
+        (is (= [(str intro)] (map #(get % "card_id") (get out "todos_completed"))))
+        (is (= :done (:note/state (todo-of intro))))))
+    (testing "重複觸發更新 group-id：同一段落在另一組再改，目標在該組改寫仍自動完成"
+      (call "write_prose" {"card_id" (str under) "text" "再改一" "group" "第二組"})
+      (is (some #(and (= :knot (:note/author %)) (= intro (:note/node %)) (= :open (:note/state %)))
+                (notes/list-notes (d/db *conn*))))
+      (let [out (structured (call "write_prose" {"card_id" (str intro) "text" "第二組改寫" "group" "第二組"}))]
+        (is (= 1 (count (get out "todos_completed"))))))))

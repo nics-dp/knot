@@ -181,7 +181,7 @@
         parent (tree/parent nodes id)
         intro (some-> parent (#(tree/intro-id nodes %)))
         prev (tree/prev-paragraph nodes id)
-        nxt (let [n (tree/next-sibling nodes id)] (when (tree/paragraph? nodes n) n))
+        nxt (tree/next-paragraph nodes id)
         {:keys [outgoing incoming]} (tree/remote-relations relations id)
         basis-targets (for [r outgoing :when (= :basis (:relation/type r))] (:relation/to r))
         ;; 前一段與依據目標一起計算字數上限
