@@ -45,6 +45,7 @@
    :node/status kw
    :node/version long*
    :node/target-chars long*
+   :node/appendix bool
    :node/label (assoc string :db/unique :db.unique/value)
    :node/facts refs
    :node/rows refs
@@ -233,7 +234,7 @@
 
 (def ^:private node-scalars
   [:node/kind :node/order-key :node/name :node/title :node/draft :node/status
-   :node/label :node/figure-file :node/caption :node/table-view :node/target-chars])
+   :node/label :node/figure-file :node/caption :node/table-view :node/target-chars :node/appendix])
 
 (defn- read-json [s]
   (when s (json/read-value s json/keyword-keys-object-mapper)))
@@ -855,6 +856,30 @@
          (reduce (fn [acc {id :node/id :as e}]
                    (if (or (some #(= id (:node/id %)) acc) (>= (count acc) n)) acc (conj acc e)))
                  []))))
+
+(defn last-edits
+  "每張卡片最近一次未被復原的修改：{node-id {:at :by}}（:by 為 :user 或 :agent），一次查詢算出全部。
+  建立卡片也算；沒有修改紀錄的卡片（例如只由匯入建立）不在結果中。
+  規則同 recent-cards：復原本身（:undo 修改組）與匯入不算修改，已被復原的修改組不算，
+  所以使用者修改後又復原，會回到先前那一筆（例如 agent 的建立）；卡片已刪除時不列。"
+  [db]
+  (let [exists? (set (d/q '[:find [?id ...] :where [_ :node/id ?id]] db))
+        undone (undone-ids db)]
+    (->> (d/q '[:find ?target ?at ?by ?cid
+                :where [?c :changeset/id ?cid] [?c :changeset/at ?at] [?c :changeset/origin ?o]
+                [(not= ?o :undo)] [(not= ?o :import)]
+                [(get-else $ ?c :changeset/by :user) ?by]
+                [?r :revision/changeset ?c] [?r :revision/collection :nodes]
+                [?r :revision/target ?target]]
+              db)
+         (remove #(undone (nth % 3)))
+         (reduce (fn [acc [target at by _]]
+                   (let [id (parse-uuid (subs target (count "nodes/")))]
+                     (if (and id (exists? id)
+                              (or (nil? (acc id)) (pos? (compare at (:at (acc id))))))
+                       (assoc acc id {:at at :by by})
+                       acc)))
+                 {}))))
 
 ;; ---------------------------------------------------------------------------
 ;; 卡片歷程（SPEC 5.4）

@@ -47,6 +47,7 @@
    :ui/set-viewport-height ui/set-viewport-height
    :ui/add-child ui/add-child
    :ui/paragraph->intro ui/paragraph->intro
+   :ui/set-appendix ui/set-appendix
    :ui/set-source-filter ui/set-source-filter
    :ui/set-source-query ui/set-source-query
    :ui/set-page ui/set-page

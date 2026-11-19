@@ -148,8 +148,23 @@
                  "十"
                  (when (pos? ones) (cn-digits ones))))))
 
+(defn appendix?
+  "id 是否為附錄章：只有第一層標題（章）可以是附錄（:node/appendix 為 true）。"
+  [nodes id]
+  (boolean (and (heading? nodes id)
+                (nil? (parent nodes id))
+                (get-in nodes [id :node/appendix]))))
+
+(defn appendix-letter
+  "第 i 個（0 起算）附錄的字母：A、B、…、Z，之後 AA、AB、…（不丟例外）。"
+  [i]
+  (loop [n i, acc ""]
+    (let [acc (str (char (+ 65 (mod n 26))) acc)]
+      (if (< n 26) acc (recur (dec (quot n 26)) acc)))))
+
 (defn numbering
-  "標題 id → 編號字串，例如 \"3\"、\"3.1\"、\"3.1.1.1\"。編號不儲存，一律由樹的位置計算。"
+  "標題 id → 編號字串，例如 \"3\"、\"3.1\"、\"3.1.1.1\"；附錄章為字母（\"A\"、\"A.1\"）。
+  一般章與附錄章各自從頭編號，一般章的編號不受附錄影響。編號不儲存，一律由樹的位置計算。"
   [nodes]
   (letfn [(walk [acc parent-id prefix]
             (let [heads (filterv #(heading? nodes %) (child-ids nodes parent-id))]
@@ -157,30 +172,49 @@
                         (let [num (str prefix (when prefix ".") (inc i))]
                           (walk (assoc acc id num) id num)))
                       acc
-                      (map-indexed vector heads))))]
-    (walk {} nil nil)))
+                      (map-indexed vector heads))))
+          (walk-top [acc ids number-of]
+            (reduce (fn [acc [i id]]
+                      (let [num (number-of i)]
+                        (walk (assoc acc id num) id num)))
+                    acc
+                    (map-indexed vector ids)))]
+    (let [tops (filterv #(heading? nodes %) (child-ids nodes nil))
+          app (filterv #(appendix? nodes %) tops)
+          body (filterv (complement (set app)) tops)]
+      (-> {}
+          (walk-top body #(str (inc %)))
+          (walk-top app appendix-letter)))))
+
+(defn chapter-label
+  "章的編號顯示：一般章「第三章」，附錄章「附錄 A」；num 是 `numbering` 的章編號。"
+  [num]
+  (if (re-matches #"\d+" num)
+    (str "第" (chinese-numeral (parse-long num)) "章")
+    (str "附錄 " num)))
+
+(defn heading-number
+  "標題的編號顯示：章為「第三章」「附錄 A」，其餘為「3.1」「A.1」；非標題為 nil。"
+  [nodes numbers id]
+  (when (heading? nodes id)
+    (let [num (get numbers id)]
+      (if (= 1 (depth nodes id)) (chapter-label num) num))))
 
 (defn display-title
-  "卡片上顯示的標題：章為「第三章 名稱」，其餘標題為「3.1 名稱」。"
+  "卡片上顯示的標題：章為「第三章 名稱」「附錄 A 名稱」，其餘標題為「3.1 名稱」。"
   [nodes numbers id]
   (let [n (get nodes id)]
     (case (:node/kind n)
-      :heading (let [num (get numbers id)]
-                 (if (= 1 (depth nodes id))
-                   (str "第" (chinese-numeral (parse-long num)) "章 " (:node/name n))
-                   (str num " " (:node/name n))))
+      :heading (str (heading-number nodes numbers id) " " (:node/name n))
       :intro "引言"
       (:node/title n))))
 
 (defn position-label
-  "卡片在報告中的位置：所屬最近一層標題的編號，章為「第三章」，其餘為「3.1.2」；
+  "卡片在報告中的位置：所屬最近一層標題的編號，章為「第三章」「附錄 A」，其餘為「3.1.2」「A.1」；
   不在任何標題底下時為 nil。"
   [nodes numbers id]
   (when-let [h (some #(when (heading? nodes %) %) (ancestor-ids nodes id))]
-    (let [num (get numbers h)]
-      (if (= 1 (depth nodes h))
-        (str "第" (chinese-numeral (parse-long num)) "章")
-        num))))
+    (heading-number nodes numbers h)))
 
 ;; ---------------------------------------------------------------------------
 ;; 合法性
@@ -236,13 +270,16 @@
 
 (defn order-ok?
   "moving-id 插入 parent-id 的 index 位置（不含 moving-id 的兄弟中計算）後，
-  兄弟的種類順序是否仍是：引言、段落、下層標題（SPEC 5.3）。"
+  兄弟的順序是否仍合法（SPEC 5.3）：標題底下是引言、段落、下層標題；
+  最上層是所有一般章，然後才是附錄章。"
   [nodes parent-id moving-id index]
   (let [sibs (vec (others nodes parent-id moving-id))
-        ranks (mapv #(kind-rank (kind nodes %))
-                    (concat (subvec sibs 0 index)
-                            [moving-id]
-                            (subvec sibs index)))]
+        rank (if (nil? parent-id)
+               #(if (appendix? nodes %) 1 0)
+               #(kind-rank (kind nodes %)))
+        ranks (mapv rank (concat (subvec sibs 0 index)
+                                 [moving-id]
+                                 (subvec sibs index)))]
     (apply <= ranks)))
 
 (defn- into-index
@@ -280,11 +317,13 @@
         slot))))
 
 (defn move
-  "依 placement 移動卡片：只改被移動卡片的 parent 與 order-key。"
+  "依 placement 移動卡片：只改被移動卡片的 parent 與 order-key；
+  附錄章移到別的標題底下（不再是章）時一併清掉附錄標記。"
   [nodes moving-id {:keys [parent index]}]
-  (update nodes moving-id assoc
-          :node/parent parent
-          :node/order-key (slot-key nodes parent moving-id index)))
+  (cond-> (update nodes moving-id assoc
+                  :node/parent parent
+                  :node/order-key (slot-key nodes parent moving-id index))
+    parent (update moving-id dissoc :node/appendix)))
 
 (defn sibling-placement
   "與相鄰的兄弟交換位置（上移 delta=-1、下移 delta=1）的 placement；不能移動時為 nil。"
@@ -299,21 +338,41 @@
 
 (defn insert-index
   "在 parent-id 下新增 kind 卡片時的位置：引言最前面；段落（與表、圖）接在最後一個
-  段落之後、第一個下層標題之前；標題放最後。"
-  [nodes parent-id kind]
-  (let [sibs (children nodes parent-id)
-        r (kind-rank kind)]
-    (if (= kind :intro)
-      0
-      (count (take-while #(<= (kind-rank (:node/kind %)) r) sibs)))))
+  段落之後、第一個下層標題之前；標題放最後。最上層的章：一般章放在最後一個一般章之後
+  （附錄之前），appendix 為真時（新增附錄章）放在最後。"
+  ([nodes parent-id kind] (insert-index nodes parent-id kind false))
+  ([nodes parent-id kind appendix]
+   (let [sibs (children nodes parent-id)
+         r (kind-rank kind)]
+     (cond
+       (= kind :intro) 0
+       (and (nil? parent-id) (= kind :heading) (not appendix))
+       (count (take-while #(not (appendix? nodes (:node/id %))) sibs))
+       (and (nil? parent-id) (= kind :heading)) (count sibs)
+       :else (count (take-while #(<= (kind-rank (:node/kind %)) r) sibs))))))
 
 (defn insert-key
   "在 parent-id 下新增 kind 卡片時的 order-key（位置見 `insert-index`）。"
-  [nodes parent-id kind]
-  (let [sibs (children nodes parent-id)
-        i (insert-index nodes parent-id kind)]
-    (ok/between (when (pos? i) (:node/order-key (nth sibs (dec i))))
-                (when (< i (count sibs)) (:node/order-key (nth sibs i))))))
+  ([nodes parent-id kind] (insert-key nodes parent-id kind false))
+  ([nodes parent-id kind appendix]
+   (let [sibs (children nodes parent-id)
+         i (insert-index nodes parent-id kind appendix)]
+     (ok/between (when (pos? i) (:node/order-key (nth sibs (dec i))))
+                 (when (< i (count sibs)) (:node/order-key (nth sibs i)))))))
+
+(defn set-appendix
+  "把章 id 設為附錄（appendix 為真，移到附錄區最後）或取消附錄（移到一般章最後）。
+  不是章、或已經是目標狀態時不變。"
+  [nodes id appendix]
+  (if (or (not (heading? nodes id))
+          (some? (parent nodes id))
+          (= (boolean appendix) (appendix? nodes id)))
+    nodes
+    (let [others (dissoc nodes id)
+          k (insert-key others nil :heading (boolean appendix))]
+      (update nodes id #(if appendix
+                          (assoc % :node/appendix true :node/order-key k)
+                          (-> % (dissoc :node/appendix) (assoc :node/order-key k)))))))
 
 (defn key-after
   "緊接在 id 後面的 order-key。"
@@ -489,6 +548,15 @@
                                                                (get by-parent id)))))
                     acc)))]
     (reduce total {} (map :node/id (get by-parent nil)))))
+
+(defn report-chars
+  "報告本文的字數合計：所有一般章的合計，不含附錄章（附錄自己的合計照常在 `char-counts`）。"
+  [state]
+  (let [counts (char-counts state)
+        nodes (:nodes state)]
+    (reduce + 0 (for [id (child-ids nodes nil)
+                      :when (and (heading? nodes id) (not (appendix? nodes id)))]
+                  (get counts id 0)))))
 
 (defn subtree-chars
   "id 底下（含自己）的字數合計：段落與引言為本文字數，標題為整章／整節合計，其他為 nil。

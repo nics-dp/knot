@@ -1160,3 +1160,128 @@
                 (notes/list-notes (d/db *conn*))))
       (let [out (structured (call "write_prose" {"card_id" (str intro) "text" "第二組改寫" "group" "第二組"}))]
         (is (= 1 (count (get out "todos_completed"))))))))
+
+;; ---------------------------------------------------------------------------
+;; 附錄
+
+(deftest build-outline-appendix-tool-test
+  (let [out (structured
+             (call "build_outline"
+                   {"parent_id" nil
+                    "items" [{"kind" "heading" "title" "後續規劃"}
+                             {"kind" "heading" "title" "逐週數據" "appendix" true
+                              "children" [{"kind" "paragraph" "title" "週報"
+                                           "children" [{"kind" "table" "title" "週次表" "label" "weekly"}
+                                                       {"kind" "figure" "title" "趨勢圖"}]}
+                                          {"kind" "heading" "title" "細項"}]}
+                             {"kind" "heading" "title" "問卷" "appendix" true}]}))
+        cards (get out "cards")]
+    (testing "回應的編號、appendix 與表格、圖的 label"
+      (is (= [["第五章" nil] ["附錄 A" true] [nil nil] [nil nil] [nil nil] ["A.1" nil] ["附錄 B" true]]
+             (mapv #(vector (get % "number") (get % "appendix")) cards)))
+      (is (= "tab:weekly" (get (nth cards 3) "label")))
+      (is (re-matches #"fig:[a-z0-9]{4}" (get (nth cards 4) "label"))))
+    (testing "get_outline 與 get_card 帶 appendix"
+      (let [o (get (outline) "cards")
+            a (some #(when (= "逐週數據" (get % "title")) %) o)]
+        (is (= ["附錄 A" true] ((juxt #(get % "number") #(get % "appendix")) a)))
+        (is (= "A.1" (get (some #(when (= "細項" (get % "title")) %) o) "number")))
+        (is (nil? (get (some #(when (= "計畫概述" (get % "title")) %) o) "appendix")))
+        (let [card (structured (call "get_card" {"card_id" (get a "card_id")}))]
+          (is (true? (get card "appendix")))
+          (is (= "附錄 A" (get card "number"))))))
+    (testing "一般章排在附錄章之後：整批不寫，指出 items[i]"
+      (let [n (count (changesets))
+            text (error-text (call "build_outline"
+                                   {"parent_id" nil
+                                    "items" [{"kind" "heading" "title" "甲" "appendix" true}
+                                             {"kind" "heading" "title" "乙"}]}))]
+        (is (re-find #"^items\[1\]：一般章要排在所有附錄章之前" text))
+        (is (= n (count (changesets))))))
+    (testing "非章帶 appendix"
+      (is (re-find #"appendix 只用於章"
+                   (error-text (call "add_card" {"kind" "paragraph" "parent_id" (card-id "1.1 計畫緣起") "title" "x" "appendix" true}))))
+      (is (re-find #"appendix 只用於章"
+                   (error-text (call "build_outline"
+                                     {"parent_id" nil
+                                      "items" [{"kind" "heading" "title" "甲"
+                                                "children" [{"kind" "heading" "title" "乙" "appendix" true}]}]})))))
+    (testing "add_card：一般章放在附錄前、after_id 落在錯誤區域"
+      (let [r (structured (call "add_card" {"kind" "heading" "parent_id" nil "title" "新一般章"}))]
+        (is (= "第六章" (get-in r ["cards" 0 "number"]))))
+      (is (re-find #"不能排在附錄之後"
+                   (error-text (call "add_card" {"kind" "heading" "parent_id" nil "title" "x" "after_id" (card-id "附錄 A 逐週數據")}))))
+      (let [r (structured (call "add_card" {"kind" "heading" "parent_id" nil "title" "附錄新" "appendix" true}))]
+        (is (= ["附錄 C" true] ((juxt #(get-in % ["cards" 0 "number"]) #(get-in % ["cards" 0 "appendix"])) r)))))))
+
+(deftest update-card-appendix-tool-test
+  (let [id (card-id "第二章 執行方法")
+        before (count (changesets))]
+    (testing "設為附錄：移到附錄區最後，後面的一般章重新編號"
+      (let [out (structured (call "update_card" {"card_id" id "appendix" true}))]
+        (is (= ["附錄 A" true] ((juxt #(get-in % ["cards" 0 "number"]) #(get-in % ["cards" 0 "appendix"])) out)))
+        (is (= (inc before) (count (changesets))))
+        (is (= "第二章" (get (some #(when (= "執行成果" (get % "title")) %) (get (outline) "cards")) "number")))
+        (is (= ["第一章" "第二章" "第三章" "附錄 A"]
+               (mapv #(get % "number") (filter #(= 1 (get % "depth")) (get (outline) "cards")))))))
+    (testing "取消附錄：移到一般章最後"
+      (call "update_card" {"card_id" (card-id "第一章 計畫概述") "appendix" true})
+      (is (= ["附錄 A" "附錄 B"]
+             (mapv #(get % "number") (filter #(and (= 1 (get % "depth")) (get % "appendix")) (get (outline) "cards")))))
+      (let [out (structured (call "update_card" {"card_id" id "appendix" false}))]
+        (is (= "第三章" (get-in out ["cards" 0 "number"])))
+        (is (nil? (get-in out ["cards" 0 "appendix"])))))
+    (testing "已是該狀態：不寫入"
+      (let [n (count (changesets))
+            out (structured (call "update_card" {"card_id" id "appendix" false}))]
+        (is (nil? (get out "changeset_id")))
+        (is (= n (count (changesets))))))
+    (testing "非章"
+      (is (re-find #"appendix 只用於章"
+                   (error-text (call "update_card" {"card_id" (card-id "選定原則") "appendix" true})))))))
+
+(deftest move-card-appendix-tool-test
+  (call "update_card" {"card_id" (card-id "第四章 結論與建議") "appendix" true})
+  (let [a (card-id "第一章 計畫概述")
+        x (card-id "附錄 A 結論與建議")
+        n (count (changesets))]
+    (is (re-find #"不能排在附錄之後" (error-text (call "move_card" {"card_id" a "target_id" x "position" "after"}))))
+    (is (re-find #"附錄章要排在所有一般章之後" (error-text (call "move_card" {"card_id" x "target_id" a "position" "before"}))))
+    (is (= n (count (changesets))))
+    (testing "同區可以"
+      (is (some? (structured (call "move_card" {"card_id" a "target_id" (card-id "第三章 執行成果") "position" "after"})))))))
+
+(deftest get-outline-last-edited-test
+  (let [cards (fn [] (into {} (map (juxt #(get % "title") identity)) (get (outline) "cards")))
+        edited (fn [title] ((juxt #(get % "last_edited_by") #(string? (get % "last_edited_at"))) (get (cards) title)))
+        id (card-id "選定原則")
+        edit-draft! (fn [by text]
+                      (let [node (get (:nodes (state)) (parse-uuid id))]
+                        (Thread/sleep 5)
+                        (db/apply-changes! *conn* {:by by :label "編輯文字" :origin :manual
+                                                   :changes {:nodes {:upsert [(assoc node :node/draft text)]}}})))]
+    (testing "匯入建立的卡片沒有修改紀錄：省略欄位"
+      (is (= [nil false] (edited "選定原則"))))
+    (testing "agent 建立的卡片為 agent"
+      (call "add_card" {"kind" "paragraph" "parent_id" (card-id "1.1 計畫緣起") "title" "新段落"})
+      (is (= ["agent" true] (edited "新段落"))))
+    (testing "使用者修改後為 user，其他卡片不受影響"
+      (edit-draft! :user "使用者改過")
+      (is (= ["user" true] (edited "選定原則")))
+      (is (= ["agent" true] (edited "新段落"))))
+    (testing "agent 再修改回到 agent"
+      (call "update_card" {"card_id" id "intent" "agent 又改"})
+      (is (= ["agent" true] (edited "選定原則"))))
+    (testing "使用者修改後復原，回到先前未被復原的那一筆"
+      (edit-draft! :user "使用者再改")
+      (is (= "user" (first (edited "選定原則"))))
+      (db/undo! *conn*)
+      (is (= "agent" (first (edited "選定原則")))))
+    (testing "其他卡片不受使用者修改與復原影響"
+      (is (= ["agent" true] (edited "新段落"))))
+    (testing "時間是 ISO 字串"
+      (is (re-matches #"\d{4}-\d{2}-\d{2}T.*Z" (get (get (cards) "新段落") "last_edited_at"))))
+    (testing "description 說明欄位用途"
+      (let [d (some #(when (= "get_outline" (get % "name")) (get % "description")) (get-in (rpc "tools/list") [:body "result" "tools"]))]
+        (is (str/includes? d "last_edited_by"))
+        (is (str/includes? d "get_cards"))))))

@@ -499,3 +499,63 @@
         (is (= "新名" (get-in saved [:report :report/title])))
         (is (false? (ui/report-setup-needed? saved)))
         (is (nil? (get-in saved [:ui :report-setup])))))))
+
+;; ---------------------------------------------------------------------------
+;; 附錄
+
+(def appendix-report
+  {:report/title "測試報告"
+   :ui/selected "A"
+   :tree [{:node/id "A" :node/kind :heading :node/name "甲"
+           :children [{:node/id "a1" :node/kind :paragraph :node/title "一" :node/status :none}]}
+          {:node/id "B" :node/kind :heading :node/name "乙"}
+          {:node/id "X" :node/kind :heading :node/name "丙" :node/appendix true}
+          {:node/id "Y" :node/kind :heading :node/name "丁" :node/appendix true}]})
+
+(def appendix-state (ui/init-state appendix-report))
+
+(defn- top-names [s] (mapv :node/name (tree/children (:nodes s) nil)))
+
+(deftest set-appendix-test
+  (testing "設為附錄：移到附錄區最後，記成一個可復原的修改組"
+    (let [s (ui/set-appendix appendix-state "A" true)]
+      (is (= ["乙" "丙" "丁" "甲"] (top-names s)))
+      (is (true? (get-in s [:nodes "A" :node/appendix])))
+      (is (= "A" (get-in s [:ui :selected])))
+      (is (= "設為附錄：「甲」" (:label (peek (:history s)))))
+      (is (re-find #"附錄 C" (get-in s [:ui :toast])))
+      (let [u (ui/undo s)]
+        (is (= (:nodes appendix-state) (:nodes u)))
+        (is (empty? (:history u))))))
+  (testing "取消附錄：移到一般章最後"
+    (let [s (ui/set-appendix appendix-state "Y" false)]
+      (is (= ["甲" "乙" "丁" "丙"] (top-names s)))
+      (is (not (contains? (get-in s [:nodes "Y"]) :node/appendix)))
+      (is (= "取消附錄：「丁」" (:label (peek (:history s)))))
+      (is (= (:nodes appendix-state) (:nodes (ui/undo s))))))
+  (testing "已是目標狀態、不是章：不變、不進復原紀錄"
+    (is (= appendix-state (ui/set-appendix appendix-state "X" true)))
+    (is (= appendix-state (ui/set-appendix appendix-state "A" false)))
+    (is (= appendix-state (ui/set-appendix appendix-state "a1" true)))))
+
+(deftest add-chapter-with-appendix-test
+  (testing "新增一章（add-child nil）放在一般章最後，在附錄之前"
+    (let [s (ui/add-child appendix-state nil :heading)]
+      (is (= ["甲" "乙" "新標題" "丙" "丁"] (top-names s)))
+      (is (not (tree/appendix? (:nodes s) (get-in s [:ui :selected]))))))
+  (testing "在一般章旁新增同層標題：一般章；在附錄章旁新增：附錄章"
+    (let [s (ui/add-sibling appendix-state "B")
+          t (ui/add-sibling appendix-state "X")]
+      (is (= ["甲" "乙" "新標題" "丙" "丁"] (top-names s)))
+      (is (not (tree/appendix? (:nodes s) (get-in s [:ui :selected]))))
+      (is (= ["甲" "乙" "丙" "新標題" "丁"] (top-names t)))
+      (is (tree/appendix? (:nodes t) (get-in t [:ui :selected]))))))
+
+(deftest drag-across-appendix-boundary-test
+  (testing "拖曳放置判斷：一般章不能放到附錄旁，附錄不能放到一般章旁"
+    (let [moved (fn [s id target pos]
+                  (-> s (assoc-in [:ui :drag] id) (assoc-in [:ui :over] {:id target :pos pos}) ui/drop-dragged))]
+      (is (= (:nodes appendix-state) (:nodes (moved appendix-state "A" "X" :after))))
+      (is (= (:nodes appendix-state) (:nodes (moved appendix-state "Y" "B" :before))))
+      (is (= ["乙" "甲" "丙" "丁"] (top-names (moved appendix-state "A" "B" :after))))
+      (is (= ["甲" "乙" "丁" "丙"] (top-names (moved appendix-state "X" "Y" :after)))))))

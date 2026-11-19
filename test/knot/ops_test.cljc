@@ -515,3 +515,102 @@
       (is (str/starts-with? (:error (ops/build-outline s {:parent-id nil
                                                           :items [{:kind :heading :title "丙" :children [{:kind :paragraph :title "p" :target-chars -1}]}]}))
                             "items[0].children[0]")))))
+
+;; ---------------------------------------------------------------------------
+;; 附錄
+
+(defn- app-state
+  "第一章 甲、第二章 乙、附錄 A 丙（段落 x1）、附錄 B 丁。"
+  []
+  {:nodes (-> (tree/from-nested
+               [(h "A" "甲" (p "a1")) (h "B" "乙" (p "b1"))
+                (h "X" "丙" (p "x1")) (h "Y" "丁")])
+              (assoc-in ["X" :node/appendix] true)
+              (assoc-in ["Y" :node/appendix] true))
+   :relations []})
+
+(defn- top [s] (mapv #(:node/name %) (tree/children (:nodes s) nil)))
+
+(deftest add-card-appendix-test
+  (let [s (app-state)]
+    (testing "新增一般章放在附錄之前"
+      (is (= ["甲" "乙" "戊" "丙" "丁"]
+             (top (:state (ops/add-card s {:kind :heading :parent-id nil :title "戊"}))))))
+    (testing "附錄章放在附錄區最後，並帶標記"
+      (let [r (ops/add-card s {:kind :heading :parent-id nil :title "戊" :appendix true})
+            id (first (:created r))]
+        (is (= ["甲" "乙" "丙" "丁" "戊"] (top (:state r))))
+        (is (true? (get-in r [:state :nodes id :node/appendix])))
+        (is (= "附錄 C" (ops/heading-number (get-in r [:state :nodes]) (tree/numbering (get-in r [:state :nodes])) id)))))
+    (testing "appendix: false 等於一般章"
+      (let [r (ops/add-card s {:kind :heading :parent-id nil :title "戊" :appendix false})]
+        (is (= ["甲" "乙" "戊" "丙" "丁"] (top (:state r))))
+        (is (not (contains? (get-in r [:state :nodes (first (:created r))]) :node/appendix)))))
+    (testing "非章帶 appendix 是錯誤"
+      (is (re-find #"appendix 只用於章" (error-of (ops/add-card s {:kind :paragraph :parent-id "A" :title "x" :appendix true}))))
+      (is (re-find #"appendix 只用於章" (error-of (ops/add-card s {:kind :heading :parent-id "A" :title "x" :appendix true}))))
+      (is (re-find #"true 或 false" (error-of (ops/add-card s {:kind :heading :parent-id nil :title "x" :appendix "yes"})))))
+    (testing "after_id 落在錯誤區域"
+      (is (re-find #"不能排在附錄之後"
+                   (error-of (ops/add-card s {:kind :heading :parent-id nil :title "戊" :after-id "X"}))))
+      (is (re-find #"附錄章要排在所有一般章之後"
+                   (error-of (ops/add-card s {:kind :heading :parent-id nil :title "戊" :appendix true :after-id "A"}))))
+      (is (= ["甲" "乙" "戊" "丙" "丁"]
+             (top (:state (ops/add-card s {:kind :heading :parent-id nil :title "戊" :after-id "B"})))))
+      (is (= ["甲" "乙" "丙" "戊" "丁"]
+             (top (:state (ops/add-card s {:kind :heading :parent-id nil :title "戊" :appendix true :after-id "X"}))))))))
+
+(deftest build-outline-appendix-test
+  (let [s (app-state)]
+    (testing "附錄章接在一般章後面時放到附錄區最後"
+      (let [r (ops/build-outline s {:parent-id nil
+                                    :items [{:kind :heading :title "戊"}
+                                            {:kind :heading :title "己" :appendix true :children [{:kind :heading :title "己一"}]}
+                                            {:kind :heading :title "庚" :appendix true}]})
+            nodes (get-in r [:state :nodes])
+            nums (tree/numbering nodes)]
+        (is (= ["甲" "乙" "戊" "丙" "丁" "己" "庚"] (top (:state r))))
+        (is (= ["第三章" "附錄 C" "C.1" "附錄 D"]
+               (mapv #(ops/heading-number nodes nums %) (:created r))))))
+    (testing "一般章排在附錄章之後：整批不寫，指出 items[i]"
+      (let [r (ops/build-outline s {:parent-id nil
+                                    :items [{:kind :heading :title "戊" :appendix true}
+                                            {:kind :heading :title "己"}]})]
+        (is (re-find #"^items\[1\]：一般章要排在所有附錄章之前" (error-of r)))
+        (is (nil? (:state r)))))
+    (testing "下層帶 appendix：指出位置"
+      (is (re-find #"^items\[0\]\.children\[0\]：appendix 只用於章"
+                   (error-of (ops/build-outline s {:parent-id nil
+                                                   :items [{:kind :heading :title "戊"
+                                                            :children [{:kind :heading :title "x" :appendix true}]}]})))))))
+
+(deftest update-card-appendix-test
+  (let [s (app-state)]
+    (testing "設為附錄：移到附錄區最後"
+      (let [r (ops/update-card s {:id "A" :appendix true})]
+        (is (= ["乙" "丙" "丁" "甲"] (top (:state r))))
+        (is (true? (get-in r [:state :nodes "A" :node/appendix])))
+        (is (= [(get-in r [:state :nodes "A" :node/name])] ["甲"]))))
+    (testing "取消附錄：移到一般章最後"
+      (let [r (ops/update-card s {:id "Y" :appendix false})]
+        (is (= ["甲" "乙" "丁" "丙"] (top (:state r))))
+        (is (not (contains? (get-in r [:state :nodes "Y"]) :node/appendix)))))
+    (testing "已是該狀態：不移動"
+      (is (= ["甲" "乙" "丙" "丁"] (top (:state (ops/update-card s {:id "X" :appendix true})))))
+      (is (= ["甲" "乙" "丙" "丁"] (top (:state (ops/update-card s {:id "A" :appendix false}))))))
+    (testing "可同時改名稱"
+      (let [r (ops/update-card s {:id "A" :title "新名" :appendix true})]
+        (is (= ["乙" "丙" "丁" "新名"] (top (:state r))))))
+    (testing "只有章"
+      (is (re-find #"appendix 只用於章" (error-of (ops/update-card s {:id "a1" :appendix true}))))
+      (is (re-find #"appendix 只用於章" (error-of (ops/update-card (update-in s [:nodes "A"] assoc :node/parent "B") {:id "A" :appendix true})))))))
+
+(deftest move-card-appendix-test
+  (let [s (app-state)]
+    (testing "不能跨區"
+      (is (re-find #"不能排在附錄之後" (error-of (ops/move-card s {:id "A" :target-id "X" :position :after}))))
+      (is (re-find #"不能排在附錄之後" (error-of (ops/move-card s {:id "A" :target-id "Y" :position :before}))))
+      (is (re-find #"附錄章要排在所有一般章之後" (error-of (ops/move-card s {:id "Y" :target-id "A" :position :before})))))
+    (testing "同區可以"
+      (is (= ["乙" "甲" "丙" "丁"] (top (:state (ops/move-card s {:id "A" :target-id "B" :position :after})))))
+      (is (= ["甲" "乙" "丁" "丙"] (top (:state (ops/move-card s {:id "Y" :target-id "X" :position :before}))))))))
