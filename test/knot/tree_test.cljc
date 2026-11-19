@@ -283,3 +283,97 @@
       (is (= ["iA" "a1" "a2" "a3"] cycle) "環上的卡片與被它們擋住的卡片（a3、章的引言）")
       (is (= cycle (last batches)))
       (is (= [["x1" "b1"] ["b2"]] (butlast batches))))))
+
+
+(deftest adjacent-paragraph-across-headings-test
+  (testing "全文順序：跨標題、隔引言、隔表與圖都是相鄰"
+    (is (= "a3" (tree/prev-paragraph nodes "x1")) "隔著 1.2、1.2.1、1.2.1.1 三層標題")
+    (is (= "x1" (tree/prev-paragraph nodes "b1")) "隔著第二章標題")
+    (is (= "a1" (tree/prev-paragraph nodes "a2")) "表 t1 在 a2 底下，不影響 a2 之後")
+    (is (= "a2" (tree/prev-paragraph nodes "a3")) "隔著 a2 底下的表")
+    (is (= "b1" (tree/next-paragraph nodes "x1")))
+    (is (= "x1" (tree/next-paragraph nodes "a3")))
+    (is (nil? (tree/next-paragraph nodes "b2")) "最後一段沒有後一段"))
+  (testing "第一段沒有前一段；引言、標題、表不是段落"
+    (is (nil? (tree/prev-paragraph nodes "a1")) "章的引言不參與")
+    (is (nil? (tree/prev-paragraph nodes "iA")))
+    (is (nil? (tree/next-paragraph nodes "A")))
+    (is (nil? (tree/prev-paragraph nodes "t1"))))
+  (testing "引言夾在中間也略過"
+    (let [n (tree/from-nested [(h "A" "甲" (h "A1" "甲一" (p "a1")) (h "A2" "甲二" (intro "iA2") (p "a2")))])]
+      (is (= "a1" (tree/prev-paragraph n "a2")))))
+  (testing "隔圖"
+    (let [n (tree/from-nested [(h "A" "甲" (p "a1" {:node/id "f1" :node/kind :figure}) (p "a2"))])]
+      (is (= "a1" (tree/prev-paragraph n "a2")))))
+  (testing "adjacent-pairs 一次算出全部"
+    (let [{:keys [prev next]} (tree/adjacent-pairs nodes)]
+      (is (= {"a2" "a1" "a3" "a2" "x1" "a3" "b1" "x1" "b2" "b1"} prev))
+      (is (= {"a1" "a2" "a2" "a3" "a3" "x1" "x1" "b1" "b1" "b2"} next)))))
+
+(deftest reconcile-adjacent-test
+  (let [rels [(rel "a1" "a2" :causal) (rel "a2" "a3" :progression) (rel "a3" "x1" :contrast)
+              (rel "x1" "b1" :example) (rel "b1" "b2" :causal)
+              {:relation/from "b2" :relation/to "a1" :relation/type :summarizes :relation/remote true}]
+        by-pair (fn [rs] (into {} (map (juxt (juxt :relation/from :relation/to) identity)) rs))
+        reconcile (fn [nodes'] (by-pair (tree/reconcile-adjacent rels nodes nodes')))]
+    (testing "沒有變動：關係不動"
+      (is (= (by-pair rels) (reconcile nodes))))
+    (testing "移動整個標題：邊界兩側的段落待確認，舊關係移除，標題內部的關係保留"
+      ;; 把 A2（含 x1）移到 A1 之前：全文順序 a... 變成 x1 a1 a2 a3 b1
+      (let [moved (tree/move nodes "A2" {:parent "A" :index 1})
+            r (reconcile moved)]
+        (is (= ["iA" "A2" "A1"] (tree/child-ids moved "A")))
+        (is (:relation/pending (r ["x1" "a1"])) "x1 成為 a1 的前一段")
+        (is (:relation/pending (r ["a3" "b1"])) "a3 成為 b1 的前一段")
+        (is (nil? (r ["a3" "x1"])))
+        (is (nil? (r ["x1" "b1"])))
+        (is (= :causal (:relation/type (r ["a1" "a2"]))) "不受影響的關係保留")
+        (is (not (:relation/pending (r ["a1" "a2"]))))
+        (is (= :summarizes (:relation/type (r ["b2" "a1"]))) "不相鄰關係保留")))
+    (testing "移動段落（原本已有關係時保留類型，標為待確認）"
+      (let [moved (tree/move nodes "x1" {:parent "A1" :index 0})
+            r (reconcile moved)]
+        (is (= ["x1" "a1" "a2" "a3"] (tree/child-ids moved "A1")))
+        (is (nil? (r ["a3" "x1"])))
+        (is (nil? (r ["x1" "b1"])))
+        (is (:relation/pending (r ["a3" "b1"])) "舊位置的下一段承接新的前一段")
+        (is (:relation/pending (r ["x1" "a1"])))
+        (is (nil? (:relation/type (r ["x1" "a1"]))) "原本沒有關係：未設定、待確認")
+        (is (:relation/pending (r ["a3" "b1"])))))
+    (testing "刪除標題：前後段落接起來，待確認"
+      (let [gone #{"A2" "A21" "A211" "x1"}
+            nodes' (apply dissoc nodes gone)
+            rels' (vec (remove #(or (gone (:relation/from %)) (gone (:relation/to %))) rels))
+            r (by-pair (tree/reconcile-adjacent rels' nodes nodes'))]
+        (is (:relation/pending (r ["a3" "b1"])))
+        (is (nil? (r ["x1" "b1"])))
+        (is (= :causal (:relation/type (r ["a1" "a2"]))))))
+    (testing "新增段落：後面的段落待確認，新段落本身沒有關係，舊的相鄰關係移除"
+      (let [nodes' (assoc nodes "n1" {:node/id "n1" :node/kind :paragraph :node/parent "A1"
+                                      :node/order-key (tree/key-after nodes "a1")})
+            r (reconcile nodes')]
+        (is (:relation/pending (r ["n1" "a2"])))
+        (is (nil? (r ["a1" "a2"])))
+        (is (nil? (r ["a1" "n1"])))
+        (is (= :progression (:relation/type (r ["a2" "a3"]))))))))
+
+(deftest writing-order-across-headings-test
+  (testing "同一 parent 的前一段照常是先後；跨標題沒有已確認的關係時不連邊"
+    (let [b (:batches (tree/writing-order nodes []))]
+      (is (= ["a1" "x1" "b1"] (first b)) "x1 與 b1 各自是第一批，可並行")))
+  (testing "跨標題已確認、有類型的相鄰關係才連邊"
+    (is (= [["a1" "x1"] ["a2" "b1"] ["a3" "b2"] ["iA"]]
+           (:batches (tree/writing-order nodes [(rel "x1" "b1" :causal)])))
+        "x1→b1 已確認：b1 在 x1 之後；a1 與 x1 並行（a3→x1 沒有關係）")
+    (is (= [["a1" "x1" "b1"] ["a2" "b2"] ["a3"] ["iA"]]
+           (:batches (tree/writing-order nodes [{:relation/from "x1" :relation/to "b1" :relation/type :causal :relation/pending true}
+                                                {:relation/from "a3" :relation/to "x1" :relation/pending false}])))
+        "待確認或沒有類型的不連邊")
+    (is (= [["a1"] ["a2"] ["a3"] ["x1"] ["iA" "b1"] ["b2"]]
+           (:batches (tree/writing-order nodes [(rel "a3" "x1" :causal) (rel "x1" "b1" :causal)])))
+        "連邊後 x1 在 a3 之後、b1 在 x1 之後"))
+  (testing "依賴：因果、遞進跨標題照樣成立"
+    (is (some #{{:id "x1" :dependency :argument :reason "因果承接"}}
+              (tree/dependents nodes [(rel "a3" "x1" :causal)] "a3")))
+    (is (some #{{:id "b1" :dependency :argument :reason "遞進承接"}}
+              (tree/dependents nodes [(rel "x1" "b1" :progression)] "x1")))))

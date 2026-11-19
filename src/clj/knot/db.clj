@@ -668,12 +668,13 @@
                                        (when-let [v (:node/version (d/pull db-after [:node/version] [:node/id id]))]
                                          [id v]))))
                              (get-in changes [:nodes :upsert]))}
-      written? (assoc :changeset/id cs-id))))
+      written? (assoc :changeset/id cs-id)
+      (and written? group-id) (assoc :changeset/group-id group-id))))
 
 (defn apply-changes!
   "把前端的變動（knot.sync/diff 的格式）寫成一個修改組。
   選項：:by（:user 預設或 :agent）、:check-versions?（見下）、:undoes（復原用）。
-  回傳 {:changeset/id uuid :versions {卡片 id 寫入後的版本}}；沒有實際變動時沒有 :changeset/id。
+  回傳 {:changeset/id uuid :changeset/group-id（屬於 group 時）:versions {卡片 id 寫入後的版本}}；沒有實際變動時沒有 :changeset/id。
   :check-versions? 為 true 時，已存在的卡片若送來的 :node/version 與資料庫目前的不同，
   就不寫入任何東西，回傳 {:conflicts [{:node/id .. :expected 送來的 :actual 目前的}]}。
   檢查與寫入在同一把鎖內，兩個請求不會同時通過檢查。changes 為空時回傳 nil。"

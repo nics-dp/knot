@@ -168,16 +168,12 @@
                 (let [id (random-uuid)
                       k (if after-id (tree/key-after nodes after-id) (tree/insert-key nodes parent-id kind))
                       nodes' (assoc nodes id (assoc (new-node kind title intent label target-chars)
-                                                    :node/id id :node/parent parent-id :node/order-key k))
-                      next-para (tree/next-sibling nodes' id)]
+                                                    :node/id id :node/parent parent-id :node/order-key k))]
                   {:id id
                    :state (-> state
                               (assoc :nodes nodes')
-                              ;; 原本接在後面的段落改為承接新段落，關係待確認（同畫面的 add-sibling）
-                              (update :relations #(if (= kind :paragraph)
-                                                    (tree/mark-pending % nodes' [next-para]
-                                                                       {next-para (tree/prev-sibling nodes' id)})
-                                                    %)))}))))))))
+                              ;; 全文順序中原本接在後面的段落改為承接新段落，關係待確認（同畫面的 add-sibling）
+                              (update :relations tree/reconcile-adjacent nodes nodes'))}))))))))
 
 (defn add-card
   "新增一張卡片。kind 為 :heading、:paragraph、:intro、:table、:figure；parent-id 為 nil 時新增一章。
@@ -387,7 +383,8 @@
              :label (str "移動" title)
              ;; message 用移動後的編號（舊的 title 只用在錯誤與修改組名稱）
              :message (str "已將" (card-ref ns id) "移到" (if-let [p (:parent place)] (card-ref ns p) "報告最上層")
-                           (if para? "；相鄰段落的關係標為「待確認」" "；編號已重新計算"))}))))))
+                           (if (not= (:relations state) rels) "；前後段落的相鄰關係標為「待確認」" "")
+                           (when-not para? "；編號已重新計算"))}))))))
 
 ;; ---------------------------------------------------------------------------
 ;; 刪除
@@ -408,9 +405,13 @@
       (let [title (card-ref nodes id)
             state' (ui/delete-node state id)
             n (count (tree/descendant-ids nodes id))
-            next-para (let [s (tree/next-sibling nodes id)] (when (tree/paragraph? nodes s) s))]
+            ;; 刪除後前一段改變的段落（關係標為待確認）
+            pend (fn [st] (set (keep #(when (:relation/pending %) [(:relation/from %) (:relation/to %)]) (:relations st))))
+            newly (sort-by #(.indexOf (tree/document-order (:nodes state')) %)
+                           (map second (remove (pend state) (pend state'))))
+            next-para (first newly)]
         {:state state'
-         :touched (if next-para [next-para] [])
+         :touched (vec newly)
          :origin :manual
          :label (str "刪除" title)
          :message (str "已刪除" title (when (pos? n) (str "與 " n " 張下層卡片"))
@@ -421,7 +422,7 @@
 ;; 關係
 
 (defn set-relation
-  "設定兩個相鄰段落（同一標題下前後相接，from 在前）的關係並確認。"
+  "設定兩個相鄰段落（全文順序前後相接，可跨標題；from 在前，中間只能隔標題、引言、表或圖）的關係並確認。"
   [state {:keys [from-id to-id type]}]
   (let [{:keys [nodes relations]} state]
     (cond
@@ -433,7 +434,11 @@
       {:error "相鄰關係只能設定在兩個段落之間"}
       (not= from-id (tree/prev-paragraph nodes to-id))
       {:error (str (card-ref nodes from-id) "與" (card-ref nodes to-id)
-                   "不相鄰：相鄰關係只能設定在同一標題下前後相接的段落（from_id 在前）；不相鄰的段落請改用 add_remote_relation")}
+                   "不相鄰：相鄰關係只能設定在全文順序前後相接的段落（可跨標題；中間只能隔標題、引言、表或圖，from_id 在前）；"
+                   (if-let [p (tree/prev-paragraph nodes to-id)]
+                     (str (card-ref nodes to-id) "的前一段是" (card-ref nodes p))
+                     (str (card-ref nodes to-id) "是全文的第一段，沒有前一段"))
+                   "；不相鄰的段落請改用 add_remote_relation")}
       :else
       (let [existing (tree/relation-between relations from-id to-id)
             same? (and existing (= type (:relation/type existing)) (not (:relation/pending existing)))]

@@ -145,8 +145,7 @@
         numbers (tree/numbering nodes)
         paragraph? (= :paragraph (:node/kind n))
         prev (when paragraph? (tree/prev-paragraph nodes id))
-        nxt (when paragraph?
-              (let [x (tree/next-sibling nodes id)] (when (tree/paragraph? nodes x) x)))
+        nxt (when paragraph? (tree/next-paragraph nodes id))
         {:keys [outgoing incoming]} (tree/remote-relations relations id)
         block-by-id (into {} (map (juxt :block/id identity)) blocks)]
     (cond->
@@ -331,7 +330,14 @@
         (when (:conflicts res) (tool-error! "卡片剛被修改，請重新讀取後再試"))
         ;; 相關段落的待辦（SPEC 5.6）：agent 的寫入和使用者的修改一樣，在依賴的段落留下 Knot 待辦
         (let [after (current-state conn)
-              created (notes/record-change! conn old after)
+              {created :created completed :completed}
+              (notes/record-change-result! conn old after
+                                           {:changeset-id (:changeset/id res)
+                                            :group-id (some-> (:changeset/group-id res) str)
+                                            :group group})
+              todos-completed (vec (for [{id :note/node} completed :when id]
+                                     (assoc (select-keys (card-summary (:nodes after) (tree/numbering (:nodes after)) id) [:card_id :title])
+                                            :number (tree/position-label (:nodes after) (tree/numbering (:nodes after)) id))))
               todos (vec (for [{id :note/node reason :reason} created]
                            (assoc (select-keys (card-summary (:nodes after) (tree/numbering (:nodes after)) id) [:card_id :title])
                                   :number (tree/position-label (:nodes after) (tree/numbering (:nodes after)) id)
@@ -340,12 +346,15 @@
                  :cards (vec (for [id (distinct touched) :when (contains? nodes id)]
                                (card-summary nodes numbers id)))
                  :message (str (or message (str "已" label "；所有修改都記錄在 Knot，可在畫面上檢視與復原"))
+                               (when (seq todos-completed)
+                                 (str "；已自動完成 " (count todos-completed) " 則同組內已改寫的相關段落待辦"))
                                (when (seq todos)
                                  (str "；已在 " (count todos) " 個相關段落留下待辦："
                                       (str/join "、" (for [{:keys [number title reason]} todos]
                                                        (str (when number (str number " ")) title "（" reason "）")))
                                       "。這些待辦等使用者下一輪指示時再處理，不要在同一輪自行接著改")))}
           (seq todos) (assoc :todos_created todos)
+          (seq todos-completed) (assoc :todos_completed todos-completed)
           (seq blocks) (assoc :blocks (vec (for [id blocks :let [b (block-by-id state id)] :when b] (block-summary b))))
           (seq facts) (assoc :facts (vec (for [k facts :let [f (get (:facts state) k)] :when f] (fact-entry state f))))
           (seq citing) (assoc :cited_cards (vec (for [id citing] (card-summary nodes numbers id))))
@@ -928,7 +937,7 @@
                   :additionalProperties false}
     :handler move-card}
    {:name "set_relation"
-    :description "設定兩個相鄰段落（同一標題下前後相接，from 在前）的關係並確認（取消「待確認」）。不相鄰或不是段落時回錯誤；不相鄰的段落請用 add_remote_relation。"
+    :description "設定兩個相鄰段落（全文順序前後相接，可跨標題；中間只能隔標題、引言、表或圖，from 在前）的關係並確認（取消「待確認」）。不相鄰或不是段落時回錯誤（並說明 to_id 實際的前一段）；不相鄰的段落請用 add_remote_relation。"
     :inputSchema {:type "object"
                   :properties {:from_id {:type "string" :description "前一個段落的 id"}
                                :to_id {:type "string" :description "緊接在後的段落 id"}

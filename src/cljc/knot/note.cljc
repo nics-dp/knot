@@ -119,6 +119,19 @@
    "遞進承接" "遞進承接它"
    "以它為依據" "以它為依據"})
 
+(defn changed-writables
+  "兩個狀態之間意圖或本文有變動的段落或引言（兩邊都存在的），依文件順序的 [{:id :draft? :prose?}]。
+  只供「同組改寫自動完成」判斷用；誰會觸發待辦仍看 `changed-paragraphs`（引言不觸發）。"
+  [before after]
+  (vec (for [id (tree/document-order (:nodes after))
+             :when (#{:paragraph :intro} (tree/kind (:nodes after) id))
+             :let [b (get-in before [:nodes id]) a (get-in after [:nodes id])]
+             :when b
+             :let [draft? (not= (:node/draft b) (:node/draft a))
+                   prose? (not= (:node/prose b) (:node/prose a))]
+             :when (or draft? prose?)]
+         {:id id :draft? draft? :prose? prose?})))
+
 (defn- what-changed [entries]
   (let [kinds (into #{} (map #(cond (and (contains? (:fields %) :draft) (contains? (:fields %) :prose)) :both
                                     (contains? (:fields %) :prose) :prose
@@ -160,28 +173,61 @@
    {:op :update :note/id 現有待辦 :note/node 目標 :note/triggers [...全部] :note/text 文字 :reason ...}]。
   每個觸發 {:id 觸發的段落 :dependency :summary|:argument :reason 原因 :fields #{:draft :prose}}。
   每個目標段落最多一則未完成的 Knot 待辦：已有時不新增，把新的觸發卡片附加上去（:update，文字重寫），
-  已經記著這個觸發卡片時不動（連續輸入只留一則）。目標還沒有本文（尚未撰寫）時不留。
+  已經記著這個觸發卡片時文字不動（連續輸入只留一則），但該觸發的 :group-id 更新為這次的
+  （沒有 group 時移除）：待辦對應觸發卡片最新的修改；只有 group-id 變了的 :update 帶 :refresh-only? true。目標還沒有本文（尚未撰寫）時不留。
   依賴取自修改後的關係（tree/dependents）；notes 是現有的留言。標題、引言、表、圖的修改不觸發。"
-  [before after notes]
+  ([before after notes] (knot-todos before after notes nil))
+  ([before after notes {:keys [group-id]}]
   (let [nodes (:nodes after)
         numbers (tree/numbering nodes)
         open (into {} (keep #(when (and (= :knot (:note/author %)) (open-todo? %)) [(:note/node %) %])) notes)
         order (zipmap (tree/document-order nodes) (range))
-        entries (for [{trigger :id :keys [draft? prose?]} (changed-paragraphs before after)
+        changed (changed-paragraphs before after)
+        ;; 同一組內、這次一起改寫的目標不必再留待辦（它本來就依新的前文改寫）
+        rewritten (when group-id (set (map :id (changed-writables before after))))
+        entries (for [{trigger :id :keys [draft? prose?]} changed
                       {:keys [id dependency reason]} (tree/dependents nodes (:relations after) trigger)
-                      :when (seq (:content (get-in nodes [id :node/prose])))]
-                  [id {:id trigger :dependency dependency :reason reason
-                       :fields (cond-> #{} draft? (conj :draft) prose? (conj :prose))}])
+                      :when (seq (:content (get-in nodes [id :node/prose])))
+                      :when (not (contains? rewritten id))]
+                  [id (cond-> {:id trigger :dependency dependency :reason reason
+                               :fields (cond-> #{} draft? (conj :draft) prose? (conj :prose))}
+                        group-id (assoc :group-id group-id))])
         by-target (group-by first entries)]
     (vec (for [target (sort-by order (keys by-target))
                :let [existing (get open target)
                      have (set (map :id (:note/triggers existing)))
-                     new (vec (remove #(have (:id %)) (map second (by-target target))))]
-               :when (seq new)
-               :let [all (into (vec (:note/triggers existing)) new)
+                     incoming (map second (by-target target))
+                     new (vec (remove #(have (:id %)) incoming))
+                     latest (into {} (map (juxt :id identity)) incoming)
+                     refreshed (mapv (fn [t] (if (latest (:id t))
+                                               (if group-id (assoc t :group-id group-id) (dissoc t :group-id))
+                                               t))
+                                     (:note/triggers existing))
+                     refresh? (and existing (not= refreshed (vec (:note/triggers existing))))]
+               :when (or (seq new) refresh?)
+               :let [all (into refreshed new)
                      note {:note/node target :note/triggers all
-                           :note/text (todo-text nodes numbers all)
+                           :note/text (if (seq new) (todo-text nodes numbers all) (:note/text existing))
                            :reason (str/join "、" (distinct (map :reason new)))}]]
            (if existing
-             (assoc note :op :update :note/id (:note/id existing))
-             (assoc note :op :add))))))
+             (cond-> (assoc note :op :update :note/id (:note/id existing))
+               (empty? new) (assoc :refresh-only? true))
+             (assoc note :op :add)))))))
+
+(defn auto-complete-ids
+  "同一個 group 內改寫後自動完成的 Knot 待辦（SPEC 5.6 第 2 點）：這次寫入（group-id 為字串，
+  沒有 group 時為 nil，回傳空）改了意圖或本文的段落，若有未完成的 Knot 待辦，且該待辦
+  所有觸發的 :group-id 都等於 group-id，就是要完成的。回傳 [{:note/id :note/node}]（依文件順序）。
+  使用者的寫入與沒有 group 的寫入不會完成任何待辦。"
+  [before after notes group-id]
+  (if (nil? group-id)
+    []
+    (let [changed (set (map :id (changed-writables before after)))
+          order (zipmap (tree/document-order (:nodes after)) (range))]
+      (->> notes
+           (filter #(and (= :knot (:note/author %)) (open-todo? %)
+                         (contains? changed (:note/node %))
+                         (seq (:note/triggers %))
+                         (every? (fn [t] (= group-id (:group-id t))) (:note/triggers %))))
+           (sort-by (comp order :note/node))
+           (mapv #(select-keys % [:note/id :note/node]))))))

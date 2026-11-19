@@ -157,3 +157,66 @@
                             {:id "a2" :reason "摘要它" :fields #{:draft}}]))))
   (testing "舊資料沒有記下欄位與原因"
     (is (= "這段改了，可能需要跟著更新：" (note/todo-lead [{:id "a1"}])))))
+
+(deftest auto-complete-ids-test
+  (let [before (k-state k-nodes)
+        after-a2 (k-state (edit k-nodes "a2" :node/prose "新"))
+        trig (fn [g] {:id "a1" :dependency :argument :reason "因果承接" :fields #{:prose} :group-id g})
+        todo (fn [id node triggers] {:note/id id :note/author :knot :note/todo true :note/state :open
+                                     :note/node node :note/triggers triggers})
+        ids (fn [after notes g] (map :note/id (note/auto-complete-ids before after notes g)))]
+    (testing "全部觸發都屬於同一組，且目標這次被改了：完成"
+      (is (= ["n1"] (ids after-a2 [(todo "n1" "a2" [(trig "g1")])] "g1")))
+      (is (= ["n1"] (ids after-a2 [(todo "n1" "a2" [(trig "g1") (assoc (trig "g1") :id "b1")])] "g1"))))
+    (testing "混入別組或沒有 group 的觸發：不完成"
+      (is (empty? (ids after-a2 [(todo "n1" "a2" [(trig "g1") (trig "g2")])] "g1")))
+      (is (empty? (ids after-a2 [(todo "n1" "a2" [(trig "g1") (trig nil)])] "g1")))
+      (is (empty? (ids after-a2 [(todo "n1" "a2" [(trig "g2")])] "g1"))))
+    (testing "這次寫入沒有 group（使用者或沒給 group）：不完成"
+      (is (empty? (ids after-a2 [(todo "n1" "a2" [(trig nil)])] nil))))
+    (testing "目標沒被改：不完成；已完成、使用者的待辦不算"
+      (is (empty? (ids (k-state (edit k-nodes "a1" :node/prose "新")) [(todo "n1" "a2" [(trig "g1")])] "g1")))
+      (is (empty? (ids after-a2 [(assoc (todo "n1" "a2" [(trig "g1")]) :note/state :done)] "g1")))
+      (is (empty? (ids after-a2 [(assoc (todo "n1" "a2" [(trig "g1")]) :note/author :user)] "g1"))))
+    (testing "改的是意圖也算"
+      (is (= ["n1"] (ids (k-state (edit k-nodes "a2" :node/draft "新意圖")) [(todo "n1" "a2" [(trig "g1")])] "g1"))))))
+
+(deftest knot-todos-group-test
+  (let [before (k-state k-nodes)
+        after (k-state (edit k-nodes "a1" :node/prose "p1x"))]
+    (testing "有 group-id 時，新觸發帶 :group-id；沒有時不帶"
+      (is (every? #(= "g1" (:group-id %)) (mapcat :note/triggers (note/knot-todos before after [] {:group-id "g1"}))))
+      (is (every? #(not (contains? % :group-id)) (mapcat :note/triggers (note/knot-todos before after [])))))
+    (testing "同一組這次一起改寫的目標不再留待辦"
+      (let [both (k-state (edit (edit k-nodes "a1" :node/prose "p1x") "a2" :node/prose (assoc doc :v 2)))]
+        (is (not-any? #(= "a2" (:note/node %)) (note/knot-todos before both [] {:group-id "g1"})))
+        (is (some #(= "a2" (:note/node %)) (note/knot-todos before both [])))))))
+
+(deftest intro-and-retrigger-group-test
+  (let [before (k-state k-nodes)
+        trig (fn [g] (cond-> {:id "a1" :dependency :summary :reason "是它的上層引言" :fields #{:prose}} g (assoc :group-id g)))
+        todo (fn [triggers] {:note/id "n1" :note/author :knot :note/todo true :note/state :open
+                             :note/node "iA" :note/triggers triggers})]
+    (testing "改寫引言本身也自動完成（引言不觸發，但算改寫）"
+      (let [after (k-state (edit k-nodes "iA" :node/prose (assoc doc :v 2)))]
+        (is (= ["n1"] (map :note/id (note/auto-complete-ids before after [(todo [(trig "g1")])] "g1"))))
+        (is (empty? (note/knot-todos before after [] {:group-id "g1"})) "引言不觸發待辦")))
+    (testing "同組一起改了段落與引言：引言不再新增待辦"
+      (let [after (k-state (edit (edit k-nodes "a1" :node/prose "p1x") "iA" :node/prose (assoc doc :v 2)))]
+        (is (not-any? #(= "iA" (:note/node %)) (note/knot-todos before after [] {:group-id "g1"})))))
+    (testing "重複觸發：既有觸發的 group-id 更新為這次的"
+      (let [after (k-state (edit k-nodes "a1" :node/prose "p1x"))
+            u (first (filter #(= "iA" (:note/node %)) (note/knot-todos before after [(todo [(trig "g1")])] {:group-id "g2"})))]
+        (is (= :update (:op u)))
+        (is (true? (:refresh-only? u)))
+        (is (= ["g2"] (map :group-id (:note/triggers u))))
+        (is (= ["n1"] (map :note/id (note/auto-complete-ids before (k-state (edit k-nodes "iA" :node/prose (assoc doc :v 2)))
+                                                            [(assoc (todo (:note/triggers u)) :note/id "n1")] "g2"))))))
+    (testing "沒有 group 的寫入：移除既有觸發的 group-id"
+      (let [after (k-state (edit k-nodes "a1" :node/prose "p1x"))
+            u (first (filter #(= "iA" (:note/node %)) (note/knot-todos before after [(todo [(trig "g1")])])))]
+        (is (= [nil] (map :group-id (:note/triggers u))))
+        (is (not-any? :group-id (:note/triggers u)))))
+    (testing "group-id 沒變：不動"
+      (is (not-any? #(= "iA" (:note/node %))
+                    (note/knot-todos before (k-state (edit k-nodes "a1" :node/prose "p1x")) [(todo [(trig "g1")])] {:group-id "g1"}))))))

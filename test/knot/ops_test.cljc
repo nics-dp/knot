@@ -269,6 +269,10 @@
       (is (str/includes? (:error (ops/set-relation s {:from-id "a2" :to-id "a1" :type :causal})) "不相鄰"))
       (is (str/includes? (:error (ops/set-relation s {:from-id "a3" :to-id "b1" :type :causal})) "不相鄰"))
       (is (str/includes? (:error (ops/set-relation s {:from-id "A1" :to-id "A2" :type :causal})) "兩個段落"))
+      (let [msg (:error (ops/set-relation s {:from-id "a1" :to-id "a3" :type :causal}))]
+        (is (str/includes? msg "a2") "說出 to_id 實際的前一段")
+        (is (str/includes? msg "可跨標題")))
+      (is (str/includes? (:error (ops/set-relation s {:from-id "a1" :to-id "a1" :type :causal})) "第一段"))
       (is (str/includes? (:error (ops/set-relation s {:from-id "a1" :to-id "a2" :type :basis})) "type 只接受"))
       (is (str/includes? (:error (ops/set-relation s {:from-id "a1" :to-id "nope" :type :causal})) "找不到 to_id")))))
 
@@ -288,6 +292,21 @@
       (is (str/includes? (:error (ops/add-remote-relation s {:from-id "a1" :to-id "A1" :type :echo})) "兩個段落"))
       (is (str/includes? (:error (ops/add-remote-relation s {:from-id "a1" :to-id "b1" :type :causal})) "type 只接受")))))
 
+(deftest set-relation-across-headings-test
+  (let [s (state)
+        r (ops/set-relation s {:from-id "a3" :to-id "x1" :type :contrast})
+        rel (tree/relation-between (:relations (:state r)) "a3" "x1")]
+    (is (nil? (:error r)) "a3 與 x1 隔著 1.2、1.2.1、1.2.1.1 三層標題，仍是前後相接")
+    (is (= {:relation/type :contrast :relation/pending false} (select-keys rel [:relation/type :relation/pending])))
+    (is (nil? (:error (ops/set-relation s {:from-id "x1" :to-id "b1" :type :example}))) "跨章")
+    (testing "新增標題不改變相鄰；移動標題讓邊界段落待確認"
+      (let [m (ops/move-card (:state r) {:id "A2" :target-id "A1" :position :before})
+            rels (:relations (:state m))]
+        (is (nil? (:error m)))
+        (is (nil? (tree/relation-between rels "a3" "x1")))
+        (is (:relation/pending (tree/relation-between rels "x1" "a1")))
+        (is (str/includes? (:message m) "待確認"))))))
+
 (deftest delete-card-test
   (let [s (state)]
     (testing "刪除段落：關係一併移除，後一段改為承接前一段、待確認"
@@ -302,7 +321,7 @@
       (let [r (ops/delete-card s {:id "A2"})]
         (is (not-any? #(contains? (:nodes (:state r)) %) ["A2" "A21" "A211" "x1"]))
         (is (str/includes? (:message r) "3 張下層卡片"))
-        (is (= [] (:touched r)))))
+        (is (= ["b1"] (:touched r)) "x1 沒了，b1 的前一段改為 a3，待確認")))
     (testing "錯誤"
       (is (str/includes? (:error (ops/delete-card s {:id "nope"})) "找不到卡片"))
       (is (str/includes? (:error (ops/delete-card s {:id "a1" :version 2})) "已被修改"))

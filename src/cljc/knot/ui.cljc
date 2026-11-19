@@ -531,14 +531,11 @@
                    (new-float (:nodes state) k))
             nodes' (assoc (:nodes state) new-id
                           (assoc node :node/id new-id :node/parent p
-                                 :node/order-key (tree/key-after (:nodes state) id)))
-            next-para (tree/next-sibling nodes' new-id)]
+                                 :node/order-key (tree/key-after (:nodes state) id)))]
         (-> state
             (assoc :nodes nodes')
-            ;; 原本接在後面的段落改為承接新段落，關係待確認
-            (update :relations #(if (= k :paragraph)
-                                  (tree/mark-pending % nodes' [next-para] {next-para id})
-                                  %))
+            ;; 全文順序中原本接在後面的段落改為承接新段落，關係待確認
+            (update :relations tree/reconcile-adjacent (:nodes state) nodes')
             (update :ui assoc :selected new-id :bias {} :focus-title new-id :editor-collapsed false
                     :toast (case k :heading "已新增同層標題" :paragraph "已新增段落" :table "已新增表格" :figure "已新增圖")))))))
 
@@ -551,7 +548,6 @@
       (let [title ((titles state) id)
             gone (set (cons id (tree/descendant-ids nodes id)))
             fallback (or (tree/prev-sibling nodes id) (tree/next-sibling nodes id) (tree/parent nodes id))
-            next-para (let [n (tree/next-sibling nodes id)] (when (tree/paragraph? nodes n) n))
             nodes' (apply dissoc nodes gone)]
         (if (empty? nodes')
           state
@@ -559,10 +555,8 @@
               (remember (str "刪除「" title "」"))
               (assoc :nodes nodes')
               (update :relations (fn [rels]
-                                   (let [rels (vec (remove #(or (gone (:relation/from %)) (gone (:relation/to %))) rels))]
-                                     (if next-para
-                                       (tree/mark-pending rels nodes' [next-para] {next-para id})
-                                       rels))))
+                                   (-> (vec (remove #(or (gone (:relation/from %)) (gone (:relation/to %))) rels))
+                                       (tree/reconcile-adjacent nodes nodes'))))
               (update :ui assoc :selected (or fallback (first (tree/child-ids nodes' nil))) :bias {}
                       :toast (str "已刪除「" title "」"
                                   (when (> (count gone) 1) (str "與 " (dec (count gone)) " 張下層卡片"))

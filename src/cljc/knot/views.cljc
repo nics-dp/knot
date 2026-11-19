@@ -396,9 +396,13 @@
             "（由 agent 依下層內容撰寫）"
             (gist (:node/draft node)))]))]]))
 
-(defn- relation-chips [{:keys [nodes relations]} col roles]
-  (for [{:keys [id top]} col
-        :let [prev (tree/prev-paragraph nodes id)]
+(defn- relation-chips
+  "段落上方的相鄰關係標籤。前一段依全文順序，可能在別的標題底下（甚至別的欄）；
+  標籤一律畫在本段的欄、本段上方，透明度取兩段中較不淡的。"
+  [{:keys [nodes relations]} col roles]
+  (for [prevs [(:prev (tree/adjacent-pairs nodes))]
+        {:keys [id top]} col
+        :let [prev (get prevs id)]
         :when (and prev (tree/paragraph? nodes id))
         :let [rel (tree/relation-between relations prev id)]
         :when rel]
@@ -756,7 +760,7 @@
   [{:keys [nodes relations]} title id editing?]
   ;; 每一列是「關係類型、位置、卡片名稱」；唯讀時類型是標籤，編輯時是下拉選單
   (let [prev (tree/prev-paragraph nodes id)
-        nxt (let [n (tree/next-sibling nodes id)] (when (tree/paragraph? nodes n) n))
+        nxt (tree/next-paragraph nodes id)
         numbers (tree/numbering nodes)
         adjacent (fn [k position from to other]
                    (let [rel (tree/relation-between relations from to)]
@@ -1318,7 +1322,7 @@
         can-sub (< (tree/depth nodes id) tree/max-heading-level)]
     (list
      (zone "inputs" "設定" {:hint "agent 撰寫下層段落與引言時會參考這裡的意圖"}
-           (intent-field id (:node/draft node) "這一章／節要涵蓋什麼、回應哪些契約項目、與前後章節的關係。")
+           (intent-field id (:node/draft node) "這一章／節要涵蓋什麼、回應哪些撰寫要求、與前後章節的關係。")
            (let [level (get heading-level-names (dec (tree/depth nodes id)))
                  t (:node/target-chars node)
                  chars (get (tree/char-counts state) id)
@@ -1327,7 +1331,7 @@
                            (when info
                              (count-span "target-total" (update info :text #(str "整" level "合計 " %))))))
            (when-let [items (seq (:node/contract-items node))]
-             (field "contract" "契約項目" {:count (count items)}
+             (field "contract" "撰寫要求" {:count (count items)}
                     [:div.chips (for [c items] [:span.tag {:replicant/key c} c])])))
      (zone "structure" "結構" {:hint "引言固定在最前面；其後依序是段落、下層標題"}
            (field "intro" "引言"

@@ -111,13 +111,27 @@
         i (.indexOf sibs id)]
     (when (< -1 i (dec (count sibs))) (nth sibs (inc i)))))
 
+(defn adjacent-pairs
+  "全文順序中段落的前後關係（SPEC 5.4）：{:prev {id 前一段} :next {id 後一段}}。
+  前一段是 document-order 中在它之前最近的段落，中間隔著標題、引言、表、圖都略過；
+  第一段沒有前一段、最後一段沒有後一段（不在結果中）。一次走完整棵樹，迴圈內用它。"
+  [nodes]
+  (let [ps (filterv #(paragraph? nodes %) (document-order nodes))]
+    {:prev (zipmap (rest ps) ps)
+     :next (zipmap ps (rest ps))}))
+
 (defn prev-paragraph
-  "同一 parent 下緊鄰在前的段落；id 不是段落、前面是引言、標題或沒有卡片時為 nil
-  （段落一律排在下層標題之前，所以不會跨到下層標題）。"
+  "全文順序中在 id 之前最近的段落（可跨標題）；id 不是段落或它是第一段時為 nil。
+  迴圈內請用 `adjacent-pairs`。"
   [nodes id]
   (when (paragraph? nodes id)
-    (let [p (prev-sibling nodes id)]
-      (when (and p (paragraph? nodes p)) p))))
+    (get (:prev (adjacent-pairs nodes)) id)))
+
+(defn next-paragraph
+  "全文順序中在 id 之後最近的段落（可跨標題）；id 不是段落或它是最後一段時為 nil。"
+  [nodes id]
+  (when (paragraph? nodes id)
+    (get (:next (adjacent-pairs nodes)) id)))
 
 ;; ---------------------------------------------------------------------------
 ;; 編號
@@ -311,7 +325,7 @@
 ;; 段落關係
 
 (def adjacent-relation-types
-  "相鄰段落（同一 parent、前後相接）之間的關係。"
+  "相鄰段落（全文順序前後相接，可跨標題）之間的關係。"
   [:progression :causal :contrast :example])
 
 (def remote-relation-types
@@ -390,12 +404,13 @@
   先移除它原本與 old-prev 的相鄰關係，再把與新的前一段之間的關係標為待確認；
   原本已有關係時保留類型。"
   [relations nodes affected old-prevs]
-  (reduce
+  (let [prevs (:prev (adjacent-pairs nodes))]
+   (reduce
    (fn [rels id]
      (if-not (paragraph? nodes id)
        rels
        (let [old-prev (get old-prevs id)
-             new-prev (prev-paragraph nodes id)
+             new-prev (get prevs id)
              existing (when new-prev (relation-between rels new-prev id))
              rels (->> rels
                        (remove #(and (= id (:relation/to %))
@@ -408,23 +423,34 @@
                            :relation/type (:relation/type existing)
                            :relation/pending true})))))
    relations
-   (distinct (remove nil? affected))))
+   (distinct (remove nil? affected)))))
+
+(defn reconcile-adjacent
+  "卡片的移動、新增、刪除之後，重新整理相鄰關係（SPEC 5.4）：nodes-after 中原本就存在、
+  前一段（全文順序）和 nodes-before 不同的段落，依 `mark-pending` 的語意把與新的前一段之間的
+  關係標為待確認（原本已有關係時保留類型），並移除與舊前一段的關係；最後移除兩端
+  已不相鄰的相鄰關係。新增的段落本身不標記（它沒有舊的前一段），接在它後面的段落會標記。
+  移動或刪除標題也會改變前後段落的相鄰對象，所以任何卡片的變動都要呼叫。"
+  [relations nodes-before nodes-after]
+  (let [pb (:prev (adjacent-pairs nodes-before))
+        pa (:prev (adjacent-pairs nodes-after))
+        changed (filterv #(and (contains? nodes-before %)
+                               (paragraph? nodes-after %)
+                               (not= (get pb %) (get pa %)))
+                         (document-order nodes-after))
+        rels (mark-pending relations nodes-after changed pb)]
+    (vec (remove #(and (adjacent-relation? %)
+                       (contains? nodes-after (:relation/from %))
+                       (contains? nodes-after (:relation/to %))
+                       (not= (:relation/from %) (get pa (:relation/to %))))
+                 rels))))
 
 (defn move-with-relations
-  "移動卡片並更新段落關係。回傳 {:nodes :relations}。
-  受影響的段落：舊位置的下一段、被移動的段落、新位置的下一段。"
+  "移動卡片並更新段落關係（`reconcile-adjacent`）。回傳 {:nodes :relations}。"
   [{:keys [nodes relations]} moving-id place]
-  (let [old-next (next-sibling nodes moving-id)
-        old-prevs {moving-id (prev-paragraph nodes moving-id)
-                   old-next moving-id}
-        nodes' (move nodes moving-id place)
-        new-next (next-sibling nodes' moving-id)
-        old-prevs (assoc old-prevs new-next (prev-paragraph nodes new-next))
-        para? (paragraph? nodes moving-id)]
+  (let [nodes' (move nodes moving-id place)]
     {:nodes nodes'
-     :relations (if para?
-                  (mark-pending relations nodes' [old-next moving-id new-next] old-prevs)
-                  relations)}))
+     :relations (reconcile-adjacent relations nodes nodes')}))
 
 ;; ---------------------------------------------------------------------------
 ;; 建立
@@ -477,18 +503,26 @@
 (defn writing-order
   "段落與引言的撰寫順序，分層的拓撲排序（Kahn）。nodes、relations 同其他 tree 函式；
   heading-id 選填：只排該標題底下的段落與引言，範圍外的卡片不出現也不構成先後。
-  先後關係（A 要在 B 之前寫）：前一段 → 本段；依據的目標 → 依據它的段落；
+  先後關係（A 要在 B 之前寫）：前一段 → 本段（同一個 parent 下一律保留；跨標題時，
+  只有兩段之間設了已確認、有類型的相鄰關係才加這條邊。全部段落串成一條鏈會讓每批只剩一段，
+  失去並行撰寫）；依據的目標 → 依據它的段落；
   摘要的目標 → 摘要它的段落；標題底下所有後代的段落與引言 → 該標題的引言。
   回傳 {:batches [[id ...] ...] :cycle [id ...]}：同一批彼此沒有先後，批內依 document-order；
   有環時，排不進去的卡片全部放在最後一批並列在 :cycle（沒有環時 :cycle 為 []）。"
   ([nodes relations] (writing-order nodes relations nil))
   ([nodes relations heading-id]
    (let [order (document-order nodes heading-id)
+         pairs (adjacent-pairs nodes)
          ids (filterv #(#{:paragraph :intro} (kind nodes %)) order)
          in-scope (set ids)
          edges (set
                 (concat
-                 (for [id ids :let [p (prev-paragraph nodes id)] :when p] [p id])
+                 (for [id ids
+                       :let [p (get (:prev pairs) id)]
+                       :when (and p (or (= (parent nodes p) (parent nodes id))
+                                        (let [r (relation-between relations p id)]
+                                          (and r (not (:relation/pending r)) (:relation/type r)))))]
+                   [p id])
                  (for [r relations
                        :when (#{:basis :summarizes} (:relation/type r))]
                    [(:relation/to r) (:relation/from r)])

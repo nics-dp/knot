@@ -125,15 +125,36 @@
           (d/transact! conn (for [i ids] [:db/retractEntity [:note/id i]]))
           {:deleted ids})))))
 
-(defn record-change!
-  "修改（使用者或 agent，before → after，前端形式的狀態）之後，為依賴被改段落的段落留下 Knot 待辦（SPEC 5.6）；
-  每個目標段落最多一則未完成的：已有時把新的觸發卡片附加上去（文字重寫、:note/updated-at 記下時間）。
-  規則見 knot.note/knot-todos。復原與匯入不呼叫它。不屬於修改組。
-  回傳新增或附加的留言（可能是空的；帶 :reason 與 :merged? 供回報，不寫入資料庫）。"
-  [conn before after]
+(defn record-change-result!
+  "修改（使用者或 agent，before → after，前端形式的狀態）之後的 Knot 待辦處理（SPEC 5.6）：
+  1. 自動完成：opts 有 :group-id（字串；agent 寫入且屬於某 group 時）時，這次改了意圖或本文的段落
+     若有未完成的 Knot 待辦、且所有觸發都屬於同一個 group（`note/auto-complete-ids`），
+     標為完成、連到修改組 :changeset-id，並以 :knot 留下回覆「同一組內已改寫（組名 :group）」；
+  2. 為依賴被改段落的段落留下 Knot 待辦：每個目標段落最多一則未完成的，已有時把新的觸發卡片附加上去。
+  先完成、再產生新待辦。復原與匯入不呼叫它。不屬於修改組。
+  opts：{:changeset-id uuid :group-id 字串 :group 組名}，全部選填；使用者的寫入不給。
+  回傳 {:created [...] :completed [...]}：created 為新增或附加的留言（帶 :reason 與 :merged?，不寫入資料庫）；
+  completed 為自動完成的待辦（完成後的留言）。"
+  [conn before after {:keys [changeset-id group-id group]}]
   (locking conn
-    (let [ops (note/knot-todos before after (list-notes (d/db conn)))
+    (let [notes (list-notes (d/db conn))
+          done (note/auto-complete-ids before after notes group-id)
+          done-ids (set (map :note/id done))
           at (now)
+          _ (when (seq done)
+              (d/transact! conn
+                           (vec (mapcat (fn [{id :note/id node :note/node}]
+                                          [(cond-> {:note/id id :note/state :done :note/done-at at}
+                                             changeset-id (assoc :note/changeset changeset-id))
+                                           (cond-> {:note/id (random-uuid) :note/author :knot
+                                                    :note/text (str "同一組內已改寫（" group "）")
+                                                    :note/reply-to id :note/at at}
+                                             node (assoc :note/node node))])
+                                        done))))
+          notes (if (seq done)
+                  (mapv #(if (done-ids (:note/id %)) (assoc % :note/state :done) %) notes)
+                  notes)
+          ops (note/knot-todos before after notes {:group-id group-id})
           txs (for [{:keys [op] :as o} ops
                     :let [base {:note/triggers (pr-str (:note/triggers o)) :note/text (:note/text o)}]]
                 (if (= :update op)
@@ -143,8 +164,14 @@
       (when (seq txs) (d/transact! conn (vec txs)))
       (let [db (d/db conn)
             by-id (into {} (map (juxt :note/id identity)) (list-notes db))]
-        (vec (for [[o tx] (map vector ops txs)]
-               (assoc (get by-id (:note/id tx)) :reason (:reason o) :merged? (= :update (:op o)))))))))
+        {:created (vec (for [[o tx] (map vector ops txs) :when (not (:refresh-only? o))]
+                         (assoc (get by-id (:note/id tx)) :reason (:reason o) :merged? (= :update (:op o)))))
+         :completed (vec (keep #(get by-id (:note/id %)) done))}))))
+
+(defn record-change!
+  "同 `record-change-result!`，只回傳新增或附加的留言（使用者的寫入用，沒有 group）。"
+  ([conn before after] (record-change! conn before after nil))
+  ([conn before after opts] (:created (record-change-result! conn before after opts))))
 
 ;; ---------------------------------------------------------------------------
 ;; 查詢（只含可見的留言）
