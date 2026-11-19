@@ -643,26 +643,28 @@ agent 在背景寫入時，畫面要即時反映，也不能把 agent 的修改�
 1. **M8 LaTeX 匯出：** 5.9 的 zip（範例主檔、章檔、表格檔、圖檔清單）、頂部列下載、MCP `export_latex`。**完成條件：** golden file 測試通過，使用者以 XeLaTeX 編譯試寫報告確認。
 1. **M9 交接檢查（暫緩）：** 5.8 的兩類檢查、`find_issues`、跳到卡片、待辦標記、匯出畫面整合。2026-11-19 使用者決定先不做：交件前的檢查由使用者自行處理；之後有需要再依試用回饋決定範圍（別名檢查需要實體表，目前沒有）。
 1. **M10 延伸功能（待定）：** 從舊報告開始（風格的整理已可用 `update_style` 完成，5.7）。開始前先與使用者確認範圍與舊報告格式。
-1. **發佈（第一版）：** 見下方「發佈」。**完成條件：** 兩種架構的映像都實際操作過；另一位使用者只依 README 與雲端硬碟的檔案，完成安裝、連上 Claude Code、安裝 skill 並建立一份報告。
+1. **發佈（第一版）：** 見下方「發佈」。**完成條件：** 兩種架構的映像都實際操作過；另一位使用者只依 README、ghcr.io 的映像與 Release 的 skill，完成安裝、連上 Claude Code、安裝 skill 並建立一份報告。
 
 ### 發佈
 
-第一版不推到 registry，把建置好的映像與 skill 放在雲端硬碟共享（2026-11-19 使用者決定）。
+原始碼與映像都放在 GitHub：程式碼推到 `nics-dp/knot`（internal：企業內成員可見；2026-11-19 建立），容器映像發佈為該 repo 的套件（GitHub Container Registry，`ghcr.io/nics-dp/knot`），skill 附在 GitHub Release（2026-11-19 使用者決定，取代原本「映像放雲端硬碟」）。
 
-- **版本：** 語意化版本，第一版為 `0.1.0`。版本號只寫在一處（例如 `resources/knot/version.txt`），MCP `initialize` 的 `serverInfo.version`、畫面（頂部列或說明處，最簡單即可）、映像標記與檔名都由它而來；發佈時在 git 打 `v0.1.0` 標籤。
-- **映像：** 兩種架構各一個：`linux/arm64`（Apple Silicon Mac）與 `linux/amd64`（Intel Mac、Windows、Linux）。以 `docker buildx build --platform <架構> -t knot:<版本> --load .` 分別建置，再以 `docker save knot:<版本> | gzip > knot-<版本>-<架構>.tar.gz` 匯出。amd64 在 Apple Silicon 上以模擬執行，速度慢，但仍要實際啟動並操作寫入、事件串流、留言與 LaTeX 匯出（Datalevin 的原生函式庫與 jlink 模組清單只在執行期才會出錯）。
-- **skill：** `skills/knot-*` 打包成 `knot-skills-<版本>.zip`，與映像放在一起。skill 與 MCP 工具一起改版，換版本時兩者都要更新；skill 的內容只能引用該版本有的工具與欄位。
-- **雲端硬碟的資料夾：** 每個版本一個資料夾，內含兩個映像檔、skill 的 zip、`SHA256SUMS`（各檔的 SHA-256）與「版本說明」（新增與改變的功能、資料相容性、需要重新安裝 skill 與否）。
+- **版本：** 語意化版本，第一版為 `0.1.0`。版本號只寫在一處（例如 `resources/knot/version.txt`），MCP `initialize` 的 `serverInfo.version`、畫面（頂部列或說明處，最簡單即可）、映像標記都由它而來；發佈時在 git 打 `v0.1.0` 標籤。
+- **映像：** 一個標記同時包含 `linux/arm64`（Apple Silicon Mac）與 `linux/amd64`（Intel Mac、Windows、Linux）兩種架構，使用者 `docker pull ghcr.io/nics-dp/knot:0.1.0` 自動取得自己電腦的版本；另標 `latest` 指向最新版。
+- **建置與推送：** 以 GitHub Actions 在推送 `v*` 標籤時執行：測試（`bb test`、`bb cljs-test`、`bb lint`）→ `docker buildx` 建置兩種架構並推到 ghcr.io（用 workflow 的 `GITHUB_TOKEN`，不需另外的密碼）→ 對 amd64 映像做冒煙測試（啟動容器、`GET /api/report`、MCP `initialize` 與一次寫入、事件串流、LaTeX 匯出）→ 建立 Release，附上 skill 的 zip。arm64 在 Actions 上以模擬建置；發佈前另在本機（Apple Silicon）拉下來實際操作一次。
+- **skill：** `skills/knot-*` 打包成 `knot-skills-<版本>.zip` 附在 Release。skill 與 MCP 工具一起改版，換版本時兩者都要更新；skill 的內容只能引用該版本有的工具與欄位。
+- **Release 說明：** 新增與改變的功能、資料相容性、是否需要重新安裝 skill。
 - **README（給使用者）：**
-  1. 安裝 Docker Desktop；依電腦選擇映像檔，`docker load -i knot-<版本>-<架構>.tar.gz`。
-  2. 在報告目錄啟動（`docker run`，同第 2 節，映像名稱帶版本），開啟 `http://localhost:3000`。
+  1. 安裝 Docker Desktop；以 GitHub 帳號建立 personal access token（權限 `read:packages`），`docker login ghcr.io` 登入一次（套件跟著 repo 為 internal，只有企業內成員能拉）；`docker pull ghcr.io/nics-dp/knot:<版本>`。
+  2. 在報告目錄啟動（`docker run`，同第 2 節，映像名稱改為 ghcr.io 的完整名稱與版本），開啟 `http://localhost:3000`。
   3. 連上 Claude Code：`claude mcp add --scope user --transport http knot http://localhost:3000/mcp`（設定一次）。
-  4. 安裝 skill：解壓縮 skill 的 zip，把 `knot-*` 資料夾複製到 `~/.claude/skills/`（所有報告共用）或報告目錄的 `.claude/skills/`。
-  5. 開始一份報告：把原始資料放進報告目錄，在該目錄開 Claude Code，請 agent「開始規劃報告」。
-  6. 更新版本：`docker load` 新的映像、改用新的版本標記啟動，並以新的 skill 取代舊的；報告資料在報告目錄的 `.knot/`，換版本前先備份這個資料夾。
+  4. 安裝 skill：從 Release 下載 skill 的 zip，把 `knot-*` 資料夾複製到 `~/.claude/skills/`（所有報告共用）或報告目錄的 `.claude/skills/`；各 skill 的用途與觸發說法列成一張表（規劃 → 匯入 → 撰寫，之後每一輪用處理待辦）。
+  5. 開始一份報告：把原始資料放進報告目錄，在該目錄開 Claude Code，依序請 agent「開始規劃報告」「匯入資料」「開始撰寫全文」。
+  6. 更新版本：`docker pull` 新版本、改用新的標記啟動，並以新的 skill 取代舊的；報告資料在報告目錄的 `.knot/`，換版本前先備份這個資料夾。
   7. 常見問題（沿用現有的：瀏覽器打不開、port 被占用等）。
-- **資料相容性：** 新版本必須能開啟舊版本的報告目錄（移除的欄位只是不再讀取，例如 `:contract/*`）；schema 有不相容的改變時，版本說明要寫明並提供轉換方式。發佈前以前一版建立的報告目錄實際開啟確認。
-- **發佈前檢查：** `bb test`、`bb cljs-test`、`bb lint` 全過；`.dockerignore` 沒有放行根目錄 PDF 與 `local/`（映像內不得有真實資料，以 `docker run --rm --entrypoint ls knot:<版本> -R /app` 之類的方式確認）；兩個映像都實際操作過；skill 的 zip 只有 `knot-*` 資料夾。
+- **資料相容性：** 新版本必須能開啟舊版本的報告目錄（移除的欄位只是不再讀取，例如 `:contract/*`）；schema 有不相容的改變時，Release 說明要寫明並提供轉換方式。發佈前以前一版建立的報告目錄實際開啟確認。
+- **第一次推送前：** 檢查整個 git 歷史沒有真實資料（根目錄 PDF、`local/`、真實專案名稱；2026-11-19 已查過，沒有）。commit 的作者名稱與 email 會公開在 GitHub 上。
+- **發佈前檢查：** `.dockerignore` 沒有放行根目錄 PDF 與 `local/`（映像內不得有真實資料）；兩種架構都實際操作過；skill 的 zip 只有 `knot-*` 資料夾。
 
 ## 8. 開發守則與待定事項
 
