@@ -60,6 +60,7 @@
     (is (= "2025-03-26" (get r "protocolVersion")))
     (is (= {"tools" {}} (get r "capabilities")))
     (is (= "knot" (get-in r ["serverInfo" "name"])))
+    (is (re-matches #"\d+\.\d+\.\d+" (get-in r ["serverInfo" "version"])) "版本取自 resources/knot/version.txt")
     (is (string? (get r "instructions"))))
   (is (= "2025-06-18" (get-in (rpc "initialize" {"protocolVersion" "1999-01-01"}) [:body "result" "protocolVersion"]))))
 

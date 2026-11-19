@@ -26,6 +26,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends binutils && rm 
 
 # ---- 執行（glibc 2.38 以上；Datalevin 原生函式庫需要 libmvec，Debian 12 的 arm64 沒有） ----
 FROM ubuntu:24.04
+ARG VERSION=dev
+# 讓 ghcr.io 的套件連到 repo（繼承 repo 的可見度）
+LABEL org.opencontainers.image.source="https://github.com/nics-dp/knot" \
+      org.opencontainers.image.description="與 Agent 協作撰寫報告" \
+      org.opencontainers.image.version="${VERSION}"
 COPY --from=build /jre /opt/jre
 COPY --from=build /build/target/knot.jar /app/knot.jar
 ENV KNOT_HOST=0.0.0.0 KNOT_NO_BROWSER=1

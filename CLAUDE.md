@@ -69,6 +69,7 @@
 - `bb cljs-test`：前端測試（shadow-cljs `:test` build，node 執行）
 - `bb lint`（= `clojure -M:lint --lint src test dev`）：clj-kondo，裝在 repo 的 alias 內
 - `bb start`（= `clojure -M:run`）：一般模式啟動並開啟瀏覽器
+- **發佈：** `bb release`（本機建置兩種架構推到 `ghcr.io/nics-dp/knot`、建立 GitHub Release），步驟與單獨執行的任務見 SPEC 第 7 節「發佈」；版本號在 `resources/knot/version.txt`，版本說明在 `docs/releases/<版本>.md`。推送與建立 Release 前要使用者確認
 - `bb docker:build`（= `docker build -t knot .`）：容器映像，執行方式見 `README.md`；`.dockerignore` 是白名單，新增建置需要的檔案時要放行，**不可放行根目錄 PDF 與 `local/`**。在本機驗證容器時避開 3000（例如 `-p 127.0.0.1:3100:3000`）
 
 ## 每項工作的完成條件
