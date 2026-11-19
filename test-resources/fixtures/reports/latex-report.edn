@@ -1,0 +1,42 @@
+;; 虛構報告：LaTeX 匯出 golden file 測試用（名稱含 & % _ 以測試跳脫）
+{:report/title "OO 市 智慧&路燈_計畫 100%"
+ :report/subtitle "期末報告 #草稿"
+ :tree
+ [{:node/id "c1" :node/kind :heading :node/name "計畫概述" :node/draft "緣起與目標"
+   :children
+   [{:node/id "i1" :node/kind :intro :node/draft "本章說明緣起。\n並預告目標。"}
+    {:node/id "p11" :node/kind :paragraph :node/title "政策背景" :node/draft "節能政策"
+     :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "因應政策，A&B 公司須降低 50% 用電，路徑 C:\\temp。"}]}
+                                        {:type "paragraph" :content [{:type "text" :text "節電率達"} {:type "fact" :attrs {:key "saving.a"}} {:type "text" :text "，見"} {:type "ref" :attrs {:label "tab:metrics"}} {:type "text" :text "與"} {:type "ref" :attrs {:label "fig:site-map"}} {:type "text" :text "。"} {:type "cite" :attrs {:block "b1"}}]}
+                                        {:type "bulletList" :content [{:type "listItem" :content [{:type "paragraph" :content [{:type "text" :text "項目 $1"}]}]}
+                                                                      {:type "listItem" :content [{:type "paragraph" :content [{:type "text" :text "項目_2"}]}]}]}
+                                        {:type "orderedList" :content [{:type "listItem" :content [{:type "paragraph" :content [{:type "text" :text "第一步"}]}]}
+                                                                       {:type "listItem" :content [{:type "paragraph" :content [{:type "text" :text "第二步 ^ ~"}]}]}]}]}
+     :children
+     [{:node/id "t1" :node/kind :table :node/title "量測項目" :node/label "tab:metrics"
+       :node/table-content {:columns ["項目" "數值 (%)"] :rows [["節電率" "47"] ["A&B" "40"]]}}
+      {:node/id "t2" :node/kind :table :node/title "尚未填寫的表" :node/label "tab:empty"}
+      {:node/id "f1" :node/kind :figure :node/title "場域位置圖" :node/label "fig:site-map" :node/draft "標示三處場域"}]}
+    {:node/id "s11" :node/kind :heading :node/name "計畫目標"
+     :children
+     [{:node/id "p111" :node/kind :paragraph :node/title "目標" :node/draft "建立三處場域\n驗證成效"}
+      {:node/id "p112" :node/kind :paragraph :node/title "範圍"}
+      {:node/id "s111" :node/kind :heading :node/name "子項"
+       :children
+       [{:node/id "s1111" :node/kind :heading :node/name "款"
+         :children
+         [{:node/id "p1111" :node/kind :paragraph :node/title "款內段落"
+           :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "款的內容。"}]}]}}]}]}]}]}
+  {:node/id "c2" :node/kind :heading :node/name "結論" :node/draft ""
+   :children
+   [{:node/id "i2" :node/kind :intro}
+    {:node/id "p21" :node/kind :paragraph :node/title "結語"
+     :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "完。"}]}]}}]}
+  {:node/id "a1" :node/kind :heading :node/name "附件" :node/appendix true
+   :children
+   [{:node/id "a11" :node/kind :heading :node/name "量測方法"
+     :children
+     [{:node/id "pa" :node/kind :paragraph :node/title "方法"
+       :node/prose {:type "doc" :content [{:type "paragraph" :content [{:type "text" :text "以電表量測。"}]}]}}
+      {:node/id "f2" :node/kind :figure :node/title "接線圖" :node/label "fig:wiring"}]}]}]
+ :facts [{:fact/key "saving.a" :fact/label "節電率" :fact/value "47" :fact/unit "%"}]}

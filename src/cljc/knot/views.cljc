@@ -157,6 +157,13 @@
               [:tr {:replicant/key ri}
                (for [[ci cell] (map-indexed vector row)] [:td {:replicant/key ci} cell])])]]])
 
+(defn- figure-placeholder-text
+  "圖卡片的佔位文字：說明匯出時產生的檔案與代稱。"
+  [node]
+  (str "匯出 LaTeX 時產生 images/"
+       (if-let [l (:node/label node)] (str/replace l #"^fig:" "") "<代稱>")
+       ".tex，圖檔請在 LaTeX 中放入"))
+
 (defn- table-filled? [node] (boolean (seq (:columns (:node/table-content node)))))
 
 ;; ---------------------------------------------------------------------------
@@ -284,7 +291,7 @@
      [:div.topbar-actions
       (recent-menu state title)
       (todos-menu state title)
-      [:button.btn.btn-primary {:type "button" :disabled true :title "M6 實作 LaTeX 匯出"} "匯出 LaTeX"]]]))
+      [:a.btn.btn-primary {:href "/api/export/latex" :download "" :title "下載 LaTeX 草稿（zip）"} "匯出 LaTeX"]]]))
 
 (defn- conflict-view
   "版本衝突後的說明：被其他來源改過的卡片，以及沒有存入、可以複製的文字（SPEC 5.13）。"
@@ -642,7 +649,7 @@
           :figure
           [:div.ft-float.ft-figure (assoc (select-on id) :role "button" :tabindex 0)
            (badges id)
-           [:div.figure-placeholder "圖檔在匯出 LaTeX 時處理"]
+           [:div.figure-placeholder (figure-placeholder-text node)]
            [:div.ft-caption
             [:span.chip.chip-ref (xref-text (:node/label node))]
             [:span (:node/title node)]]]))]]))
@@ -1377,7 +1384,7 @@
            (when-let [f (:node/figure-file node)]
              (field "file" "圖檔" nil [:span.mono.boxed-muted f]))
            (when-not table?
-             [:div.figure-placeholder {:replicant/key "placeholder"} "圖檔在匯出 LaTeX 時處理"]))
+             [:div.figure-placeholder {:replicant/key "placeholder"} (figure-placeholder-text node)]))
      (when table?
        (zone "content" "表格內容"
              {:aside [:span.small.muted "agent 以 write_table 填寫"]}

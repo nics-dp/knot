@@ -451,7 +451,7 @@ M0 時建立，至少包含：兩個 nREPL 的 port 與啟動方式、`clj-nrepl
 
 ### 5.9 LaTeX 匯出
 
-整份報告匯出成一個 zip，使用者解壓縮後在自己的 LaTeX 環境編譯與調整（2026-11-19 使用者決定結構，取代原本「依使用者範例專案、主檔由使用者提供、局部匯出」）。
+整份報告匯出成一個 zip，使用者解壓縮後在自己的 LaTeX 環境編譯與調整（2026-11-19 使用者決定結構，取代原本「依使用者範例專案、主檔由使用者提供、局部匯出」）。匯出的是**草稿**：Knot 只負責內容與插入關係（章、表、圖各自的檔案與 `\include`、`\input`、標題、label、交互參照）正確；表格欄寬、圖的大小與位置等細部排版一律用最簡單的寫法，由使用者在 LaTeX 中精修。
 
 - **zip 的結構：** 檔名為「<報告名稱>.zip」，裡面只有一個以報告名稱命名的目錄（名稱中的 `/ \ : * ? " < > |` 與控制字元換成「_」，前後空白去掉，空白名稱用「report」；檔名以 UTF-8 記錄）：
 
@@ -462,10 +462,12 @@ M0 時建立，至少包含：兩個 nREPL 的 port 與啟動方式、`clj-nrepl
   │  ├─ ch01.tex           一般章依序 ch01、ch02…
   │  └─ appA.tex           附錄依序 appA、appB…
   ├─ tables/<代稱>.tex     每張表格一個檔，代稱為 label 去掉「tab:」
-  └─ images/README.txt     應放入的圖檔清單（Knot 不存圖檔）
+  └─ images/
+     ├─ <代稱>.tex         每張圖一個檔，代稱為 label 去掉「fig:」
+     └─ README.txt         應放入的圖檔清單（Knot 不存圖檔）
   ```
 
-- **插入方式：** 主檔以 `\include{contents/ch01}` 插入各章（每章換頁，可用 `\includeonly` 只編譯部分章）；章檔案內以 `\input{tables/<代稱>}` 插入表格、`\includegraphics{images/<代稱>}` 插入圖（`\include` 不能用在被 `\include` 的檔案裡）。
+- **插入方式：** 主檔以 `\include{contents/ch01}` 插入各章（每章換頁，可用 `\includeonly` 只編譯部分章）；章檔案內以 `\input{tables/<代稱>}` 插入表格、`\input{images/<代稱>}` 插入圖（`\include` 不能用在被 `\include` 的檔案裡）。表與圖的檔案都只放內容本身，標題與 label 在章檔案的浮動環境裡，換掉表或圖的檔案不影響編號與交互參照。
 - **範例主檔 `main.tex`：** 讓解壓縮後就能以 XeLaTeX 編譯，使用者可以改成自己的格式或只取 `contents/`、`tables/` 放進既有專案。內容：`ctexrep`（A4、12pt），載入 booktabs、graphicx；`\ctexset` 設定繁體名稱（章名「第一章」、「目錄」「圖」「表」「附錄」）；`\setcounter{secnumdepth}{3}`，讓第四層（款）也編號，與 Knot 的 3.1.1.1 一致；標題頁放報告名稱與副標，接目錄；依序 `\include` 一般章，第一個附錄之前輸出 `\appendix`（附錄的章名為「附錄 A」，下層為 A.1）；重新定義圖檔找不到時畫一個帶檔名的空框，缺圖也能編譯。
 - **章檔案：**
   - 四層標題依序為 `\chapter`、`\section`、`\subsection`、`\subsubsection`，名稱即卡片名稱（編號由 LaTeX 產生）。
@@ -473,8 +475,9 @@ M0 時建立，至少包含：兩個 nREPL 的 port 與啟動方式、`clj-nrepl
   - 本文的每個段落輸出為一段；項目清單與編號清單輸出為 `itemize`、`enumerate`。
   - 事實引用代入顯示值（與畫面相同，含單位）；交互參照依類型輸出為 `表~\ref{tab:…}`、`圖~\ref{fig:…}`；素材引用 `[[cite:…]]` 不輸出。
   - 還沒有本文的段落與引言輸出為註解：`% 尚未撰寫：<意圖>`（意圖多行時每行都加 `%`），PDF 上看不到。
-  - 段落之後依序是它底下的表與圖：表格為 `table` 環境（`\centering`、`\caption{表名稱}`、`\label{tab:…}`、`\input{tables/…}`，標題在上）；圖為 `figure` 環境（`\centering`、`\includegraphics[width=0.8\linewidth]{images/<代稱>}`、`\caption{圖名稱}`、`\label{fig:…}`，標題在下）。浮動位置參數用 `[htbp]`。
-- **表格檔：** 只有 `tabular`（不含 `table` 環境，方便單獨更新），使用 booktabs（`\toprule`、`\midrule`、`\bottomrule`）；整欄都是數字的欄靠右，其他靠左。還沒有內容的表格輸出一列「（表格尚未填寫）」。
+  - 段落之後依序是它底下的表與圖：表格為 `table` 環境（`\centering`、`\caption{表名稱}`、`\label{tab:…}`、`\input{tables/…}`，標題在上）；圖為 `figure` 環境（`\centering`、`\input{images/<代稱>}`、`\caption{圖名稱}`、`\label{fig:…}`，標題在下）。浮動位置參數用 `[htbp]`。
+- **表格檔：** 只有 `tabular`（不含 `table` 環境，方便單獨更新），使用 booktabs（`\toprule`、`\midrule`、`\bottomrule`）；欄位一律 `l`（不計算欄寬、不換行；過寬時由使用者調整）。還沒有內容的表格輸出一列「（表格尚未填寫）」。
+- **圖的檔案：** 每張圖一個 `images/<代稱>.tex`（2026-11-19 使用者決定），內容為 `\includegraphics[width=0.8\linewidth]{images/<代稱>}`；開頭註解寫明圖名稱、所在章節與意圖，以及「放入 images/<代稱>.pdf、.png 或 .jpg；也可以把這個檔改成 TikZ 或 pgfplots 繪圖」（graphicx 找圖檔時不會選 .tex，同名不衝突）。
 - **圖檔：** Knot 不存圖檔（2026-11-19 使用者決定）。`images/README.txt` 列出每張圖應放入的檔名（`<代稱>.pdf`、`.png` 或 `.jpg`）、圖名稱與所在的章節編號；使用者放入後重新編譯即可。
 - **產生的檔案** 開頭都有註解：由 Knot 產生、報告名稱、匯出時間，以及「重新匯出會覆蓋，請改 main.tex 或在 Knot 修改」；`main.tex` 則註明它是範例、可自由修改。
 - **跳脫：** 名稱、本文與儲存格中的 `\ { } $ & # ^ _ % ~` 都要跳脫（`\textbackslash{}`、`\{`、`\$`、`\textasciicircum{}`、`\textasciitilde{}` 等），全形字元不處理。

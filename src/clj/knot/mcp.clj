@@ -8,6 +8,7 @@
             [jsonista.core :as json]
             [knot.context :as context]
             [knot.db :as db]
+            [knot.export :as export]
             [knot.notes :as notes]
             [knot.ops :as ops]
             [knot.prose :as prose]
@@ -852,6 +853,16 @@
                   :additionalProperties false}
     :handler list-todos}])
 
+(defn- export-latex [conn {:keys [report-dir]} _args]
+  (when-not report-dir (tool-error! "Knot 沒有設定報告目錄，無法寫出 zip；請改用畫面上的「匯出 LaTeX」下載"))
+  (export/write-zip! conn report-dir))
+
+(def export-tools
+  [{:name "export_latex"
+    :description "把整份報告匯出成 LaTeX 草稿 zip，寫到 <報告目錄>/export/<報告名稱>.zip，回傳 path（zip 的絕對路徑）與 files（zip 內的檔案路徑）。zip 內是 main.tex（範例主檔）、contents/（每章一個檔）、tables/、images/。這是草稿：只保證內容與插入關係正確，排版從簡。可以解壓縮後以 XeLaTeX 編譯 main.tex 檢查有沒有錯誤並回報給使用者。匯出不是修改，不產生修改組、不改變報告。"
+    :inputSchema {:type "object" :properties {} :additionalProperties false}
+    :handler-opts export-latex}])
+
 (def ^:private summary-property
   {:type "string" :description "這次修改的名稱（選填），會顯示在 Knot 的復原提示；省略時由 Knot 依操作產生"})
 
@@ -1223,7 +1234,7 @@
                   :additionalProperties false}
     :handler remove-citation}])
 
-(def tools (into (into read-tools write-tools) source-tools))
+(def tools (into (into (into read-tools write-tools) source-tools) export-tools))
 
 
 (def ^:private tools-by-name (into {} (map (juxt :name identity)) tools))
@@ -1254,12 +1265,14 @@
           :when (contains? args old)]
     (tool-error! (str "參數 " old " 已改名為 " new "：請改傳 " new "（指卡片一律用 card_id、指留言一律用 note_id）"))))
 
-(defn- call-tool [conn {:strs [arguments] tool-name "name"}]
+(defn- call-tool
+  "工具的 :handler 收 (conn args)；需要伺服器設定（例如報告目錄）的工具改用 :handler-opts，收 (conn opts args)。"
+  [conn opts {:strs [arguments] tool-name "name"}]
   (if-let [tool (get tools-by-name tool-name)]
     (try
       (let [args (or arguments {})
             _ (check-renamed-args! tool-name args)
-            res ((:handler tool) conn args)]
+            res (if-let [h (:handler-opts tool)] (h conn opts args) ((:handler tool) conn args))]
         {:content [{:type "text" :text (write-json res)}] :structuredContent res})
       (catch clojure.lang.ExceptionInfo e
         (if (::tool-error (ex-data e))
@@ -1269,7 +1282,7 @@
 
 (defn- dispatch
   "處理一個 JSON-RPC 請求（有 id），回傳回應 map。"
-  [conn {:strs [id method params]}]
+  [conn opts {:strs [id method params]}]
   (case method
     "initialize"
     (let [asked (get params "protocolVersion")]
@@ -1284,7 +1297,7 @@
     (result id {:tools (mapv #(select-keys % [:name :description :inputSchema]) tools)})
 
     "tools/call"
-    (let [res (call-tool conn params)]
+    (let [res (call-tool conn opts params)]
       (if (= ::unknown-tool res)
         (rpc-error id -32602 (str "未知的工具：" (get params "name")))
         (result id res)))
@@ -1297,8 +1310,8 @@
    :body (write-json body)})
 
 (defn handle-rpc
-  "處理 POST /mcp 的 body 字串，回傳 ring 回應。"
-  [conn body]
+  "處理 POST /mcp 的 body 字串，回傳 ring 回應。opts 見 `handler`。"
+  [conn opts body]
   (let [msg (try (read-json body) (catch Exception _ ::parse-error))]
     (cond
       (= ::parse-error msg) (json-response 200 (rpc-error nil -32700 "JSON 解析失敗"))
@@ -1309,7 +1322,7 @@
       (if (and (contains? msg "id") (not (contains? msg "result")) (not (contains? msg "error")))
         (json-response 200 (rpc-error (get msg "id") -32600 "缺少 method"))
         {:status 202})
-      :else (json-response 200 (dispatch conn msg)))))
+      :else (json-response 200 (dispatch conn opts msg)))))
 
 ;; ---------------------------------------------------------------------------
 ;; HTTP
@@ -1322,8 +1335,9 @@
         (contains? #{"localhost" "127.0.0.1" "[::1]"} host))))
 
 (defn handler
-  "/mcp 的 ring handler。"
-  [conn]
+  "/mcp 的 ring handler。opts：{:report-dir 報告目錄}（export_latex 寫檔用）。"
+  ([conn] (handler conn {}))
+  ([conn opts]
   (fn [req]
     (cond
       (not (local-origin? (get-in req [:headers "origin"])))
@@ -1332,4 +1346,4 @@
       (not= :post (:request-method req))
       {:status 405 :headers {"Allow" "POST"} :body "此端點只接受 POST"}
 
-      :else (handle-rpc conn (some-> (:body req) (slurp :encoding "UTF-8") (or ""))))))
+      :else (handle-rpc conn opts (some-> (:body req) (slurp :encoding "UTF-8") (or "")))))))
