@@ -600,3 +600,32 @@
       (is (nil? (style)))
       (db/undo! *conn*)
       (is (= "甲" (:style/text (style)))))))
+
+(deftest contract-items-ignored-test
+  (testing "匯入資料帶已移除的 :node/contract-items 時被忽略、不出錯"
+    (let [fx (update fixture :tree
+                     (fn [t] (mapv #(assoc % :node/contract-items ["1.1" "1.2"]) t)))]
+      (seed/seed! *conn* fx)
+      (let [loaded (db/load-state (d/db *conn*))]
+        (is (= 47 (count (:nodes loaded))))
+        (is (not-any? :node/contract-items (:nodes loaded)))))))
+
+(deftest old-database-with-contract-data-test
+  (testing "舊資料庫已有 :contract/* 資料，用新程式開啟、讀取都不受影響"
+    (let [dir (temp-dir)
+          old-schema {:node/id {:db/valueType :db.type/uuid :db/unique :db.unique/identity}
+                      :node/contract-items {:db/valueType :db.type/ref :db/cardinality :db.cardinality/many}
+                      :contract/code {:db/valueType :db.type/string :db/unique :db.unique/identity}
+                      :contract/text {:db/valueType :db.type/string}}
+          legacy (random-uuid)
+          old (d/get-conn (str dir "/.knot/db") old-schema)]
+      (d/transact! old [{:db/id -1 :contract/code "1.1" :contract/text "舊的契約項目"}
+                        {:node/id legacy :node/contract-items [-1]}])
+      (is (= 1 (count (d/q '[:find [?e ...] :where [?e :contract/code]] (d/db old)))))
+      (d/close old)
+      (let [c (db/open-report dir)]
+        (try
+          (is (= [legacy] (d/q '[:find [?i ...] :where [?e :node/id ?i]] (d/db c))) "舊資料還在")
+          (let [loaded (db/load-state (d/db c))]
+            (is (not-any? :node/contract-items (:nodes loaded))))
+          (finally (db/close-report c)))))))

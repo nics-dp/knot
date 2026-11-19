@@ -54,7 +54,6 @@
    :node/table-content string ; 表格卡片自己的內容（EDN），前端形式為 {:columns [...] :rows [[...]]}
    :node/figure-file string
    :node/caption string
-   :node/contract-items refs
 
    ;; 段落關係
    :relation/id (id-attr)
@@ -104,15 +103,13 @@
    :style/key (assoc string :db/unique :db.unique/identity)
    :style/text string
 
-   ;; 引用與契約
+   ;; 引用
    :citation/id (id-attr)
    :citation/node ref-one
    :citation/block ref-one
    :citation/row ref-one
    :citation/where string
    :citation/order long*
-   :contract/code (assoc string :db/unique :db.unique/identity)
-   :contract/text string
 
    ;; 修改組與修訂
    :changeset/id (id-attr)
@@ -263,8 +260,7 @@
 
 (def ^:private node-pattern
   (into [:node/id :node/prose :node/table-content :node/version
-         {:node/parent [:node/id]}
-         {:node/contract-items [:contract/code]}]
+         {:node/parent [:node/id]}]
         node-scalars))
 
 (defn- node->client [citations e]
@@ -274,7 +270,6 @@
       true (assoc :node/parent (get-in e [:node/parent :node/id]))
       (:node/prose e) (assoc :node/prose (read-json (:node/prose e)))
       (:node/table-content e) (assoc :node/table-content (read-edn (:node/table-content e)))
-      (seq (:node/contract-items e)) (assoc :node/contract-items (vec (sort (map :contract/code (:node/contract-items e)))))
       (seq cites) (assoc :node/citations cites))))
 
 (defn- pull-all [db attr pattern]
@@ -438,8 +433,7 @@
     (concat
      ;; 清掉多值參照，下面重新加入
      (when existed?
-       [[:db/retract eid :node/contract-items]
-        [:db/retract eid :node/facts]])
+       [[:db/retract eid :node/facts]])
      removed
      (for [c old-cites] [:db/retractEntity c])
      [(cond-> (merge {:db/id (ref :node id) :node/id id :node/version version}
@@ -448,10 +442,6 @@
         (:node/prose node) (assoc :node/prose (write-json (:node/prose node)))
         (:node/table-content node) (assoc :node/table-content (pr-str (:node/table-content node)))
         (seq fact-keys) (assoc :node/facts (mapv #(ref :fact %) fact-keys)))]
-     (for [code (:node/contract-items node)]
-       {:db/id (str "contract-" code) :contract/code code})
-     (for [code (:node/contract-items node)]
-       [:db/add (ref :node id) :node/contract-items (str "contract-" code)])
      (for [[i {:keys [block where]}] (map-indexed vector (:node/citations node))
            :let [b (ref :block block)]
            :when b]
