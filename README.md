@@ -24,32 +24,41 @@ Knot 本身不呼叫任何 LLM API，也不保存金鑰。
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/)（或其他 Docker 環境）
 - [Claude Code](https://claude.com/claude-code)
-- 可以存取 `nics-dp` 組織的 GitHub 帳號（Knot 的映像放在組織內部的 GitHub 套件）
+- [Git](https://git-scm.com/)（下載原始碼用；沒有 Git 也可以從 [Releases](https://github.com/nics-dp/knot/releases) 下載原始碼的 zip）
 
-支援 Mac（M 晶片）與 Windows（Intel／AMD 處理器）。不需要安裝 Java 或其他開發工具，Knot 整個裝在容器裡。
+支援 Mac（M 晶片）與 Windows（Intel／AMD 處理器）。**不需要安裝 Java、Clojure 或 Node**：建置與執行都在 Docker 容器裡完成。
 
 ## 安裝（第一次）
 
-### 1. 登入 GitHub 的映像庫
+### 1. 建置 Knot 的映像
 
-到 GitHub 的 [Personal access tokens（classic）](https://github.com/settings/tokens) 建立一個權杖，權限只勾 `read:packages`，再登入：
+從原始碼建置：
+
+```sh
+git clone --branch v0.1.0 https://github.com/nics-dp/knot.git
+cd knot
+docker build -t knot:0.1.0 .
+```
+
+`--branch v0.1.0` 指定版本。第一次建置要下載基底映像與套件，需要網路，約 5–10 分鐘；之後重新建置會快很多。完成後就有名為 `knot:0.1.0` 的映像，下面的指令都用這個名稱。
+
+<details>
+<summary>另一種方式：從 GitHub 映像庫下載建好的映像（需要權限）</summary>
+
+已取得 `ghcr.io/nics-dp/knot` 套件存取權限的帳號，可以直接下載建好的映像，不必自己建置。到 GitHub 的 [Personal access tokens（classic）](https://github.com/settings/tokens) 建立一個權杖，權限只勾 `read:packages`，然後：
 
 ```sh
 docker login ghcr.io -u <你的 GitHub 帳號>
-# Password 貼上剛建立的權杖
-```
-
-登入一次即可，Docker 會記住。
-
-### 2. 下載 Knot
-
-```sh
+# Password 貼上剛建立的權杖；登入一次即可，Docker 會記住
 docker pull ghcr.io/nics-dp/knot:0.1.0
+docker tag ghcr.io/nics-dp/knot:0.1.0 knot:0.1.0
 ```
 
-同一個版本同時包含 Mac（M 晶片）與 Windows 兩種，Docker 會自動下載符合你電腦的版本（約 230 MB）。
+同一個版本同時包含 Mac（M 晶片）與 Windows 兩種，Docker 會自動下載符合你電腦的版本（約 230 MB）。最後一行把它取名為 `knot:0.1.0`，下面的指令就能照用。skill 請從 [Releases](https://github.com/nics-dp/knot/releases) 下載 `knot-skills-0.1.0.zip`，解壓縮後用其中的 `knot-*` 資料夾（見第 3 步）。
 
-### 3. 讓 Claude Code 連上 Knot
+</details>
+
+### 2. 讓 Claude Code 連上 Knot
 
 ```sh
 claude mcp add --scope user --transport http knot http://localhost:3000/mcp
@@ -57,16 +66,23 @@ claude mcp add --scope user --transport http knot http://localhost:3000/mcp
 
 只要設定一次，之後在任何目錄開 Claude Code 都會連到正在執行的 Knot。
 
-### 4. 安裝 skill
+### 3. 安裝 skill
 
-skill 是給 agent 的操作說明，告訴它如何規劃、匯入、撰寫與處理待辦。到 [Releases](https://github.com/nics-dp/knot/releases) 下載與 Knot 同版本的 `knot-skills-<版本>.zip`，解壓縮後把裡面的 `knot-*` 資料夾複製到 Claude Code 的 skill 目錄：
+skill 是給 agent 的操作說明，告訴它如何規劃、匯入、撰寫與處理待辦，放在原始碼的 `skills/` 目錄。在第 1 步的 `knot` 目錄執行，把它們複製到 Claude Code 的 skill 目錄：
 
 ```sh
 mkdir -p ~/.claude/skills
-cp -R knot-skills-0.1.0/knot-* ~/.claude/skills/
+cp -R skills/knot-* ~/.claude/skills/
 ```
 
-Windows 的位置是 `%USERPROFILE%\.claude\skills\`。只想用在某一份報告時，也可以放在該報告目錄的 `.claude/skills/`。
+Windows（PowerShell）：
+
+```powershell
+New-Item -ItemType Directory -Force "$HOME\.claude\skills"
+Copy-Item -Recurse -Force skills\knot-* "$HOME\.claude\skills\"
+```
+
+只想用在某一份報告時，也可以放在該報告目錄的 `.claude/skills/`。skill 與 Knot 要同一個版本。
 
 | skill | 用途 | 對 agent 這樣說 |
 |---|---|---|
@@ -94,14 +110,14 @@ Windows 的位置是 `%USERPROFILE%\.claude\skills\`。只想用在某一份報�
 
 ```sh
 cd 共享單車成果報告
-docker run --rm -p 127.0.0.1:3000:3000 -v "$PWD":/report --user "$(id -u):$(id -g)" ghcr.io/nics-dp/knot:0.1.0
+docker run --rm -p 127.0.0.1:3000:3000 -v "$PWD":/report --user "$(id -u):$(id -g)" knot:0.1.0
 ```
 
 Windows（PowerShell）：
 
 ```powershell
 cd 共享單車成果報告
-docker run --rm -p 127.0.0.1:3000:3000 -v "${PWD}:/report" ghcr.io/nics-dp/knot:0.1.0
+docker run --rm -p 127.0.0.1:3000:3000 -v "${PWD}:/report" knot:0.1.0
 ```
 
 用瀏覽器開啟 http://localhost:3000，會看到一份空白報告。這個終端機視窗要一直開著；按 Ctrl+C 停止。
@@ -128,7 +144,7 @@ agent 的修改會即時出現在瀏覽器上（剛修改的卡片有綠框）�
 - **停止：** 在執行 Knot 的終端機按 Ctrl+C。報告內容都在報告目錄的 `.knot/` 裡。
 - **換一份報告：** 停止後，到另一個報告目錄再啟動一次。同一時間只開一份報告。
 - **備份或搬移：** 整個報告目錄（含 `.knot/`）一起複製即可。
-- **更新版本：** 先備份報告目錄的 `.knot/`，`docker pull` 新版本，啟動時改用新的版本號；同時下載同版本的 skill，取代 `~/.claude/skills/` 裡舊的 `knot-*`（skill 與 Knot 的工具一起改版，兩者要同一個版本）。
+- **更新版本：** 先備份報告目錄的 `.knot/`。在 `knot` 原始碼目錄取得新版本並重新建置（以 0.2.0 為例）：`git fetch --tags`、`git checkout v0.2.0`、`docker build -t knot:0.2.0 .`，再重新複製 `skills/knot-*` 取代 `~/.claude/skills/` 裡舊的（skill 與 Knot 的工具一起改版，兩者要同一個版本）。之後啟動時改用 `knot:0.2.0`。用映像庫的人改為 `docker pull`、`docker tag` 新版本，並下載同版本的 skill zip。
 - **3000 被佔用時：** 把指令中的 `127.0.0.1:3000:3000` 改成例如 `127.0.0.1:3100:3000`，瀏覽器改開 http://localhost:3100，Claude Code 的 MCP 網址也要改成 `http://localhost:3100/mcp`。（啟動訊息印的 `localhost:3000` 是容器內的 port，不用理會。）
 
 啟動指令的各部分：
@@ -142,20 +158,13 @@ agent 的修改會即時出現在瀏覽器上（剛修改的卡片有綠框）�
 
 ## 常見問題
 
-- **`docker pull` 顯示 denied 或 unauthorized：** 確認已用有 `read:packages` 權限的權杖 `docker login ghcr.io`，而且你的 GitHub 帳號能看到 `nics-dp/knot`。
+- **`docker build` 失敗：** 多半是下載套件時連不上網路（Docker Hub、Maven、npm）。確認網路與 proxy 設定後重新執行；已下載的部分會沿用。
+- **`docker pull` 顯示 denied 或 unauthorized：** 映像庫需要權限。確認已用有 `read:packages` 權限的權杖 `docker login ghcr.io`，而且你的 GitHub 帳號有這個套件的存取權；沒有的話請改從原始碼建置。
 - **瀏覽器打不開：** 確認啟動 Knot 的終端機還開著、沒有錯誤訊息，或用 `docker ps` 看容器是否在執行；也確認網址的 port 和 `-p` 設定一致。
 - **Claude Code 說找不到 knot 工具：** 確認 Knot 正在執行，並用 `claude mcp list` 檢查 MCP 設定的網址。Knot 要先啟動，Claude Code 才連得上。
 - **agent 沒有照 skill 的流程做：** 確認 `~/.claude/skills/` 底下有 `knot-planning` 等資料夾（每個資料夾裡有 `SKILL.md`）；剛安裝時要重新開啟 Claude Code 才會載入。
 - **MCP 回應 403：** Knot 只接受來自本機的請求，從其他主機名稱開啟的網頁無法呼叫。
 
-## 自行建置映像
+## 參與開發
 
-不從 GitHub 下載、改用原始碼建置時：
-
-```sh
-git clone https://github.com/nics-dp/knot.git
-cd knot
-docker build -t knot .
-```
-
-約 1–2 分鐘。啟動時把指令最後的 `ghcr.io/nics-dp/knot:0.1.0` 換成 `knot`；skill 在原始碼的 `skills/` 目錄。開發環境的說明見 `CLAUDE.md`。
+上面的安裝只需要 Docker。要修改 Knot 本身時，本機才需要 JDK 25、Clojure CLI、Node 與 Babashka；開發環境、測試與發佈流程見 `CLAUDE.md` 與 `docs/SPEC.md`。
