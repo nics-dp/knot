@@ -191,10 +191,23 @@
             db rules node-id)))
 
 ;; ---------------------------------------------------------------------------
-;; 連線：一個報告目錄就是一份報告，資料庫在 <報告目錄>/.knot/db
+;; 連線：一個報告目錄就是一份報告，資料庫在 <報告目錄>/knot-data/db
+;; （0.1.0 為隱藏的 .knot/db，開啟時自動改名）
+
+(def data-dir-name "knot-data")
 
 (defn db-dir [report-dir]
-  (io/file report-dir ".knot" "db"))
+  (io/file report-dir data-dir-name "db"))
+
+(defn- migrate-hidden-dir!
+  "0.1.0 的資料在 <報告目錄>/.knot；還沒有 knot-data 時改名過去。回傳是否改名。"
+  [report-dir]
+  (let [old (io/file report-dir ".knot")
+        new (io/file report-dir data-dir-name)]
+    (when (and (.isDirectory old) (not (.exists new)))
+      (java.nio.file.Files/move (.toPath old) (.toPath new)
+                                (make-array java.nio.file.CopyOption 0))
+      true)))
 
 (defn report-info [db]
   (d/q '[:find (pull ?r [:report/id :report/title :report/subtitle :report/style-name]) .
@@ -202,9 +215,10 @@
        db))
 
 (defn open-report
-  "開啟報告目錄中的報告；還沒有報告時建立一份空白報告，名稱取自目錄名稱。回傳連線。"
+  "開啟報告目錄中的報告；還沒有報告時建立一份空白報告，名稱取自目錄名稱。舊版的 .knot/ 先改名為 knot-data/。回傳連線。"
   [report-dir]
-  (let [dir (db-dir report-dir)
+  (let [_ (migrate-hidden-dir! report-dir)
+        dir (db-dir report-dir)
         _ (.mkdirs dir)
         c (d/get-conn (str dir) schema)]
     (when-not (report-info (d/db c))
