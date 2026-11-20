@@ -629,3 +629,24 @@
           (let [loaded (db/load-state (d/db c))]
             (is (not-any? :node/contract-items (:nodes loaded))))
           (finally (db/close-report c)))))))
+
+(deftest hidden-data-dir-migration-test
+  (testing "0.1.0 的 .knot/ 在開啟時改名為 knot-data/，報告內容不變"
+    (let [dir (temp-dir)
+          c0 (d/get-conn (str dir "/.knot/db") db/schema)
+          id (random-uuid)]
+      (d/transact! c0 [{:report/id id :report/title "舊報告"}])
+      (d/close c0)
+      (let [c (db/open-report dir)]
+        (try
+          (is (= "舊報告" (:report/title (db/report-info (d/db c)))))
+          (is (not (.exists (io/file dir ".knot"))))
+          (is (.isDirectory (io/file dir "knot-data" "db")))
+          (finally (db/close-report c))))))
+  (testing "兩者都在時不動 .knot/，使用 knot-data/"
+    (let [dir (temp-dir)]
+      (db/close-report (db/open-report dir))
+      (.mkdirs (io/file dir ".knot" "db"))
+      (db/close-report (db/open-report dir))
+      (is (.isDirectory (io/file dir ".knot" "db")))
+      (is (.isDirectory (io/file dir "knot-data" "db"))))))

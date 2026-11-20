@@ -104,11 +104,11 @@ Knot 是一個單機、單人使用的報告撰寫工具，也是 agent 撰寫�
 
 **報告目錄**
 
-一個報告目錄就是一份報告，只有一個資料庫。啟動時讀取目錄中的報告；目錄中還沒有報告時，建立一份空白報告（名稱取自目錄名稱）。
+一個報告目錄就是一份報告，只有一個資料庫。資料夾用看得見的名稱 `knot-data/`，方便使用者辨認、備份與搬移（2026-11-20 使用者決定；0.1.0 為隱藏的 `.knot/`，開啟時若沒有 `knot-data/` 就把 `.knot/` 改名過去）。搬移整個報告目錄後可在新位置接續編輯：資料庫不記錄報告目錄的路徑。啟動時讀取目錄中的報告；目錄中還沒有報告時，建立一份空白報告（名稱取自目錄名稱）。
 
 ```text
 <報告目錄>/                    啟動時所在的目錄，或命令列參數指定
-├─ .knot/db/                   Datalevin：這份報告的所有資料
+├─ knot-data/db/               Datalevin：這份報告的所有資料
 ├─ sources/                    匯入的原始檔複本
 └─ export/                     MCP `export_latex` 寫出的 zip
 ```
@@ -668,7 +668,7 @@ agent 在背景寫入時，畫面要即時反映，也不能把 agent 的修改�
   3. 連上 Claude Code：`claude mcp add --scope user --transport http knot http://localhost:3000/mcp`（設定一次）。
   4. 安裝 skill：把原始碼 `skills/` 中的 `knot-*` 資料夾（用映像庫者改從 Release 下載 skill 的 zip）複製到 `~/.claude/skills/`（所有報告共用）或報告目錄的 `.claude/skills/`；各 skill 的用途與觸發說法列成一張表（規劃 → 匯入 → 撰寫，之後每一輪用處理待辦）。
   5. 開始一份報告：把原始資料放進報告目錄，在該目錄開 Claude Code，依序請 agent「開始規劃報告」「匯入資料」「開始撰寫全文」。
-  6. 更新版本：原始碼 `git checkout v<新版本>` 後重新建置（映像庫則 `docker pull`），改用新的標記啟動，並以新的 skill 取代舊的；報告資料在報告目錄的 `.knot/`，換版本前先備份這個資料夾。
+  6. 更新版本：原始碼 `git checkout v<新版本>` 後重新建置（映像庫則 `docker pull`），改用新的標記啟動，並以新的 skill 取代舊的；報告資料在報告目錄的 `knot-data/`，換版本前先停止 Knot、備份這個資料夾。
   7. 常見問題（建置失敗、瀏覽器打不開、port 被占用等）。
   8. 參與開發：本機需要 JDK 25、Clojure CLI、Node、Babashka，指向 `CLAUDE.md`。
 - **行尾：** `.gitattributes` 設 `* text=auto eol=lf`，Windows 上 `git clone` 的檔案仍為 LF，建置結果與 Mac 相同。
